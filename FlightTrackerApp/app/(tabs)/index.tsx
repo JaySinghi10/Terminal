@@ -134,6 +134,11 @@ import {
 import {
   CARD_FILL, CARD_RADIUS, CARD_GAP, CARD_PAD, PAGE_BG, c,
   SURFACE_2, SURFACE_EDGE,
+  // THE PLUS ON THE EMPTY STATE, and it is the palette's name for the accent
+  // rather than a fifth literal. My Flights spells the same colour CD_GREEN
+  // because it had already imported that for the folder's date accent; this
+  // screen imports from lib/cards and takes the name that lives there.
+  GREEN,
 } from '../../lib/cards';
 // THE TWO BANNERS, AND THE CARD'S OWN MACHINERY. Both moved out of this screen
 // because the search screen needs them too, and neither may be imported from a
@@ -1917,9 +1922,18 @@ export default function Index() {
             bottom paddings and said to measure rather than restore if a device
             ever showed the last row hidden. A device did. This is the measure:
             one prop, no number, and it stays right when the bar changes size. */}
+        {/* flexGrow ON THE CONTENT CONTAINER, which is what lets the empty
+            state centre itself vertically: a flex: 1 child can only fill space
+            its parent actually has, and a scroll container sizes to its content
+            unless told to fill the viewport.
+
+            UNCONDITIONAL, exactly as My Flights applies it. It changes nothing
+            when there IS content -- nothing below flexes, so everything sits at
+            the top as before -- and a conditional would be a second rule to
+            keep in step with the one that decides whether the block renders. */}
         <ScrollView
           contentInsetAdjustmentBehavior="automatic"
-          contentContainerStyle={s.scroll}
+          contentContainerStyle={[s.scroll, s.scrollFill]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           refreshControl={
@@ -2003,6 +2017,59 @@ export default function Index() {
               screen understands. See lib/gmailPull.tsx for why it moved: a pull
               OWNS what it resolves, so everything it produced appeared on My
               Flights and nothing it produced appeared here. */}
+
+          {/* ── NOTHING TO FOLLOW YET, AND IT IS THE CENTRE OF THE SCREEN ──
+              THE SCREEN HAD NO EMPTY STATE AT ALL AND THAT WAS THE DEBT THE
+              GMAIL MOVE LEFT. Every section below is gated on having something
+              to draw, so a signed-in person with nothing saved got a greeting,
+              a clock and blank space -- and the row that used to offer a way
+              forward is on My Flights now.
+
+              MY FLIGHTS' OWN TREATMENT, not a second one: 24pt Inter REGULAR at
+              0.6 over the card button with the green plus, centred in whatever
+              the header leaves. See the empty branch there for why it is not
+              semibold -- an empty state that shouts reads as an error, and this
+              is not one.
+
+              THE LINE SAYS WHAT THE SCREEN HOLDS rather than issuing an
+              instruction, and that is the one place it departs from My Flights.
+              There the button does exactly what the line asks; here it hands you
+              to the search tab, so an imperative would promise something the
+              button does not itself carry out. "following" is also the word this
+              screen already uses for what it holds -- the section below is
+              headed `watchlist`, and a flight you are ON belongs to My Flights.
+
+              THE BUTTON GOES TO SEARCH because that is where a flight to follow
+              is found: look one up, and the card's own bookmark is what puts it
+              on this list. Nothing is passed and nothing is opened on arrival --
+              the search tab's field is the whole of what it needs to offer.
+
+              SIGNED IN ONLY. A signed-out person already has the Google button
+              above as their way forward, and two blocks offering different
+              first steps on one empty screen is worse than either alone. */}
+          {username !== null && flight === null
+            && orphanPending.length === 0 && watchlist.length === 0 && (
+            <View style={s.emptyWrap}>
+              <Text style={s.emptyHead}>{"Flights you're following will show up here"}</Text>
+              <TouchableOpacity
+                style={s.addBtn}
+                activeOpacity={0.7}
+                onPress={() => router.push('/search')}
+                accessibilityRole="button"
+                accessibilityLabel="add a flight"
+              >
+                {/* sf.rowEdge IS My Flights' cardEdge, value for value: an
+                    absolutely positioned hairline at the card's own radius
+                    rather than a border on the surface. See its note. */}
+                <View style={sf.rowEdge} pointerEvents="none" />
+                <Svg width={20} height={20} viewBox="0 0 24 24">
+                  <Path d="M12 5v14" fill="none" stroke={GREEN} strokeWidth={1.75} strokeLinecap="round" />
+                  <Path d="M5 12h14" fill="none" stroke={GREEN} strokeWidth={1.75} strokeLinecap="round" />
+                </Svg>
+                <Text style={s.addLabel}>{'Add a flight'}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           {/* ── NOT IN THE SCHEDULE YET, AND ONLY WHAT BELONGS NOWHERE ELSE ──
               MOST OF THESE MOVED TO My Flights. A leg of a booking sits inside
@@ -2170,6 +2237,9 @@ export default function Index() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: PAGE_BG },
   scroll: { paddingHorizontal: 20 },
+  // See the note at the ScrollView: this is what gives emptyWrap a viewport to
+  // centre in, and it costs nothing when the screen has content.
+  scrollFill: { flexGrow: 1 },
 
   header: { marginBottom: 36, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   // ── THE PROFILE BUTTON ──────────────────────────────────────────────────
@@ -2197,6 +2267,41 @@ const s = StyleSheet.create({
     backgroundColor: SURFACE_2,
     alignItems: 'center', justifyContent: 'center',
   },
+
+  // ── THE EMPTY STATE ──
+  //
+  // ALL FOUR ENTRIES ARE app/(tabs)/flights.tsx's, value for value -- emptyWrap,
+  // emptyHead, addBtn and addLabel -- because this is that screen's empty state
+  // applied to this one rather than a second design for the same moment. The
+  // notes arguing each number live there; only the copy differs.
+  //
+  // 24 IS OFF THE 11/13/15/20 SCALE, and deliberately: it is the largest thing
+  // on a page with nothing else on it, which is the same exception the greeting
+  // claims at the top of this screen.
+  emptyWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  emptyHead: {
+    fontFamily: SANS, fontSize: 24, color: 'rgba(226,226,226,0.6)',
+    textAlign: 'center', lineHeight: 32,
+  },
+  // CONTENT-SIZED AND CENTRED, not a full-width row: a button as wide as the
+  // screen reads as a list item, and this is a single act.
+  addBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    alignSelf: 'center',
+    marginTop: 32,
+    backgroundColor: CARD_FILL,
+    borderRadius: CARD_RADIUS,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+  },
+  addLabel: { fontFamily: SANS, fontSize: 15, color: '#e2e2e2' },
 
   // UNREFERENCED SINCE THE ROUTE WENT BARE. There is no card around it any
   // more: the row and its bar sit on the page. Left in place.
