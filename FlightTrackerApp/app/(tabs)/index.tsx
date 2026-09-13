@@ -27,7 +27,6 @@ import { ScrollViewMarker } from 'react-native-screens/experimental';
 // the header was doing. See s.profileBtn.
 import { SymbolView } from 'expo-symbols';
 import {
-  Alert,
   View,
   Text,
   TouchableOpacity,
@@ -72,7 +71,6 @@ import {
   // THE ACCOUNT-CHANGE SIGNAL. Sign-in and logout left this screen, and this
   // is how it still resets what they used to reset in line. See its call.
   useAccountChange,
-  API_BASE,
   arrivalTs,
   hasFlown,
   effectiveStatus,
@@ -142,15 +140,19 @@ import {
 // screen. See the notes at the top of each.
 import { useToast } from '../../lib/toast';
 import { useFlightCardHost, FlightError } from '../../lib/flightcard';
-// THE SESSION AND THE NAMES. Logout lives on the profile sheet now and sign-in
-// in lib/googleAuth.tsx; this screen reads the names for the greeting and the
-// session for the Gmail pull, and writes none of them.
+// THE TWO NAMES, FOR THE GREETING, AND NOTHING ELSE ANY MORE. The session left
+// with the Gmail pull -- see lib/gmailPull.tsx -- and so did persistSession,
+// which this screen only ever wrote to clear a dead token and to point the pull
+// at the fixture inbox. Logout is the profile sheet's and sign-in is
+// lib/googleAuth.tsx's; this screen writes none of the three.
 import { useAccount } from '../../lib/account';
-// SIGN IN WITH GOOGLE, started from two places on this screen -- the inline
-// button and the Gmail pull row -- and from the profile sheet. See the hook.
+// SIGN IN WITH GOOGLE, for the one button left that offers it: the inline one
+// under the header while nobody is signed in. See the hook.
 import { useGoogleSignIn } from '../../lib/googleAuth';
-// A LEG THE PROVIDER DOES NOT CARRY YET. See lib/pendingRules.ts.
-import { pendingFromLeg, MAX_PENDING, type PendingLeg } from '../../lib/pendingRules';
+// A LEG THE PROVIDER DOES NOT CARRY YET. See lib/pendingRules.ts. pendingFromLeg
+// went with the pull, which was the only thing that MADE one; this screen still
+// draws them and still reports a full queue.
+import { MAX_PENDING, type PendingLeg } from '../../lib/pendingRules';
 // The registration's own failure channel. See the effect that consumes it.
 // The backfill the profile sheet triggers went to app/profile.tsx with the
 // sheet, and the permission request with it.
@@ -229,51 +231,8 @@ const ARCHIVE_ROW_RISE = 6;
 // a third level.
 const ARCHIVED_FILL = 'rgba(255,255,255,0.03)';
 
-// ── A LEG READ OUT OF GMAIL ─────────────────────────────────────────────────
-//
-// WHAT /gmail/flights RETURNS, one per flight leg, already re-checked by the
-// server: the number matches a flight-number regex that accepts 6E, the date
-// is YYYY-MM-DD and not in the past, the PNR is a short code and never a
-// ticket number. Nothing here is the email itself -- `source` is the subject
-// and the received date, and that is deliberately all the app is given.
-type GmailLeg = {
-  flight_number: string;
-  date: string;
-  departure_time: string | null;
-  origin: string | null;
-  origin_name: string | null;
-  destination: string | null;
-  destination_name: string | null;
-  airline: string | null;
-  // CODESHARES. The booking prints the marketing number; the aircraft flies
-  // under the operator's. When the email printed the operator's number it is
-  // here, and the lookup is made under it -- that is the number the landing
-  // feed knows. When it did not, the provider resolves the marketing number to
-  // the operating flight itself, so the lookup still lands on the right one.
-  operated_by: string | null;
-  operating_flight_number: string | null;
-  pnr: string | null;
-  confidence: number;
-  // WHETHER THE AIRLINE HAS CALLED IT OFF. The extractor classifies each email
-  // and marks every leg a cancellation notice names. OPTIONAL: a server that
-  // predates the classifier sends no such field, and absent means scheduled.
-  leg_status?: 'scheduled' | 'cancelled' | null;
-  // WHEN THE BOOKING SAID IT LANDS, where the email printed it. The date is
-  // separate because an overnight leg lands on another day, and is absent when
-  // the email gave one date for the whole leg. Both optional: the extractor is
-  // told never to compute an arrival, so an email that prints none returns
-  // none. See the pending leg type for what they are for.
-  arrival_time?: string | null;
-  arrival_date?: string | null;
-  source: { subject: string | null; received: string | null };
-};
-
-type GmailPull = {
-  status: 'idle' | 'loading' | 'done' | 'error';
-  flights: GmailLeg[];
-  message: string;
-};
-const IDLE_PULL: GmailPull = { status: 'idle', flights: [], message: '' };
+// THE GMAIL TYPES ARE IN lib/gmailPull.tsx. GmailLeg, GmailPull and IDLE_PULL
+// were declared here because the pull was; they moved with it, unchanged.
 
 // WEEKDAYS holds abbreviations for the clock line; "Happy Sat" reads clipped in
 // a greeting, so the full names live here. Only the weekend entries reach it.
@@ -1215,14 +1174,17 @@ export default function Index() {
   // `now` IS NOT ON IT, deliberately. This screen keeps its own minute tick below
   // for the countdowns; the store runs a separate one for the day rollover and
   // the AppState resume. See the note at the top of lib/saved.tsx.
+  // FOUR NAMES LEFT WITH THE PULL: ownFlight, handleUnsave, addPendingLeg and
+  // retryPending were autoAdd's, and autoAdd is in lib/gmailPull.tsx now. What
+  // is left is what this screen still does to the list it draws.
   const {
     savedFlights, refreshing,
-    saveRecord, ownFlight, handleUnsave, undoUnsave, refreshOne, refreshAll,
+    saveRecord, undoUnsave, refreshOne, refreshAll,
     handleRemind, setArchived,
-    pending, addPendingLeg, removePendingLeg, retryPending,
+    pending, removePendingLeg,
   } = useSaved();
-  // THE UNDO BANNER, for the Gmail pull's auto-add. See pullFromGmail.
-  const { showUndo } = useToast();
+  // THE UNDO BANNER WENT WITH IT TOO. The pull was the only thing on this screen
+  // that raised one; the row swipes raise theirs through unsaveWithBanner.
   // THE TWO BANNERS ARE NO LONGER THIS SCREEN'S. Both moved to lib/toast.tsx and
   // are rendered by the provider in app/_layout.tsx, because the search screen
   // raises most of them now — a banner drawn here reports nothing while the user
@@ -1289,9 +1251,9 @@ export default function Index() {
   // the greeting here; see the note at the head of lib/account.tsx. Every
   // read below is what it was. THE NAME WRITES LEFT with sign-in and logout --
   // see lib/googleAuth.tsx and app/profile.tsx -- and persistSession did not:
-  // this screen still clears the session itself when the Gmail pull comes back
-  // expired, and the fixture long-press writes one. Both are below.
-  const { session, persistSession, username, displayName } = useAccount();
+  // AND THE SESSION LEFT WITH THE PULL, which was the only thing on this screen
+  // that read or cleared one. See lib/gmailPull.tsx.
+  const { username, displayName } = useAccount();
   // EVERYTHING THIS SCREEN NEEDS TO OWN A FLIGHT CARD, and the search screen owns
   // one too. The lookup, the save, the refresh, the entry animation, the error
   // channel and the minute tick moved to lib/flightcard.tsx so that a card opened
@@ -1338,258 +1300,16 @@ export default function Index() {
   const [refreshTone, setRefreshTone] = useState<'error' | 'info'>('error');
   const insets = useSafeAreaInsets();
 
-  // ── PULL FROM GMAIL ──────────────────────────────────────────────────────
+  // ── THE PULL IS NOT THIS SCREEN'S ANY MORE ───────────────────────────────
   //
-  // ONE PRESS, ONE REQUEST, A LIST. The server searches a year of received
-  // mail, decodes the bodies, asks the model per email and re-checks every
-  // leg; this screen sends the token and draws what comes back. Nothing is
-  // saved by the pull itself -- a tapped leg runs the ordinary lookup, and
-  // saving is the card's own bookmark, exactly as for any other flight.
-  //
-  // THE SERVER'S `code` IS WHAT THIS SWITCHES ON, not the sentence beside it.
-  // An expired or refused sign-in has to CLEAR the stored token, or the next
-  // pull sends the same dead token again and gets the same answer for ever.
-  const [gmailPull, setGmailPull] = useState<GmailPull>(IDLE_PULL);
-  const pullFromGmail = async () => {
-    if (session === null) {
-      // No session to send. On native the sign-in flow produces one; on web
-      // the sign-in path never has, so the row is honest about that and does
-      // not pretend to try. A phone updated from the build that held a raw
-      // Google token lands here too: signed in, no session, one tap away.
-      if (Platform.OS === 'web') {
-        showToast('gmail pull needs the iphone app');
-        return;
-      }
-      signIn();
-      return;
-    }
-    setGmailPull({ status: 'loading', flights: [], message: '' });
-    try {
-      const response = await fetch(`${API_BASE}/gmail/flights`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session}` },
-        body: JSON.stringify({}),
-      });
-      const data = await response.json() as {
-        error?: string | null; code?: string | null; flights?: GmailLeg[];
-      };
-      if (data.code === 'gmail_expired' || data.code === 'gmail_forbidden') {
-        await persistSession(null);
-        setGmailPull({ status: 'error', flights: [], message: data.error || 'sign in again to pull from gmail' });
-        showToast('google sign-in expired');
-        return;
-      }
-      if (data.error || !response.ok) {
-        setGmailPull({ status: 'error', flights: [], message: data.error || 'could not read gmail' });
-        return;
-      }
-      const legs = data.flights ?? [];
-      setGmailPull({ status: 'done', flights: legs, message: '' });
-      await autoAdd(legs);
-    } catch {
-      setGmailPull({ status: 'error', flights: [], message: 'could not reach the server' });
-    }
-  };
-
-  // ── AUTO-ADD, WITH ONE UNDO FOR THE LOT ──────────────────────────────────
-  //
-  // EVERY COMPARABLE APP EITHER CONFIRMS OR OFFERS AN UNDO, and this offers the
-  // undo: the legs are saved as they come, the banner names what was added,
-  // and undo removes exactly those and nothing else. Not a confirmation
-  // screen, not silent.
-  //
-  // EACH LEG IS LOOKED UP FIRST, under its date and origin, because a saved
-  // record is a full DTO and the email gave a number and a day. That is one
-  // provider unit per new leg -- two to six per pull -- and it is spent only
-  // on legs not already on the watchlist.
-  //
-  // THE LOOKUP NUMBER IS THE OPERATING ONE WHERE THE EMAIL PRINTED IT. Where
-  // it did not, the marketing number goes up and the provider answers with the
-  // operating flight anyway, so the record that comes back is the one the
-  // aircraft actually flies under. The id is built from THAT, which is why the
-  // "already saved" test is made on the looked-up record and not on the leg.
-  const autoAdd = async (legs: GmailLeg[]) => {
-    const added: SavedFlight[] = [];
-    let limit = false;
-    let queued = 0;
-    // Legs a save refused. Counted rather than inferred from the arithmetic,
-    // because legs also leave this loop by being queued or already present, and
-    // "how many were turned away" is a different question from "how many are
-    // missing".
-    let skipped = 0;
-    // EVERY WAY A LEG CAN BE TURNED AWAY, COUNTED BY NAME. The queue used to
-    // report only its successes -- `if (r === 'added')` and nothing else -- so a
-    // duplicate, a full queue and a past date all vanished identically. That is
-    // what lost the second and third legs of a real booking: the queue was at
-    // its old cap of ten and refused them in silence.
-    const refused: Record<'dup' | 'limit' | 'past', number> = { dup: 0, limit: 0, past: 0 };
-    const tried: string[] = [];
-    for (const leg of legs) {
-      // THE OPERATING NUMBER FIRST, THEN THE MARKETING ONE. An email that
-      // printed "operated as AA 100" may have printed it wrongly, or the
-      // provider may file the flight under the marketing number only; a miss
-      // on the first costs one unit and the second still finds it.
-      const numbers = leg.operating_flight_number !== null && leg.operating_flight_number !== leg.flight_number
-        ? [leg.operating_flight_number, leg.flight_number]
-        : [leg.flight_number];
-      try {
-        const q = [`date=${encodeURIComponent(leg.date)}`];
-        if (leg.origin !== null) q.push(`origin=${encodeURIComponent(leg.origin)}`);
-        let data: any = null;
-        for (const number of numbers) {
-          const resp = await fetch(`${API_BASE}/flight/${encodeURIComponent(number)}?${q.join('&')}`);
-          const body = await resp.json();
-          if (resp.ok && !body.error) { data = body; break; }
-        }
-        if (data === null) {
-          // NOT IN THE SCHEDULE YET. Kept on the device with what the email
-          // said, shown as such, and looked up again on every pull and once a
-          // day until the airline publishes it. See lib/pendingRules.ts.
-          const r = await addPendingLeg(pendingFromLeg(leg, Date.now()));
-          if (r === 'added') queued += 1;
-          else refused[r] += 1;
-          tried.push(pendingFromLeg(leg, Date.now()).id);
-          continue;
-        }
-        // THE EMAIL'S OWN FACTS, WHICH THE PROVIDER NEVER RETURNS. A PNR
-        // belongs to the airline's reservation system rather than to the
-        // flight, and the operating number is what the booking printed. Both
-        // used to live only in the pull's result list; that list was a
-        // duplicate and was deleted, so they are written onto the record here
-        // and touchSavedFlight carries them through every later refresh.
-        const record: SavedFlight = {
-          ...savedFlightFromApi(data),
-          pnr: leg.pnr,
-          operatingFlightNumber:
-            leg.operating_flight_number !== null && leg.operating_flight_number !== leg.flight_number
-              ? leg.operating_flight_number
-              : null,
-          operatedBy: leg.operated_by,
-        };
-        if (savedFlights.some(f => f.id === record.id) || added.some(f => f.id === record.id)) continue;
-        // ── OWNED, NOT WATCHED ────────────────────────────────────────
-        //
-        // A BOOKING IN YOUR OWN INBOX IS YOUR OWN TRIP. Saving these to the
-        // watchlist made every leg a thing the person was following rather than
-        // a thing they were on, so a three-leg itinerary arrived as three
-        // unrelated rows and the connection detection never saw them. Owning
-        // runs that detection, folds the legs into one journey, merges two
-        // journeys when a leg bridges them, and tells the server the person is
-        // ON the flight -- which is what decides whether a notification says
-        // "your flight to Delhi" or "the flight from Mumbai".
-        //
-        // THE RARE CASE IS ACCEPTED AND NOT DETECTED. A flight forwarded so you
-        // can meet someone lands here as owned and is wrong, and nothing in an
-        // email distinguishes the two. Moving it back is one swipe; guessing
-        // would be wrong more often than the case is common.
-        //
-        // capped: A PULL RESPECTS THE TWENTY, where owning by hand does not. An
-        // inbox is not one deliberate act, and a year of mail quietly filling
-        // the app past its cap is worse than a pull that stops and says so.
-        //
-        // remind: false. Owning one flight by hand means "I am flying this" and
-        // reminders follow from that statement; a bulk import makes no such
-        // statement about any single leg. Six reminders nobody asked for is how
-        // somebody turns notifications off altogether.
-        const outcome = await ownFlight(record, undefined, { capped: true, remind: false });
-        if (!outcome.ok) {
-          // SKIPPED, NOT THE END OF THE PULL. This used to break, which cost
-          // more than the refused leg: a booking of three legs lost the second
-          // to the ceiling and the third was never attempted at all. It also
-          // cost the pending path, because a leg the provider cannot resolve
-          // never reaches a save and would have queued happily.
-          limit = true;
-          skipped += 1;
-          continue;
-        }
-        added.push(record);
-      } catch {
-        // One leg that will not look up is skipped; the rest still go in.
-      }
-    }
-    // THE PENDING LEGS THIS PULL DID NOT SEE -- an email older than the window,
-    // say -- get their retry now too, and anything that resolves joins the
-    // banner as an addition, because to the user that is what it is.
-    const retry = await retryPending('pull', tried);
-    for (const r of retry.resolved) added.push(r);
-    if (retry.limit) limit = true;
-
-    // ── WHAT WAS TURNED AWAY, WHEREVER IT WAS TURNED AWAY ──────────────────
-    //
-    // ALWAYS LOGGED, so a development build can see the breakdown even when the
-    // banner has room for only a number. A refusal that is counted but never
-    // named is the same failure one layer along.
-    const refusedTotal = refused.dup + refused.limit + refused.past;
-    if (refusedTotal > 0 || skipped > 0) {
-      console.warn(
-        `[pull] legs=${legs.length} added=${added.length} queued=${queued}`
-        + ` | not saved=${skipped}`
-        + ` | not queued=${refusedTotal} (duplicate=${refused.dup},`
-        + ` queue full=${refused.limit}, past-dated=${refused.past})`,
-      );
-    }
-    // A DUPLICATE IS NOT A LOSS AND IS NOT COUNTED AS ONE. The leg is already in
-    // the queue, which is the state the person wanted; saying "1 skipped" for it
-    // would report a problem that does not exist. Only the two refusals that
-    // lose a leg are surfaced.
-    const lost = skipped + refused.limit + refused.past;
-    // ── THE REASON, NOT JUST THE COUNT ──────────────────────────────────────
-    //
-    // "2 skipped" SENT SOMEBODY TO READ A CONSOLE. The breakdown was logged and
-    // the banner showed a bare number, so the one visible message named a
-    // problem without naming which problem, and the only way to find out was a
-    // terminal. The reasons need different actions -- a full queue is fixed by
-    // forgetting a leg, a past date cannot be fixed at all -- so the count on
-    // its own is not actionable.
-    //
-    // THE DOMINANT ONE WINS, because the banner fits about 26 characters and a
-    // pull that hits two different walls at once is not worth the words. The
-    // full breakdown is still in the log for the case where it matters.
-    const lostWhy = refused.past > 0 ? 'past-dated'
-      : refused.limit > 0 ? 'queue full'
-      : skipped > 0 ? 'not saved'
-      : '';
-
-    if (added.length === 0) {
-      // THE CAP'S MESSAGE NAMES THE RIGHT PLACE NOW. These legs go to My
-      // Flights, so "watchlist limit" would send somebody to look at the wrong
-      // screen for something to remove. Twenty is the number in both, because
-      // it is one store.
-      // THE ONLY PLACE A TOAST IS VISIBLE FOR THIS, because nothing was added
-      // so there is no undo banner to be covered by. Named rather than generic:
-      // a full queue is something the person can act on by forgetting old
-      // entries, and a past date is not.
-      if (refused.limit > 0) showToast('the pending list is full — forget one');
-      else if (lost > 0) showToast(`${lost} flight${lost === 1 ? '' : 's'}: ${lostWhy}`);
-      else if (queued > 0) showToast(queued === 1 ? '1 flight not in the schedule yet' : `${queued} flights not in the schedule yet`);
-      else if (legs.length > 0) showToast('already in My Flights');
-      return;
-    }
-    // WITHIN THE BANNER'S 26 CHARACTERS: "added 6E5071 · 14 Sep" is 21, and
-    // "added 6E5071 +2 more" is 20 at the longest number this app sees.
-    // ── THE COUNT OF WHAT WAS TURNED AWAY GOES IN THE BANNER ────────────────
-    //
-    // NOT IN A TOAST BESIDE IT, and that is the bug this replaces rather than a
-    // preference. showToast and showUndo draw at the SAME coordinates -- one
-    // toastWrap, one top inset -- and the undo banner renders after the toast,
-    // so it paints over it. The "some were not added" toast below was firing
-    // correctly and was covered by the banner every time. A partial add looked
-    // exactly like a complete one.
-    //
-    // SO THE ONE VISIBLE MESSAGE CARRIES BOTH FACTS. It stays inside the 26
-    // characters the banner fits at 320pt: "added SK936 · 2 skipped" is 23.
-    const first = added[0];
-    const tail = lost > 0 ? ` · ${lost} ${lostWhy}` : '';
-    const label = added.length === 1
-      ? `added ${first.flightNumber}${tail || ` · ${routeDateLabel(first.flightDate).replace(/^\w+ /, '')}`}`
-      : `added ${first.flightNumber} +${added.length - 1}${tail || ' more'}`;
-    showUndo(label, async () => {
-      for (const r of added) await handleUnsave(r);
-      showToast(added.length === 1 ? `${first.flightNumber} removed` : `${added.length} flights removed`);
-    });
-    // NO SECOND MESSAGE HERE. It would be drawn under the banner above and
-    // never seen; the banner's own label carries the count instead.
-  };
+  // pullFromGmail AND autoAdd ARE IN lib/gmailPull.tsx, and the control that
+  // called them is on My Flights. The reason is where the results land: every
+  // leg autoAdd resolves is OWNED, which puts it on My Flights and never on the
+  // watchlist this screen draws -- so the row sat on the one screen its own
+  // results could not appear on. The search screen can ask for a pull in words
+  // now as well. Nothing was threaded in to make that work: the pull reads the
+  // session, the saved list and the two banners off contexts every screen is
+  // already inside.
 
   // 'username' AND 'displayName' ARE NOT READ HERE ANY MORE. lib/account.tsx
   // hydrates both, together, and this screen reads them off the hook. 'email'
@@ -1950,15 +1670,18 @@ export default function Index() {
 
   // ── WHEN THE ACCOUNT CHANGES UNDER THIS SCREEN ────────────────────────────
   //
-  // SIGN-IN AND LOGOUT USED TO DO THESE TWO RESETS THEMSELVES, in line, because
-  // both happened on this screen. Sign-in is lib/googleAuth.tsx's now and
-  // logout is the profile sheet's, and neither can reach this state. setEmail
-  // is the signal every other screen already watches for exactly this -- the
-  // search screen clears its query the same way -- so this screen watches it
-  // too. After clearResultView on purpose: the sign-in effect that used to do
-  // this sat above it and read it before it was declared.
+  // SIGN-IN AND LOGOUT USED TO DO THIS RESET THEMSELVES, in line, because both
+  // happened on this screen. Sign-in is lib/googleAuth.tsx's now and logout is
+  // the profile sheet's, and neither can reach this state. setEmail is the
+  // signal every other screen already watches for exactly this -- the search
+  // screen clears its query the same way -- so this screen watches it too.
+  // After clearResultView on purpose: the sign-in effect that used to do this
+  // sat above it and read it before it was declared.
+  //
+  // THE PULL'S OWN RESET WENT WITH THE PULL. lib/gmailPull.tsx watches the same
+  // signal for the same reason, so every consumer of it is emptied rather than
+  // each screen remembering to.
   useAccountChange(() => {
-    setGmailPull(IDLE_PULL);
     clearResultView();
   });
 
@@ -2275,72 +1998,11 @@ export default function Index() {
             </View>
           )}
 
-          {/* ── PULL FROM GMAIL ──
-              Signed in, and no card open: the card takes the screen and this
-              is a way of opening one. The row is the only control; the list
-              under it is what the last pull found. */}
-          {username !== null && flight === null && (
-            <View style={gm.wrap}>
-              <TouchableOpacity
-                style={gm.row}
-                activeOpacity={0.7}
-                onPress={pullFromGmail}
-                // ── DEV ONLY: POINT THE PULL AT THE FIXTURE INBOX ──
-                // A long press asks for the server's GMAIL_FIXTURE_TOKEN and
-                // stores "fixture:<it>" as the session, so the next pull is
-                // served the seven synthetic emails in tools/gmail_fixtures
-                // through the real extraction path. A second long press
-                // clears it. __DEV__ so it cannot ship; Alert.prompt so it is
-                // iOS-only, which is the only platform the pull runs on.
-                onLongPress={__DEV__ ? () => {
-                  if (session !== null && session.startsWith('fixture:')) {
-                    void persistSession(null);
-                    setGmailPull(IDLE_PULL);
-                    showToast('fixture inbox off');
-                    return;
-                  }
-                  Alert.prompt('fixture inbox', 'GMAIL_FIXTURE_TOKEN on the server', (v) => {
-                    const secret = (v ?? '').trim();
-                    if (secret === '') return;
-                    void persistSession(`fixture:${secret}`);
-                    setGmailPull(IDLE_PULL);
-                    showToast('fixture inbox on');
-                  });
-                } : undefined}
-                disabled={gmailPull.status === 'loading'}
-              >
-                <View style={sf.rowEdge} pointerEvents="none" />
-                <Text style={gm.rowTitle}>
-                  {session === null
-                    ? 'reconnect gmail to pull flights'
-                    : gmailPull.status === 'loading'
-                      ? 'reading your gmail'
-                      : gmailPull.status === 'done'
-                        ? 'pull from gmail again'
-                        : 'add flights from gmail'}
-                </Text>
-              </TouchableOpacity>
-
-              {gmailPull.status === 'error' && (
-                <Text style={gm.msg}>{`> ${gmailPull.message}`}</Text>
-              )}
-              {gmailPull.status === 'done' && gmailPull.flights.length === 0 && (
-                <Text style={gm.msg}>{'> no upcoming flights found in your gmail'}</Text>
-              )}
-              {/* THE PULL'S RESULT LIST USED TO RENDER HERE, and it was a
-                  duplicate. Every leg a pull returns is routed the moment it
-                  is read: one the provider can resolve is saved and appears in
-                  the watchlist below, one it cannot is queued and appears in
-                  "not in the schedule yet" with its own remove control. Echoing
-                  all of them again above both put the unpublished ones on
-                  screen twice, in an unlabelled list that could not be removed
-                  because it was not a store -- it was a view of a fetch, and it
-                  vanished on its own when the pull state reset.
-                  WHAT THE ECHO CARRIED THAT THE CARD DID NOT -- the PNR and the
-                  operating flight number -- moved onto the flight card rather
-                  than dying with it. See SavedFlight.pnr. */}
-            </View>
-          )}
+          {/* THE GMAIL ROW STOOD HERE. It is a menu row and a panel on My
+              Flights now -- "Import from Gmail" -- and a sentence the search
+              screen understands. See lib/gmailPull.tsx for why it moved: a pull
+              OWNS what it resolves, so everything it produced appeared on My
+              Flights and nothing it produced appeared here. */}
 
           {/* ── NOT IN THE SCHEDULE YET, AND ONLY WHAT BELONGS NOWHERE ELSE ──
               MOST OF THESE MOVED TO My Flights. A leg of a booking sits inside
@@ -2646,21 +2308,15 @@ const s = StyleSheet.create({
   archiveList: { marginHorizontal: -20, paddingHorizontal: 20, flex: 1 },
 });
 
-// THE GMAIL SECTION, in sf.row's vocabulary so a leg found in an email and a
-// leg on the watchlist read as the same kind of thing.
+// THE UNPUBLISHED-LEG SECTION, in sf.row's vocabulary so a leg found in an
+// email and a leg on the watchlist read as the same kind of thing.
+//
+// `row` AND `rowTitle` WENT WITH THE GMAIL PULL and were the only two entries
+// here that were its alone. `wrap` and `msg` STAYED, and that is not an
+// oversight: the pending section is the other reader of both -- wrap is its
+// container and msg is what prints "this list is full".
 const gm = StyleSheet.create({
   wrap: { marginBottom: 24 },
-  row: {
-    paddingVertical: 13, paddingHorizontal: CARD_PAD,
-    backgroundColor: CARD_FILL, borderRadius: CARD_RADIUS, marginBottom: CARD_GAP,
-  },
-  // ONE LINE, LIKE EVERY OTHER ROW ON THIS PAGE. It carried a second line
-  // describing what the pull does -- "booking emails from the last year" --
-  // which made the control roughly twice the height of the rows under it and
-  // read as a banner rather than as something to tap. The title already says
-  // what it does, and changes to "reading your gmail" while it runs, so the
-  // second line was explaining a thing the first line had said.
-  rowTitle: { fontFamily: MONO, fontSize: 13, color: '#4ade80' },
   msg: { fontFamily: SANS, fontSize: 11, color: 'rgba(226,226,226,0.5)', paddingVertical: 6 },
   leg: {
     paddingVertical: 13, paddingHorizontal: CARD_PAD,

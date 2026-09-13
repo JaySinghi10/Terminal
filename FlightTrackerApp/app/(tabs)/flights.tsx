@@ -127,6 +127,13 @@ import {
   OVERLAY_RISE, PANEL_IN_MS, PANEL_OUT_MS,
 } from '../../lib/glass';
 import { useToast } from '../../lib/toast';
+// ── THE GMAIL PULL, WHICH USED TO BE A ROW ON HOME ────────────────────────────
+//
+// IT BELONGS HERE BECAUSE ITS RESULTS DO. Every leg the pull resolves is OWNED,
+// which makes it a journey on this screen; on Home it sat above a watchlist its
+// own output never joined. The hook reads the session, the saved list and the
+// two banners off contexts, so nothing is threaded in. See lib/gmailPull.tsx.
+import { useGmailPull } from '../../lib/gmailPull';
 // THE APP'S ONE HAPTIC. components/swipe fires it when a full swipe arms and
 // when a long press becomes a menu -- both moments where a gesture turns into an
 // offer. Opening this menu is the same kind of moment, and a second weight for
@@ -327,7 +334,7 @@ const RAIL_INSET = 22;
 // presentation for the platform to refuse.
 //
 // null IS "NOTHING IS UP", which is also the Modal's own visible test.
-type Overlay = 'menu' | 'import' | 'past' | null;
+type Overlay = 'menu' | 'import' | 'gmail' | 'past' | null;
 
 // WHICH TIMINGS AN OVERLAY TAKES, DERIVED RATHER THAN STORED. A menu arrives and
 // leaves on the panel's pair; a sheet on the calendar's.
@@ -1866,6 +1873,10 @@ export default function Flights() {
     pending,
   } = useSaved();
   const { showToast } = useToast();
+  // THE PULL, AND THE LABEL FOR ITS FOUR STATES. Both come from the hook so the
+  // control here and the sentence the search screen prints cannot describe one
+  // run differently. See lib/gmailPull.tsx.
+  const gmail = useGmailPull();
   const { isOnMap, addRoute, removeRoute } = useMapRoutes();
 
   // THIS SCREEN'S OWN MINUTE TICK, and it is not on the context. The phase, the
@@ -2561,6 +2572,11 @@ export default function Flights() {
   const chooseImport = () => {
     swapOverlay('import');
   };
+  // A SWAP LIKE THE IMPORT SHEET'S, for the same reason: the Modal is already
+  // up and only its contents change. See swapOverlay.
+  const chooseGmail = () => {
+    swapOverlay('gmail');
+  };
 
   // THE PLUS IS THE ONE GREEN THING ON AN EMPTY SCREEN, and that is within the
   // rule rather than an exception to it: green means live and actionable, and on
@@ -2644,6 +2660,11 @@ export default function Flights() {
             <Menu panel={panel}>
               <MenuRow label="Search for a flight" onPress={chooseSearch} />
               <MenuRow label="Import from watchlist" onPress={chooseImport} />
+              {/* THIRD, AND LAST, BECAUSE IT IS THE WIDEST NET. The first two
+                  name one flight; this reads a year of mail and can add
+                  several. Ordered by how much it does rather than by how often
+                  it is wanted. */}
+              <MenuRow label="Import from Gmail" onPress={chooseGmail} />
             </Menu>
           )}
 
@@ -2683,6 +2704,49 @@ export default function Flights() {
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
+              )}
+            </Sheet>
+          )}
+
+          {/* ── THE GMAIL PANEL ──
+              THE HOME ROW'S FOUR STATES, IN THIS SCREEN'S CLOTHES. The label is
+              the hook's -- reconnect, reading, done, idle -- so the two controls
+              cannot come to say different things about one run; the surface is
+              importRow's, which is what every tappable row in this file's
+              sheets is made of.
+
+              THE ROW IS THE WHOLE CONTROL, exactly as it was on Home. No
+              second button and no confirmation: the pull is idempotent per leg
+              -- a flight already owned is skipped -- and the undo banner is
+              what answers a pull nobody wanted.
+
+              THE TWO MESSAGES UNDER IT ARE THE ROW'S OWN. The error line says
+              what the server said; the empty line is the one case where a
+              successful pull has nothing to show for itself, and saying so is
+              the difference between "nothing in your inbox" and "this is
+              broken".
+
+              IT DOES NOT CLOSE ON A PULL. The sheet is where the result is
+              reported, so dismissing it on the press would take the report away
+              with it -- and a second pull is one tap rather than three. */}
+          {overlay === 'gmail' && (
+            <Sheet panel={panel} title="Gmail" onClose={closeOverlay}>
+              <TouchableOpacity
+                style={st.importRow}
+                activeOpacity={0.7}
+                onPress={() => { void gmail.pull(); }}
+                disabled={gmail.state.status === 'loading'}
+                accessibilityRole="button"
+                accessibilityLabel={gmail.label}
+              >
+                <View style={st.cardEdge} pointerEvents="none" />
+                <Text style={st.gmailLabel}>{gmail.label}</Text>
+              </TouchableOpacity>
+              {gmail.state.status === 'error' && (
+                <Text style={st.gmailMsg}>{`> ${gmail.state.message}`}</Text>
+              )}
+              {gmail.state.status === 'done' && gmail.state.flights.length === 0 && (
+                <Text style={st.gmailMsg}>{'> no upcoming flights found in your gmail'}</Text>
               )}
             </Sheet>
           )}
@@ -3420,6 +3484,19 @@ const st = StyleSheet.create({
     padding: CARD_PAD,
     marginBottom: CARD_GAP,
     gap: 6,
+  },
+  // ── THE GMAIL ROW'S TWO ENTRIES ──
+  //
+  // THE LABEL IS THE HOME ROW'S, VALUE FOR VALUE: mono 13 in the app's green,
+  // which is the treatment a thing that is live and actionable gets. It sits on
+  // importRow's surface rather than carrying one of its own, so the pull reads
+  // as the same kind of row as the watchlist import beside it.
+  gmailLabel: { fontFamily: MONO, fontSize: 13, color: CD_GREEN },
+  // sheetEmpty's face and tone, left-aligned and without its centring, because
+  // this is a line ABOUT the row above it rather than a message standing in for
+  // an empty list. gm.msg's own arithmetic on Home.
+  gmailMsg: {
+    fontFamily: SANS, fontSize: 11, color: DIM, paddingVertical: 6,
   },
   pastTrip: { marginBottom: CARD_GAP, gap: 2 },
   pastRow: {

@@ -63,6 +63,20 @@ import { MapRoutesProvider } from "../lib/maproutes";
 // raises the flag is a screen -- the two are siblings and this is the only place
 // that contains both. See lib/chrome.
 import { ChromeProvider } from "../lib/chrome";
+// ── SIGN-IN, AND THE GMAIL PULL THAT USES IT ──────────────────────────────────
+//
+// BOTH WERE HOOKS AND BOTH ARE MOUNTED ONCE NOW. Every screen that called
+// useGoogleSignIn built its own Google.useAuthRequest, and the Gmail pull took
+// that from two screens to four when it became something My Flights and the
+// search screen could both ask for. One provider each is one request and one
+// pull state, made structural rather than remembered.
+//
+// INSIDE ToastProvider, WHICH IS WHERE THE ORDER IS DECIDED. Sign-in reads the
+// account, the saved list and the toasts; the pull reads all three AND sign-in.
+// So they go innermost, in that order -- and being inside the Stack's parent is
+// what puts them within reach of the profile sheet as well as the tabs.
+import { GoogleSignInProvider } from "../lib/googleAuth";
+import { GmailPullProvider } from "../lib/gmailPull";
 // THE PAGE, FROM THE ONE PLACE THAT NAMES IT. It is the Stack's content
 // background, the theme's background, and (in app/(tabs)/_layout.tsx) the tab
 // navigator's scene background: the colour every screen is drawn onto, and the
@@ -449,6 +463,13 @@ export default function Layout() {
             <MapRoutesProvider>
               <ChromeProvider>
                 <ToastProvider>
+                  {/* AT THE SAME INDENT AS WHAT THEY WRAP, deliberately. Two
+                      more levels would re-indent the whole Stack below for no
+                      change to it, and this file already nests this way where
+                      a wrapper adds nothing but itself -- see the exit wrapper
+                      around the Swipeable in app/(tabs)/index.tsx. */}
+                  <GoogleSignInProvider>
+                  <GmailPullProvider>
                   <StatusBar style="light" />
                   <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: PAGE_BG } }}>
                     <Stack.Screen name="(tabs)" />
@@ -507,6 +528,8 @@ export default function Layout() {
                   {/* INSIDE SavedProvider ON PURPOSE: it reads the saved list to
                       choose between My Flights and Home. See PendingTapSender. */}
                   <PendingTapSender pending={pending} onSent={clearPending} />
+                  </GmailPullProvider>
+                  </GoogleSignInProvider>
                 </ToastProvider>
               </ChromeProvider>
             </MapRoutesProvider>

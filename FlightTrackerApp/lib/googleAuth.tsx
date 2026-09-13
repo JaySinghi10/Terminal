@@ -7,17 +7,24 @@
 // it. Every line of the flow is what it was on Home; what changed is who can
 // call it.
 //
-// TWO CONSUMERS CAN BE MOUNTED AT ONCE -- Home always is, and the profile
-// sheet on top of it. Each holds its own request with its own PKCE verifier
-// and state, so a prompt started from one never answers the other. The web
-// script is the one shared thing, and it is guarded below so it is appended
-// once, by whichever mounted first.
+// ONE MOUNT, AT THE ROOT, AND IT USED TO BE ONE PER SCREEN. This was a hook,
+// and every screen that called it built its own Google.useAuthRequest -- its own
+// PKCE verifier, its own response, its own exchange effect. That was defensible
+// at two consumers and stopped being so at four, when the Gmail pull began
+// reaching for sign-in from My Flights and the search screen as well: four
+// requests are built on every launch, four effects watch four responses, and
+// which of them a prompt answers is decided by which one called promptAsync.
+//
+// A PROVIDER MAKES THAT STRUCTURAL RATHER THAN CAREFUL. One request exists
+// because one provider is mounted, and the call sites did not change -- the hook
+// keeps its name and reads a context instead of building anything. See
+// app/_layout.tsx for where it is mounted and why it sits inside ToastProvider.
 //
 // WHAT HOME USED TO DO AFTER A SIGN-IN -- reset the Gmail pull and close an
 // open card -- is not here. setEmail is the account-change signal every screen
 // watches, and Home does both through useAccountChange now, the way the search
 // screen has always cleared its own query.
-import { useEffect, useEffectEvent } from 'react';
+import { createContext, useContext, useEffect, useEffectEvent, type ReactNode } from 'react';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as Google from 'expo-auth-session/providers/google';
@@ -26,11 +33,11 @@ import { useAccount } from './account';
 import { useSaved, API_BASE } from './saved';
 import { useToast } from './toast';
 
-// Appended by the first consumer to mount, removed by the one that appended
-// it; a consumer that finds it already there leaves it alone.
-let gsiScript: HTMLScriptElement | null = null;
+type GoogleSignInValue = { signIn: () => void };
 
-export function useGoogleSignIn(): { signIn: () => void } {
+const GoogleSignInContext = createContext<GoogleSignInValue | null>(null);
+
+export function GoogleSignInProvider({ children }: { children: ReactNode }) {
   const { persistUsername, persistSession } = useAccount();
   const { setEmail } = useSaved();
   const { showToast } = useToast();
@@ -125,11 +132,14 @@ export function useGoogleSignIn(): { signIn: () => void } {
     if (validEmail) setEmail(validEmail);
   });
 
+  // THE GUARD THAT USED TO BE HERE IS GONE WITH THE SECOND CONSUMER. A
+  // module-level flag kept the script to one append while any number of hooks
+  // could mount; one provider is the same guarantee made by construction, and a
+  // flag defending against a case that can no longer arise is a flag the next
+  // reader has to disprove.
   useEffect(() => {
     if (Platform.OS !== 'web') return;
-    if (gsiScript !== null) return;
     const script = document.createElement('script');
-    gsiScript = script;
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true;
     script.onload = () => {
@@ -140,10 +150,7 @@ export function useGoogleSignIn(): { signIn: () => void } {
       });
     };
     document.head.appendChild(script);
-    return () => {
-      document.head.removeChild(script);
-      gsiScript = null;
-    };
+    return () => { document.head.removeChild(script); };
   }, []);
 
   // ONE ENTRY POINT for every button that says "Sign in with Google": the
@@ -157,5 +164,24 @@ export function useGoogleSignIn(): { signIn: () => void } {
     }
   };
 
-  return { signIn };
+  // NOT MEMOISED, AND THAT IS NOT AN OVERSIGHT. This provider re-renders only
+  // when its own request or response changes, which is a sign-in beginning or
+  // ending -- twice in a session, not once a frame. The React Compiler is on
+  // (app.json) and memoises what it can; a hand-written useMemo here would have
+  // to list every value signIn closes over and would be one more thing to keep
+  // in step for no measurable gain.
+  return (
+    <GoogleSignInContext.Provider value={{ signIn }}>
+      {children}
+    </GoogleSignInContext.Provider>
+  );
+}
+
+// THE NAME THE SCREENS ALREADY CALL. It was the whole implementation and is now
+// the reader, so index.tsx, profile.tsx and lib/gmailPull.tsx did not change a
+// line between the two versions.
+export function useGoogleSignIn(): GoogleSignInValue {
+  const v = useContext(GoogleSignInContext);
+  if (v === null) throw new Error('useGoogleSignIn must be called inside GoogleSignInProvider');
+  return v;
 }

@@ -141,6 +141,14 @@ import * as Location from 'expo-location';
 // THE GMAIL TOKEN, for the /chat request below. It is written on home, by the
 // sign-in and the logout in the profile modal, and read here. See lib/account.tsx.
 import { useAccount } from '../../../lib/account';
+// ── A GMAIL IMPORT, ASKED FOR IN WORDS ────────────────────────────────────────
+//
+// THE MATCHER LIVES WITH THE FEATURE rather than with the vocabularies above,
+// and that is deliberate: adding a phrasing and adding a state to the pull are
+// the same job, and splitting them across two files is how one of them gets
+// forgotten. The pull itself is the same hook My Flights uses, so a sentence
+// here and a menu row there do the same thing.
+import { useGmailPull, looksLikeGmailImport } from '../../../lib/gmailPull';
 import {
   Airport,
   airportByCode,
@@ -1002,6 +1010,10 @@ export default function Search() {
   // lib/account.tsx for why the names live there now.
   const { session, username, displayName } = useAccount();
   const promptName = displayName ?? username;
+  // THE PULL, FOR THE RUNG BELOW. Its own four-state label is not read here --
+  // this screen has no row to relabel -- only the sentence a run comes back
+  // with, which goes in the response area. See lib/gmailPull.tsx.
+  const gmail = useGmailPull();
   // EVERYTHING A SCREEN NEEDS TO OWN A FLIGHT CARD. One copy, shared with home,
   // so a card opened from a route row and a card opened from a watchlist row are
   // driven by the same lookup, the same save and the same entry animation.
@@ -1331,6 +1343,35 @@ export default function Search() {
       if (v.mods.date !== null) setRouteDate(v.mods.date);
       setRoutePick({ from: v.from.options, to: v.to.options });
       await runRouteLookup(v.from.airport.iata, v.to.airport.iata, v.mods.date ?? routeDate);
+      return;
+    }
+
+    // ── A GMAIL IMPORT, AND IT COSTS NOTHING TO RECOGNISE ───────────────
+    //
+    // ABOVE BOTH PAID RUNGS AND BELOW EVERY FREE ONE. "pull my flights from
+    // gmail" used to reach /parse, which is built to find two airports in a
+    // sentence: it found none and answered "I did not catch where you are
+    // flying from", which is a unit spent to misread an instruction this app
+    // could already carry out.
+    //
+    // AFTER THE ROUTE AND AIRPORT RUNGS, so nothing that names a place changes
+    // meaning -- a real route resolves before this is asked, and
+    // looksLikeGmailImport needs a mail source word that no route contains.
+    //
+    // THE ANSWER GOES WHERE /chat'S GOES, because to the user it is the same
+    // kind of thing: a sentence asked in words, answered in words. The pull
+    // raises its own toast and its own undo banner on the way -- the banner is
+    // the only way to undo an add -- and this is the line that stays on screen
+    // afterwards.
+    if (looksLikeGmailImport(query)) {
+      setLoading(true);
+      try {
+        const outcome = await gmail.pull();
+        setChatResponse(outcome.message);
+        showResult();
+      } finally {
+        setLoading(false);
+      }
       return;
     }
 
