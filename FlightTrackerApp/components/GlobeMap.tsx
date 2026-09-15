@@ -36,6 +36,9 @@ import {
   timezoneHome, HOME_ZOOM_POSITION, HOME_ZOOM_FALLBACK, HOME_ZOOM_MAX,
   type HomeView,
 } from '../lib/home';
+// THE COAST BELOW z2, AS LINES. Natural Earth's 1:110m coastline, public domain,
+// rounded to two decimal places. See COAST_LOW_MAXZOOM for why it exists.
+import COAST_110M from '../assets/map/ne-110m-coastline.json';
 
 // ── THE INK ─────────────────────────────────────────────────────────────────
 //
@@ -88,6 +91,24 @@ const SPACE = PAGE_BG;
 // extent, so every cut edge lies outside its tile and is clipped away with the
 // rest of the buffer; what is left inside the tile is shoreline.
 //
+// EXCEPT AT z0 AND z1, ALONG THE ANTIMERIDIAN. Those two zooms cut the ocean
+// polygon at 180 degrees with no buffer: the ring runs exactly along the tile's
+// edge from 16.6S to 84.7S (decoded from tiles 0/0/0, 1/0/1 and 1/1/1; no
+// other cut edge in z0-z3 does this). On a flat map that edge is the edge of the
+// world. On the globe 180 degrees is an ordinary meridian, so the outline drew a
+// straight line from the Ross Sea up past Fiji.
+//
+// SO BELOW z2 THE COAST IS NOT THE POLYGONS' EDGE. It is Natural Earth's 1:110m
+// coastline, which is linework and has no cut edges to outline: 134 open
+// lines, split at +/-180 with nothing joining the two ends, no step across the
+// antimeridian and no segment along either pole. The tile outline takes over at
+// z2, where the tiles are buffered again. Both layers draw the same ink at the
+// same width, so the handover is a change of detail rather than of line.
+//
+// z2 BECAUSE OF HOW TILES ARE CHOSEN. The vector source is 512px, so a display
+// zoom under 2 reads the z0 and z1 tiles and a display zoom of 2 reads z2.
+// See COAST_LOW_MAXZOOM below.
+//
 // A SOLID GREY RATHER THAN AN ALPHA, because this line straddles two grounds
 // and should be the same line on both. #616161 is 3.02:1 against the land and
 // 3.12:1 against the shelf water every coast actually borders, at 1px -- the
@@ -96,6 +117,8 @@ const SPACE = PAGE_BG;
 // the ground is allowed to reach it: the country border is a step under, see
 // COUNTRY_LINE.
 const COAST_LINE = '#616161';
+// The zoom the tile outline starts at and the 1:110m linework stops at.
+const COAST_LOW_MAXZOOM = 2;
 // ── THE RELIEF: TEXTURE ON THE LAND, NOT A TONE ─────────────────────────────
 //
 // ELEVATION FROM MAPTERHORN: terrarium-encoded WebP tiles, 512px, whose red,
@@ -850,6 +873,11 @@ const STYLE = {
       maxzoom: DEPTH_MAXZOOM,
     },
     airports: { type: 'geojson', data: '__AIRPORTS__' },
+    // THE LOW-ZOOM COAST. Spliced in as raw JSON, like the airports. maxzoom is
+    // the source's tiling ceiling, not the layer's: the layer stops at
+    // COAST_LOW_MAXZOOM, so cutting finer tiles than that would be work nothing
+    // draws.
+    coast110m: { type: 'geojson', data: '__COAST_110M__', maxzoom: COAST_LOW_MAXZOOM },
     // EMPTY UNTIL THERE IS A POSITION. Declaring it in the style rather than
     // adding the source later means the layers exist from the first frame and
     // the pin appears by setting data, with no addLayer at runtime and no
@@ -994,12 +1022,31 @@ const STYLE = {
     // DIRECTLY OVER THE SEA AND UNDER EVERYTHING ELSE, because it is the ground
     // itself: a road that reaches the shore or a border that ends at one paints
     // over it, and a label's halo cuts it like any other line.
+    //
+    // FROM z2 ONLY. Below it the z0 and z1 tiles carry an unbuffered cut along
+    // the antimeridian, and the next layer draws the coast instead. See
+    // COAST_LINE.
     {
       id: 'coastline',
       type: 'line',
       source: 'ofm',
       'source-layer': 'water',
+      minzoom: COAST_LOW_MAXZOOM,
       filter: ['==', ['get', 'class'], 'ocean'],
+      layout: { 'line-join': 'round' },
+      paint: {
+        'line-color': COAST_LINE,
+        'line-width': 1,
+      },
+    },
+    // THE SAME LINE BELOW z2, FROM LINEWORK RATHER THAN POLYGON EDGES. Same
+    // ink, same width, same place in the stack, so the handover at
+    // COAST_LOW_MAXZOOM changes the detail and nothing else.
+    {
+      id: 'coastline-low',
+      type: 'line',
+      source: 'coast110m',
+      maxzoom: COAST_LOW_MAXZOOM,
       layout: { 'line-join': 'round' },
       paint: {
         'line-color': COAST_LINE,
@@ -1473,7 +1520,9 @@ const STYLE = {
 // $& and $' in a replacement STRING as substitution patterns; a function is
 // handed over verbatim. Nothing in this data contains a dollar sign today, and
 // that is exactly the kind of thing that stops being true quietly.
-const STYLE_JSON = JSON.stringify(STYLE).replace('"__AIRPORTS__"', () => AIRPORT_GEOJSON);
+const STYLE_JSON = JSON.stringify(STYLE)
+  .replace('"__AIRPORTS__"', () => AIRPORT_GEOJSON)
+  .replace('"__COAST_110M__"', () => JSON.stringify(COAST_110M));
 
 // NO BACKTICKS AND NO ${} INSIDE THIS PAGE'S OWN SCRIPT — it lives in a template
 // literal, and the only interpolations are the deliberate ones.
