@@ -47,6 +47,11 @@ const SANS = 'Inter_400Regular';
 const SANS_SEMI = 'Inter_600SemiBold';
 const INK = '#e2e2e2';
 const DIMMER = 'rgba(226,226,226,0.28)';
+// THE CREDIT'S INK, AND IT IS NOT DIMMER. The OpenStreetMap credit is a
+// condition of using the data, and at DIMMER it was 2.10:1 on the page -- on
+// screen, but not legible. 0.52 is the quietest ink that clears the 4.5:1
+// small-text floor: 4.61:1 here, and the same tone as the globe map's credit.
+const ATTRIB = 'rgba(226,226,226,0.52)';
 const GREEN = '#4ade80';
 const AMBER = '#fbbf24';
 const SURFACE = 'rgba(255,255,255,0.04)';
@@ -382,6 +387,6 @@ const st = StyleSheet.create({
 
   note: { fontFamily: SANS, fontSize: 11, color: DIM, paddingHorizontal: 16,
     marginTop: 8, lineHeight: 16 },
-  attrib: { fontFamily: SANS, fontSize: 9, color: DIMMER, paddingHorizontal: 16,
+  attrib: { fontFamily: SANS, fontSize: 9, color: ATTRIB, paddingHorizontal: 16,
     marginTop: 6 },
 });
