@@ -3049,6 +3049,13 @@ export default function Search() {
         onDrag={setRetracted}
         onMapTap={handleMapTap}
         onArcAnchor={onArcAnchor}
+        // THE CREDIT FOLLOWS WHAT COVERS THE MAP: the sheet's detent while it is
+        // up, the tab bar when it is not -- the same floor the bubble uses. At
+        // the top detent the map is a strip under the island that the home
+        // button already fills, so the credit goes with the rest of the map.
+        creditBottom={!sheetPresented ? insets.bottom
+          : sheetDetent >= sheetHeights.length - 1 ? null
+          : sheetHeights[sheetDetent]}
       />
       {/* box-none ON BOTH THIS AND THE ScrollView, so a finger reaches the map
           wherever this screen has nothing drawn.

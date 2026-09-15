@@ -25,7 +25,8 @@
 // The camera fly, the city heading and the route arc are deliberately NOT ported
 // yet.
 import { useMemo, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { allAirports, airportByCode } from '../lib/airports';
 // THE PAGE, which is what the space around the globe is. The sea is not the
@@ -118,8 +119,7 @@ const COAST_LINE = '#616161';
 // ink 5.9:1 on the brightest relief.
 //
 // ATTRIBUTION IS A CONDITION OF USE: the 3DEP, GMTED2010 and SRTM data is
-// courtesy of the U.S. Geological Survey. This map shows no attribution for
-// any source, OpenFreeMap included.
+// courtesy of the U.S. Geological Survey. See MAP_CREDIT.
 const DEM_TILES = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 const DEM_MAXZOOM = 12;
 const RELIEF_SHADOW = 'rgba(0,0,0,0.60)';
@@ -1295,7 +1295,8 @@ const STYLE_JSON = JSON.stringify(STYLE).replace('"__AIRPORTS__"', () => AIRPORT
 // literal, and the only interpolations are the deliberate ones.
 //
 // NO REMOTE STYLESHEET. maplibre-gl.css exists to style controls and the
-// attribution bar, and this map has neither. The four rules that actually
+// attribution bar, and this map uses neither -- its credit line is React Native
+// text over the WebView, see MAP_CREDIT. The four rules that actually
 // position the canvas are inlined below, which removes a request and a failure
 // mode: a stylesheet that fails to load is silent, and the symptom would have
 // been a map that is present but zero pixels tall.
@@ -1576,9 +1577,26 @@ function start() {
   // THE ERROR EVENT CARRIES WHICH SOURCE FAILED, and that is the difference
   // between "the style is wrong" and "the tiles will not come". sourceId is set
   // for tile and geojson failures and absent for style and runtime ones.
+  //
+  // THE ELEVATION TILES ARE COUNTED APART. They come from S3, not OpenFreeMap,
+  // and the relief is texture: an S3 outage leaves a complete map without it.
+  // Sharing the count let three failed elevation tiles use up the reports an
+  // OpenFreeMap failure would need, and fired the OpenFreeMap probes at a host
+  // that was fine. So they report under their own name, with their own cap, and
+  // probe nothing -- the status and URL a failed fetch carries are the whole
+  // diagnosis, and they go out with the message.
   var reported = 0;
+  var reportedDem = 0;
   map.on('error', function (ev) {
     var m = (ev && ev.error && ev.error.message) ? ev.error.message : 'unknown';
+    if (ev && ev.sourceId === 'dem') {
+      reportedDem = reportedDem + 1;
+      if (reportedDem > 3) return;
+      if (ev.error && ev.error.status) m = m + ' [http ' + ev.error.status + ']';
+      if (ev.error && ev.error.url) m = m + ' [url ' + ev.error.url + ']';
+      err('elevation', m);
+      return;
+    }
     var where = (ev && ev.sourceId) ? ('source:' + ev.sourceId) : STAGE;
     // Tile errors arrive one per failed tile; a hundred identical lines is not
     // more information than three.
@@ -2722,13 +2740,20 @@ type GlobeMapProps = {
   // no such arc. Posted on every rebuild and every camera move, at most once a
   // frame. See postAnchor.
   onArcAnchor?: (p: { x: number; y: number } | null) => void;
+  // HOW FAR UP FROM THE SCREEN'S BOTTOM EDGE THE MAP IS COVERED, in points, so
+  // the credit line can sit just above it. The same reason fitRoute takes its
+  // padding from the caller: the map cannot see what is drawn over it. Omitted,
+  // it is the safe area, which under the tab bar is the bar. null hides the
+  // credit, for when there is too little map left showing to carry it.
+  creditBottom?: number | null;
 };
 
 const GlobeMap = forwardRef<GlobeMapHandle, GlobeMapProps>(
   function GlobeMap(
-    { onReady, onAirport, onCity, onFlight, onDrag, onMapTap, onArcAnchor }, ref,
+    { onReady, onAirport, onCity, onFlight, onDrag, onMapTap, onArcAnchor, creditBottom }, ref,
   ) {
     const webRef = useRef<WebView>(null);
+    const insets = useSafeAreaInsets();
 
     // injectJavaScript RETURNS THE LAST EXPRESSION and warns when that is not a
     // primitive, so every call ends in `true` — the standard idiom, and without
@@ -2933,12 +2958,55 @@ const GlobeMap = forwardRef<GlobeMapHandle, GlobeMapProps>(
           }
         }}
       />
+      {/* THE CREDIT, OVER THE MAP AND OUT OF ITS WAY. pointerEvents none, so
+          a pan or tap that starts on the words reaches the map under them. */}
+      {creditBottom !== null && (
+        <View
+          pointerEvents="none"
+          style={[st.credit, { bottom: (creditBottom ?? insets.bottom) + CREDIT_GAP }]}
+        >
+          <Text style={st.creditText} numberOfLines={1}>{MAP_CREDIT}</Text>
+        </View>
+      )}
     </View>
   );
 });
 
 export default GlobeMap;
 
+// ── THE CREDIT LINE ─────────────────────────────────────────────────────────
+//
+// THREE SOURCES AND FOUR NAMES. OpenFreeMap serves the tiles and asks, in its
+// own TileJSON, for "OpenFreeMap (c) OpenMapTiles Data from OpenStreetMap":
+// OpenMapTiles is the schema the tiles are cut to and is licensed separately
+// from the data. OpenStreetMap is the data, under the ODbL. USGS is the
+// elevation under the relief -- see DEM_TILES.
+//
+// BOTTOM RIGHT. The top of this screen belongs to the island, the consent strip
+// and the home button's column; the airport panel runs down the left. The only
+// corner nothing else uses is just above whatever covers the bottom.
+//
+// THE QUIETEST INK THAT STILL READS. 4.5:1 is the small-text floor everywhere
+// else on this map, measured on the lightest ground the words can land on,
+// which is the brightest lit slope of the relief (#1a1a1a):
+//
+//   0.51  ->  4.41:1   under
+//   0.52  ->  4.53:1   this      4.62:1 on flat land, 4.63:1 on the sea
+//
+// The halo is SPACE, so an arc or a map label passing under the words darkens
+// behind them rather than running through them.
+const MAP_CREDIT = 'OpenFreeMap \u00a9 OpenMapTiles \u00a9 OpenStreetMap \u00b7 USGS';
+const CREDIT_INK = 'rgba(226,226,226,0.52)';
+const CREDIT_GAP = 6;
+
 const st = StyleSheet.create({
   web: { flex: 1, backgroundColor: SPACE },
+  credit: { position: 'absolute', right: 20 },
+  creditText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 9,
+    color: CREDIT_INK,
+    textShadowColor: SPACE,
+    textShadowRadius: 3,
+  },
 });
