@@ -867,7 +867,11 @@ def run_once(now=None):
         import mcp_server
         seen = mcp_server.quota_status()
         if seen.get("units_remaining") is not None:
-            pollstate.note_quota(seen["units_remaining"])
+            # WITH THE GATEWAY IT WAS MEASURED ON. See pollstate.read_quota:
+            # two gateways are two allowances, and a figure without one cannot
+            # be a floor.
+            pollstate.note_quota(seen["units_remaining"],
+                                 gateway=seen.get("gateway"))
     except Exception:  # noqa: BLE001
         pass
 
@@ -944,7 +948,7 @@ def _budget_state():
     remaining, age = live.get("units_remaining"), live.get("as_of_seconds_ago")
     source = "this instance"
     if remaining is None:
-        remaining, at = pollstate.read_quota()
+        remaining, at = pollstate.read_quota(mcp_server.active_gateway())
         source = "last poll"
         age = None if at is None else int((_now() - at).total_seconds())
 

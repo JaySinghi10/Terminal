@@ -16,19 +16,106 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 # has ever talked to a model, and nothing in it should: it is the provider
 # layer, and api.py is the only caller that reasons about flights.
 
-AERODATABOX_HOST = "aerodatabox.p.rapidapi.com"
+# ── TWO GATEWAYS TO ONE PROVIDER ────────────────────────────────────────────
+#
+# THE SAME API BEHIND BOTH. AeroDataBox publishes one OpenAPI document per
+# gateway and they differ in three lines: the server URL, the name of the key
+# header, and RapidAPI's extra host header. Every path, parameter and response
+# schema is identical, which is why nothing below the request itself changes.
+#
+#   direct     https://api.aerodatabox.com   X-Api-Key: <key>
+#   rapidapi   https://aerodatabox.p.rapidapi.com
+#              X-RapidAPI-Key: <key>   X-RapidAPI-Host: aerodatabox.p.rapidapi.com
+#
+# THE FLAG DEFAULTS TO DIRECT, WHICH IS SAFE ONLY BECAUSE THE FALLBACK EXISTS.
+# A deploy that reaches production before the direct key does would otherwise
+# take the flight lookup down; instead every call falls back to RapidAPI and
+# says so in the log. Set AERODATABOX_GATEWAY=rapidapi to pin the old path.
+RAPIDAPI_HOST = "aerodatabox.p.rapidapi.com"
+DIRECT_BASE = "https://api.aerodatabox.com"
+AERODATABOX_API_KEY = os.getenv("AERODATABOX_API_KEY")
+
+
+def _gateway() -> str:
+    """Read at call time, not at import, so a test can set it."""
+    return (os.getenv("AERODATABOX_GATEWAY") or "direct").strip().lower()
+
+
+def active_gateway() -> str:
+    """Which gateway a call made right now would actually use.
+
+    NOT THE FLAG. The flag is a request; this is the answer, and the two differ
+    exactly when the direct key is missing. The budget reads this, because a
+    unit count belongs to whichever account was billed for the call.
+    """
+    if _gateway() == "direct" and AERODATABOX_API_KEY:
+        return "direct"
+    return "rapidapi"
+
+
+def _adb_configured() -> bool:
+    return bool(AERODATABOX_API_KEY or RAPIDAPI_KEY)
+
+
+def _adb_unconfigured(what: str) -> str:
+    return (f"{what} is not configured: set AERODATABOX_API_KEY "
+            f"(or RAPIDAPI_KEY to use the old gateway).")
+
+
+# 401 and 403 are the key being wrong, missing or not entitled -- the exact case
+# the fallback exists for. 429 IS DELIBERATELY NOT HERE: that is the rate limit
+# or a spent allowance, and falling back would quietly spend the other account's
+# units and hide the very thing worth seeing.
+_DIRECT_AUTH_FAILURES = (401, 403)
+
+# One line per distinct condition, for the life of the process. A fallback that
+# logged per call would print once a poll and drown the thing it is reporting.
+_WARNED = set()
+
+
+def _warn_once(key: str, message: str) -> None:
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    print(message)
+
+
 REQUEST_TIMEOUT_SECONDS = 10
 
 # The provider reports the monthly budget it has left on EVERY response, so the
 # number is free: it is read off calls that were being made anyway and never by
 # asking for it. There is no endpoint that reports quota without spending units,
 # and adding one would defeat the purpose.
-AERODATABOX_UNITS_HEADER = "x-ratelimit-api-units-remaining"
+#
+# ── THE HEADER NAME IS RAPIDAPI'S, AND THE DIRECT ONE IS NOT DOCUMENTED ─────
+#
+# The RapidAPI gateway sends x-ratelimit-api-units-remaining and that name is
+# the marketplace's rather than the provider's. The direct OpenAPI document
+# declares no response headers at all, so the direct gateway's name for the
+# same number is unknown until a real call is made with a real key.
+#
+# SO CANDIDATES ARE TRIED IN ORDER, and a direct response that matches none of
+# them logs the rate-limit header names it DID carry -- names only, once per
+# process. That line is how the list below gets its correct first entry; until
+# then the budget simply reports "never observed", which _budget_state already
+# treats as "poll everything" rather than as an error.
+AERODATABOX_UNITS_HEADERS = (
+    "x-ratelimit-api-units-remaining",
+    "x-ratelimit-requests-remaining",
+    "x-api-units-remaining",
+    "x-quota-remaining",
+    "x-ratelimit-remaining",
+)
 
-# Last reported value and when it was reported. Process-local, so it is empty
-# after a cold start — Cloud Run scales to zero — which quota_status reports as
-# an absence rather than as a zero.
-_QUOTA = {"remaining": None, "at": None}
+# Last reported value, when it was reported, and WHICH GATEWAY reported it.
+# Process-local, so it is empty after a cold start — Cloud Run scales to zero —
+# which quota_status reports as an absence rather than as a zero.
+#
+# THE GATEWAY IS PART OF THE READING. The two gateways are two accounts with two
+# allowances, so "3,900 units left" is meaningless without knowing whose. A
+# fallback call mid-migration would otherwise leave RapidAPI's figure standing
+# as though it described the direct plan.
+_QUOTA = {"remaining": None, "at": None, "gateway": None}
 
 # One connection pool for the process. requests.get() builds and discards a
 # Session per call, so every lookup previously paid a fresh DNS resolution, TCP
@@ -213,20 +300,51 @@ def _delay_minutes(scheduled_utc, comparison_utc):
 # ──────────────────────────────────────────────
 # FORMAT TIME
 # ──────────────────────────────────────────────
-def _record_quota(response) -> None:
+def _record_quota(response, gateway: str) -> None:
     """Remember what the provider says is left. Never raises, never blocks.
 
     Called on every response including failures: a 4xx still carries the header,
     and a rejected call still spent nothing, so the number is still true.
+
+    THE GATEWAY IS RECORDED WITH IT for the reason given at _QUOTA: a number
+    without an account is not a budget.
     """
     try:
-        raw = response.headers.get(AERODATABOX_UNITS_HEADER)
+        raw = None
+        for name in AERODATABOX_UNITS_HEADERS:
+            raw = response.headers.get(name)
+            if raw is not None:
+                break
         if raw is None:
+            _report_unknown_units_header(response, gateway)
             return
         _QUOTA["remaining"] = int(str(raw).strip())
         _QUOTA["at"] = datetime.now(timezone.utc)
+        _QUOTA["gateway"] = gateway
     except (AttributeError, TypeError, ValueError):
         return
+
+
+def _report_unknown_units_header(response, gateway: str) -> None:
+    """Names only, once, when a response carries no unit count we recognise.
+
+    NAMES AND NEVER VALUES. This prints into the service log, and the point is
+    to learn what the direct gateway calls its counter -- not to put counters,
+    keys or anything else a header might carry into a log line.
+    """
+    if gateway != "direct":
+        return
+    try:
+        seen = sorted(k for k in response.headers.keys()
+                      if "ratelimit" in k.lower() or "quota" in k.lower()
+                      or "units" in k.lower())
+    except AttributeError:
+        return
+    _warn_once(
+        "units-header",
+        "AeroDataBox direct: no known units header. Rate-limit headers seen: "
+        + (", ".join(seen) if seen else "none")
+        + ". Add the right name to AERODATABOX_UNITS_HEADERS.")
 
 
 def quota_status() -> dict:
@@ -244,13 +362,83 @@ def quota_status() -> dict:
         return {
             "units_remaining": None,
             "as_of_seconds_ago": None,
+            # WHICH GATEWAY WOULD BE USED, even with nothing measured yet. It is
+            # the one thing this endpoint can always answer, and during the
+            # migration it is the thing actually being asked.
+            "gateway": active_gateway(),
+            "gateway_requested": _gateway(),
             "error": "No provider call has been made since this server started.",
         }
     return {
         "units_remaining": _QUOTA["remaining"],
         "as_of_seconds_ago": int((datetime.now(timezone.utc) - at).total_seconds()),
+        # THE GATEWAY THE NUMBER CAME FROM, which is not necessarily the one a
+        # call would use now: a fallback records RapidAPI's figure while the
+        # flag still asks for direct.
+        "gateway": _QUOTA["gateway"],
+        "gateway_requested": _gateway(),
         "error": None,
     }
+
+
+# ── ONE REQUEST, WHICHEVER GATEWAY ──────────────────────────────────────────
+#
+# EVERY AERODATABOX CALL IN THIS FILE GOES THROUGH HERE. The two call sites
+# differ only in path and parameters, which is what makes the gateway a detail
+# rather than a branch in each of them.
+#
+# THE FALLBACK IS ONE RETRY AND ONLY FOR AN AUTH FAILURE. A direct 401 or 403
+# means the key is wrong, missing or not entitled -- the case the flag exists
+# to survive -- so the same request is made again against RapidAPI and the
+# reason is logged once. Every other status is returned as it came: a 429, a
+# 400 or a 5xx is the provider answering, and answering it twice on two
+# accounts would double the spend and hide the fault.
+#
+# IT RECORDS THE QUOTA FOR WHICHEVER CALL ACTUALLY HAPPENED, including the
+# refused one -- a refusal still carries the header and still spent nothing.
+def _adb_get(path: str, params: dict | None = None):
+    """A GET on the AeroDataBox path, e.g. "/flights/number/BA117".
+
+    Raises requests.RequestException exactly as _SESSION.get does, so the call
+    sites keep the error handling they already have.
+    """
+    if _gateway() == "direct":
+        if AERODATABOX_API_KEY:
+            response = _SESSION.get(
+                DIRECT_BASE + path,
+                headers={"X-Api-Key": AERODATABOX_API_KEY},
+                params=params,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            _record_quota(response, "direct")
+            if response.status_code not in _DIRECT_AUTH_FAILURES:
+                return response
+            if not RAPIDAPI_KEY:
+                # Nothing to fall back to. The caller sees the direct failure,
+                # which is the honest outcome.
+                _warn_once("direct-auth-nofallback",
+                           f"AeroDataBox direct refused the key (HTTP {response.status_code}) "
+                           "and RAPIDAPI_KEY is not set.")
+                return response
+            _warn_once("direct-auth",
+                       f"AeroDataBox direct refused the key (HTTP {response.status_code}); "
+                       "falling back to RapidAPI for this process.")
+        elif RAPIDAPI_KEY:
+            _warn_once("direct-nokey",
+                       "AERODATABOX_GATEWAY=direct but AERODATABOX_API_KEY is not set; "
+                       "using RapidAPI.")
+
+    response = _SESSION.get(
+        f"https://{RAPIDAPI_HOST}{path}",
+        headers={
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": RAPIDAPI_HOST,
+        },
+        params=params,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    _record_quota(response, "rapidapi")
+    return response
 
 
 def format_time(time_str, tz_name=None):
@@ -646,8 +834,8 @@ def fetch_flight_full(flight_number: str, date: str | None = None,
     )
     if not number:
         return not_found
-    if not RAPIDAPI_KEY:
-        return ("Flight lookup is not configured: RAPIDAPI_KEY is not set.", None)
+    if not _adb_configured():
+        return (_adb_unconfigured("Flight lookup"), None)
 
     # The date AND THE ORIGIN are PART OF THE KEY, for the same reason the board
     # cache keys on the date: keyed on the number alone, a dated lookup would be
@@ -674,23 +862,16 @@ def fetch_flight_full(flight_number: str, date: str | None = None,
     # excludes YESTERDAY's leg; it cannot exclude the second leg of a tag flight,
     # because that one departs on the date being asked for and is exactly what
     # the parameter selects for. Only the origin filter below separates those.
-    url = (f"https://{AERODATABOX_HOST}/flights/number/{number}/{day}"
-           if day else
-           f"https://{AERODATABOX_HOST}/flights/number/{number}")
+    # THE PATH ONLY. The host, the key header and the gateway's fallback are
+    # _adb_get's, which is also what records the quota.
+    path = (f"/flights/number/{number}/{day}" if day
+            else f"/flights/number/{number}")
 
     try:
-        response = _SESSION.get(
-            url,
-            headers={
-                "X-RapidAPI-Key": RAPIDAPI_KEY,
-                "X-RapidAPI-Host": AERODATABOX_HOST,
-            },
-            params={"dateLocalRole": "Departure" if day else "Both"},
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
+        response = _adb_get(
+            path, {"dateLocalRole": "Departure" if day else "Both"})
     except requests.RequestException:
         return not_found
-    _record_quota(response)
 
     # 204 and an empty body both mean "nothing known"; .json() would raise.
     if response.status_code != 200 or not response.content:
@@ -923,7 +1104,7 @@ def _fetch_board_window(code: str, day, start, end):
     "HH:MM" bounds at that airport.
     """
     if day is None:
-        url = f"https://{AERODATABOX_HOST}/flights/airports/iata/{code}"
+        path = f"/flights/airports/iata/{code}"
         params = {
             "offsetMinutes": 0,
             "durationMinutes": ROUTE_WINDOW_MINUTES,
@@ -933,23 +1114,14 @@ def _fetch_board_window(code: str, day, start, end):
         # Absolute form: the bounds live in the path and are LOCAL to the
         # airport, so offsetMinutes and durationMinutes have no meaning here and
         # are omitted entirely.
-        url = (f"https://{AERODATABOX_HOST}/flights/airports/iata/{code}"
-               f"/{day}T{start}/{day}T{end}")
+        path = (f"/flights/airports/iata/{code}"
+                f"/{day}T{start}/{day}T{end}")
         params = dict(_ROUTE_FLAGS)
 
     try:
-        response = _SESSION.get(
-            url,
-            headers={
-                "X-RapidAPI-Key": RAPIDAPI_KEY,
-                "X-RapidAPI-Host": AERODATABOX_HOST,
-            },
-            params=params,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
+        response = _adb_get(path, params)
     except requests.RequestException:
         return None
-    _record_quota(response)
 
     if response.status_code != 200 or not response.content:
         return None
@@ -1110,9 +1282,9 @@ def fetch_route(origin, destination, hours=12, date=None) -> dict:
         return _route_result(o, d, window,
                              error="Origin and destination must be different airports.",
                              date=day)
-    if not RAPIDAPI_KEY:
+    if not _adb_configured():
         return _route_result(o, d, window,
-                             error="Route lookup is not configured: RAPIDAPI_KEY is not set.",
+                             error=_adb_unconfigured("Route lookup"),
                              date=day)
 
     # _fetch_board still reports whether it served the cache; nothing here needs

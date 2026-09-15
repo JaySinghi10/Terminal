@@ -333,11 +333,21 @@ _local_runtime = None
 
 def _empty_runtime():
     return {"breaker": {"failures": 0, "open_until": None}, "landings": {},
-            "quota": {"remaining": None, "at": None}}
+            "quota": {"remaining": None, "at": None, "gateway": None}}
 
 
-def read_quota():
+def read_quota(gateway=None):
     """(units_remaining, measured_at) as last observed by ANY instance.
+
+    gateway IS A FILTER AND NOT A LABEL. AeroDataBox is reachable through two
+    gateways that are two accounts with two allowances, so a figure recorded
+    against one says nothing about the other -- and during the migration both
+    can be written within a poll of each other. Passing the gateway in use
+    means a mismatched reading is treated as no reading at all, which
+    _budget_state already handles: it polls every tier and says why.
+
+    None means "whatever was last stored", which is what a caller that does not
+    know or does not care gets.
 
     THE PROVIDER'S UNIT COUNT ARRIVES ON A RESPONSE HEADER, so a process that
     has made no call does not know it. On Cloud Run that is nearly every
@@ -354,14 +364,22 @@ def read_quota():
     at = q.get("at")
     if q.get("remaining") is None or not at:
         return None, None
+    # A reading from the other account is not this account's budget. An entry
+    # written before this field existed carries None and is refused the same
+    # way, which costs one poll of "quota never observed" and no wrong floor.
+    if gateway is not None and q.get("gateway") != gateway:
+        return None, None
     try:
         return int(q["remaining"]), datetime.fromisoformat(at)
     except (ValueError, TypeError):
         return None, None
 
 
-def note_quota(remaining, at=None):
-    """Record a freshly observed unit count, if it is newer than the stored one."""
+def note_quota(remaining, at=None, gateway=None):
+    """Record a freshly observed unit count, if it is newer than the stored one.
+
+    The gateway travels with it for the reason read_quota states.
+    """
     if remaining is None:
         return
     at = at or _now()
@@ -375,7 +393,8 @@ def note_quota(remaining, at=None):
                     return None
             except (ValueError, TypeError):
                 pass
-        doc["quota"] = {"remaining": int(remaining), "at": _iso(at)}
+        doc["quota"] = {"remaining": int(remaining), "at": _iso(at),
+                        "gateway": gateway}
         return doc
     mutate_runtime(apply)
 
@@ -405,7 +424,7 @@ def read_runtime(force=False):
         doc, gen = _empty_runtime(), None
     doc.setdefault("breaker", {"failures": 0, "open_until": None})
     doc.setdefault("landings", {})
-    doc.setdefault("quota", {"remaining": None, "at": None})
+    doc.setdefault("quota", {"remaining": None, "at": None, "gateway": None})
     _runtime_cache.update({"at": now, "doc": doc, "gen": gen})
     return doc, gen
 
@@ -457,7 +476,14 @@ def mutate_runtime(apply_fn):
 # difference matters: on the 6th the allowance is nearly spent and on the 8th it
 # is nearly whole, so a floor that assumed calendar months would be wrong for
 # three weeks out of four.
-BILLING_DAY = 7
+#
+# ── 14 IS THE DIRECT SUBSCRIPTION'S DATE, AND IT WAS 7 ON RAPIDAPI ──────────
+#
+# THE NUMBER MOVED WITH THE GATEWAY. The floor is spent per day remaining, so
+# the date decides how much of the allowance the cheap tiers may touch: on the
+# old figure, the 13th looked like one day to go when it is really a full
+# month, and the floor would have let a month's budget through in a day.
+BILLING_DAY = 14
 
 # What the poller refuses to spend below, per day still to go. Twenty flights
 # with three arrivals cost roughly seventy units a day, so this leaves the

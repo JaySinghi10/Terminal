@@ -92,7 +92,9 @@ PARSE_MODEL=claude-haiku-4-5
 
 **`--update-env-vars`, never `--set-env-vars`.** `--set-env-vars` replaces the
 service's entire environment, which would silently drop `RAPIDAPI_KEY` and
-`ALERTS_BUCKET` and break flight lookups and alerts along with it.
+`ALERTS_BUCKET` and break flight lookups and alerts along with it. The same
+applies to `--set-secrets`, which would unmount `AERODATABOX_API_KEY` and
+`TOKEN_KEY`.
 
 ## Google sign-in: `TOKEN_KEY` and `GOOGLE_IOS_CLIENT_ID`
 
@@ -132,6 +134,60 @@ again. Nothing else is lost; the saved lists are on the phones.
 `sessions/<hash>.json` per live session. Sign-out deletes both and revokes
 the grant at Google. The privacy policy describes these objects; if their
 contents change, that page changes first.
+
+---
+
+## Flight data: `AERODATABOX_API_KEY`
+
+AeroDataBox is reached **directly** rather than through RapidAPI. The direct
+subscription is the Starter plan: 40,000 units a month at 5 requests a second.
+
+| Variable | Required | Default | What it is |
+|---|---|---|---|
+| `AERODATABOX_API_KEY` | **yes** | — | The direct subscription's key. Sent as `X-Api-Key` to `https://api.aerodatabox.com`. |
+| `AERODATABOX_GATEWAY` | no | `direct` | `direct` or `rapidapi`. The rollback switch. |
+| `RAPIDAPI_KEY` | no | — | The old marketplace key. Kept as the fallback; see below. |
+
+```bash
+# One-time. The key is read from the file and never printed.
+gcloud secrets create aerodatabox-api-key --data-file=- --replication-policy=automatic < key.txt
+gcloud secrets add-iam-policy-binding aerodatabox-api-key   --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com"   --role=roles/secretmanager.secretAccessor
+gcloud run services update "$SERVICE" --region "$REGION" --project "$PROJECT_ID"   --update-secrets AERODATABOX_API_KEY=aerodatabox-api-key:latest
+```
+
+**Secret Manager rather than a plain env var**, which is how `TOKEN_KEY` and
+`GEMINI_API_KEY` are already mounted. `RAPIDAPI_KEY` and `FR24_API_TOKEN` are
+plain values for historical reasons; a new provider key should not add to that.
+
+**The fallback is automatic and narrow.** When the gateway is `direct` and the
+direct call comes back **401 or 403** — the key wrong, missing or not entitled
+— the same request is retried once against RapidAPI, and the service logs the
+reason once per process. Nothing else falls back: a **429** is the rate limit
+or a spent allowance, and answering it on the other account would double the
+spend and hide it. With no `AERODATABOX_API_KEY` set at all, every call takes
+the RapidAPI path and says so, once.
+
+**So the order of operations is not delicate.** Deploying this before the
+secret exists costs nothing: the service keeps working on RapidAPI. Adding the
+secret switches it over on the next revision.
+
+**Rolling back** is `--update-env-vars AERODATABOX_GATEWAY=rapidapi`, which
+pins the old path whatever the direct key does. Nothing else changes: the two
+gateways serve identical paths, parameters and response bodies.
+
+**The two allowances are two accounts.** `/quota` reports `gateway` beside
+`units_remaining` for that reason, and the poller's budget floor refuses a
+figure recorded against the other gateway rather than treating it as its own.
+
+**The unit counter's header name is RapidAPI's.** The direct OpenAPI document
+declares no response headers, so `mcp_server.py` tries a list of candidates and
+logs the rate-limit header **names** it actually saw when none matches. If
+`/quota` reports `units_remaining: null` after a live direct call, that log
+line names the header to add to `AERODATABOX_UNITS_HEADERS`.
+
+**`BILLING_DAY` in `pollstate.py` is still 7**, which was the RapidAPI
+subscription's reset date. The budget floor is computed from it. Set it to the
+direct plan's own billing day once that date is known.
 
 ---
 
