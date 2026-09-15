@@ -28,7 +28,8 @@ import { useMemo, useRef, useCallback, forwardRef, useImperativeHandle } from 'r
 import { View, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { allAirports, airportByCode } from '../lib/airports';
-// THE PAGE. The sea is the page and follows it; see OCEAN below.
+// THE PAGE, which is what the space around the globe is. The sea is not the
+// page any more; see OCEAN below.
 import { PAGE_BG } from '../lib/cards';
 import {
   timezoneHome, HOME_ZOOM_POSITION, HOME_ZOOM_FALLBACK, HOME_ZOOM_MAX,
@@ -37,25 +38,104 @@ import {
 
 // ── THE INK ─────────────────────────────────────────────────────────────────
 //
-// THE SAME PALETTE THE REST OF THE APP USES, so the map is a surface of this app
-// rather than a map someone embedded in it. The sea IS the page; #121212 is
-// land, a dozen or so levels above it and deliberately at the edge of visible.
-// No blue, no green, no map palette — green is reserved for live and
-// actionable, which here is exactly one thing: an airport.
+// THE SAME NEUTRAL PALETTE THE REST OF THE APP USES, with one step of hue in
+// the sea and none anywhere else. Green is reserved for live and actionable,
+// which here is airports and flights.
 //
-// PAGE_BG RATHER THAN A LITERAL, and this is the one constant in this file that
-// genuinely means "the page". The globe fills the screen, so if the sea and the
-// page ever differ the map reads as a disc sitting ON the app rather than as
-// part of it -- and the two were only equal before because both were written
-// #050505 by hand. See the elevation scale in lib/cards.ts.
-const OCEAN = PAGE_BG;
+// ── DARK GROUND, AND THE SHAPE COMES FROM EDGES ─────────────────────────────
+//
+// THE MAP READ AS WASHED OUT because nothing on it had an edge: the sea and
+// the land were 1.06:1 apart and that tone step was the only thing separating
+// them. Lifting the land far enough to separate by tone alone -- 1.5:1 needs
+// about #2e2e2e however black the sea is -- turns the whole map grey, and this
+// app reads black.
+//
+// SO THE GROUND STAYS DARK AND THE DEFINITION IS DRAWN. The two tones below
+// are still nearly equal, on purpose; COAST_LINE is what makes India a shape.
+//
+//   OCEAN  #08090b   a hair under the page (1.006:1) and a touch blue, so it
+//                    reads as water rather than as a hole.
+//   LAND   #121212   where it has always been, 1.06:1 over the sea.
+//
+// THE GLOBE STILL SITS IN THE PAGE. The space around it is PAGE_BG -- see
+// SPACE -- and the sea is 1.006:1 from that, so there is no ring where an
+// ocean meets space; the coastline is what gives the planet its outline.
+const OCEAN = '#08090b';
 const LAND = '#121212';
-const COUNTRY_LINE = 'rgba(255,255,255,0.20)';
-const ADMIN1_LINE = 'rgba(255,255,255,0.07)';
+// THE PAGE AROUND THE GLOBE. The canvas is created with alpha and cleared to
+// transparent every frame, so outside the planet what shows is the document's
+// own background -- which is this, and not the sea.
+const SPACE = PAGE_BG;
+// ── THE COAST, WHICH IS WHAT GIVES THE MAP ITS SHAPE ─────────────────────────
+//
+// THERE IS NO COASTLINE LAYER IN THE SOURCE. OpenMapTiles has none, and its
+// boundary layer is borders only -- maritime lines are the only water-side
+// boundaries it carries, and they run across open sea rather than along a
+// shore. The coast has to be drawn as the EDGE OF THE `water` POLYGONS.
+//
+// THAT IS SAFE ONLY BECAUSE THE TILES ARE BUFFERED, and this was decoded from
+// the served tiles rather than assumed. A polygon cut at a tile boundary gets
+// a straight edge along the cut, and outlining it would draw a grid of seams
+// across the ocean. OpenFreeMap's water rings run from -64 to 4160 on a 4096
+// extent, so every cut edge lies outside its tile and is clipped away with the
+// rest of the buffer; what is left inside the tile is shoreline.
+//
+// A SOLID GREY RATHER THAN AN ALPHA, because this line straddles two grounds
+// and should be the same line on both. #616161 is 3.02:1 against the land and
+// 3.22:1 against the sea, at 1px -- crisp, and the brightest edge on the
+// ground, which is what the shape of a continent should be.
+const COAST_LINE = '#616161';
+// ── THE BORDERS, HELD AT 3:1 ON THE DARK LAND ───────────────────────────────
+//
+// Contrast on LAND, where both are drawn (maritime lines are excluded):
+//
+//   country   0.34  ->  3.12:1   level with the coast, a frontier as strong
+//                                as a shore
+//   admin-1   0.10  ->  1.31:1   present, and still the quietest
+const COUNTRY_LINE = 'rgba(255,255,255,0.34)';
+const ADMIN1_LINE = 'rgba(255,255,255,0.10)';
 // The road inks are not here: they are a six-step ramp and belong beside the
 // hierarchy they express. See ROAD_TIERS.
-const LABEL_COUNTRY = 'rgba(226,226,226,0.72)';
-const LABEL_CITY = 'rgba(226,226,226,0.42)';
+// ── THE LABELS, AND THE FLOOR UNDER THEM ────────────────────────────────────
+//
+// 4.5:1 IS THE SMALL-TEXT FLOOR and every label on this map is small text. The
+// city ink was 0.42 -- 3.40:1 -- and the road ink 0.38, 2.96:1.
+//
+// THE FLOOR IS MEASURED ON LAND, the lighter of the two grounds a label can sit
+// on, so a label that clears it there clears it everywhere. These are the
+// inks the labels were first cut at, against a grey land; on the dark land the
+// same inks clear the floor with room to spare:
+//
+//   country              0.92  ->  12.3:1
+//   city, most important 0.92  ->  12.3:1
+//   city, least / towns  0.62  ->   6.1:1
+//   road                 0.62  ->   6.1:1
+const LABEL_COUNTRY = 'rgba(226,226,226,0.92)';
+const LABEL_CITY_TOP = 'rgba(226,226,226,0.92)';
+const LABEL_CITY_FLOOR = 'rgba(226,226,226,0.62)';
+
+// ── HOW IMPORTANT A PLACE IS, AS THE TILES SAY IT ───────────────────────────
+//
+// THE SOURCE CARRIES NO POPULATION. OpenFreeMap's place layer has two numbers
+// for this, read off real tiles over India rather than off the schema:
+//
+//   rank     1 is the most important and it runs on past 10. Mumbai and
+//            Kolkata 1, New Delhi and Bengaluru 2, Hyderabad, Chennai, Pune and
+//            Jaipur 3, Bhopal 4, Indore and Lucknow 5, Ujjain 7, towns 11-14.
+//   capital  the admin level the place is capital OF: 2 national (New Delhi,
+//            Dhaka, Kathmandu), 4 state (Mumbai, Lucknow), 5 district (Indore).
+//
+// THE TWO DO NOT AGREE, AND BOTH ARE TRUE. Lucknow is a state capital at rank
+// 5; Surat is rank 3 and capital of nothing. So rank drives the ramp, and a
+// NATIONAL capital is lifted to the top of it -- a country's capital is the
+// one place on its map that must never read as a market town.
+//
+// A MISSING RANK IS THE BOTTOM, not the middle: a place the tiles did not rank
+// is not one they thought important.
+const PLACE_IMPORTANCE = [
+  'case', ['==', ['get', 'capital'], 2], 1,
+  ['coalesce', ['get', 'rank'], 14],
+];
 // ── NO LABEL OF THIS MAP'S OWN ──────────────────────────────────────────────
 //
 // LABEL_END AND ITS LAYER ARE GONE, and with them the fifth attempt at naming a
@@ -70,12 +150,21 @@ const LABEL_CITY = 'rgba(226,226,226,0.42)';
 // screen. The endpoints keep their emphasis in the one place emphasis belongs on
 // a map made of dots and lines: airport-end draws them larger, brighter and at
 // every zoom. Nothing about which cities a flight joins is lost.
-// THE GROUND, NOT THE PAGE, AND THE DISTINCTION MATTERS HERE. A halo's job is
-// to separate glyphs from what is behind them, and what is behind them on this
-// map is sea or land -- so it takes the darker of the two. It follows the page
-// only because the sea does; written as OCEAN it stays correct if they ever
-// part, where PAGE_BG would quietly become a dark ring around every label.
-const LABEL_HALO = OCEAN;
+// ── THE HALO IS THE LAND, AND IT IS SOFT ────────────────────────────────────
+//
+// IT WAS THE SEA'S COLOUR ON LAND, which put a ring one step darker than the
+// ground around every glyph -- 1px, no blur -- and at 9 to 13 pixels that ring
+// read as the letters being out of focus.
+//
+// WHAT A HALO IS FOR HERE is keeping a name legible where it crosses a road or
+// a border. The ground under nearly every label is land, so the halo IS land:
+// invisible on open ground, and a clean gap in any line a name sits across.
+//
+// THE BLUR IS THE OTHER HALF. A name that crosses the coastline or a border
+// cuts a gap in it, and a hard 1px gap in a 3:1 line reads as a notch taken
+// out of the shore. At a pixel of blur the line fades into the name instead.
+const LABEL_HALO = LAND;
+const LABEL_HALO_BLUR = 1;
 const AIRPORT_INK = '#4ade80';
 // -- THE FLIGHT OVERLAY'S INKS ------------------------------------------------
 //
@@ -84,7 +173,7 @@ const AIRPORT_INK = '#4ade80';
 // them and a flight that has not left yet does not. Colour carries the
 // distinction so weight does not have to shout it.
 const ARC_LIVE = '#4ade80';
-// DELIBERATELY BELOW A COUNTRY BORDER'S 0.20. A flight that has already landed
+// DELIBERATELY BELOW A COUNTRY BORDER'S 0.34. A flight that has already landed
 // is the faintest mark on the map -- quieter than the coastline it crosses --
 // because it is a record rather than a thing that is happening.
 //
@@ -135,17 +224,19 @@ const PLANE_PX = 20;
 // MapLibre is told the ratio, so the icon is drawn at its CSS size and the extra
 // samples are what keep the wing edges hard. This is the whole of "crisp".
 const PLANE_DPR = 3;
-// BLACK, NOT A DARK COLOUR, AND IT DOES NOT FOLLOW THE PAGE. Night is the
-// absence of light: these bands are laid over the geography at a low alpha to
-// DARKEN it, and anything with a hue would tint the land instead.
+// ── THERE IS NO NIGHT SIDE, AND THERE WAS NOTHING TO SEE OF ONE ─────────────
 //
-// IT USED TO SAY "the page's own background" AND THAT IS NO LONGER TRUE. The
-// page has lifted to #0a0a0a so that surfaces have something to rise from; this
-// has to stay at the floor for the opposite reason. An ink equal to the ground
-// darkens the ground by nothing -- night over the sea would simply vanish -- so
-// what this constant means is "the darkest available", which is where it already
-// was and where it stays.
-const NIGHT_INK = '#050505';
+// THREE #050505 FILLS AT 0.10 EACH darkened the ground by 1.01 to 1.03:1 --
+// the alphas compound to 0.271 at the deepest, and a near-black ground has
+// almost nothing left to lose. Three layers, a solar-position model and a
+// polygon rebuild every minute were painting nothing anybody could see.
+//
+// REMOVED RATHER THAN STRENGTHENED, because on a dark ground there is nothing
+// to strengthen. #121212 land under a fully OPAQUE black band is still only
+// 1.12:1 -- no alpha of any darkness can make night read on this ground. What
+// a heavy band WOULD visibly do is dim everything drawn beneath it, which is
+// the coastline and the borders: the edges this map now takes its shape from,
+// hidden across half the planet. The terminator says nothing the app acts on.
 
 // PINNED, AND DELIBERATELY 5.x RATHER THAN 6.x.
 //
@@ -262,11 +353,22 @@ const AIRPORT_FULL_ZOOM = 6;
 // mixed greys so the ramp is monotone by construction and cannot drift; a road
 // can never be brighter than the class above it because the numbers say so.
 //
-// AND THEY ALL PAINT UNDER THE BORDERS. The brightest road, a motorway at 0.30,
-// is brighter than a country line at 0.20 — which is right at z14 where roads
-// are the subject, and wrong at a frontier where the border must still read as
-// the stronger fact. Order settles it rather than colour: boundaries are drawn
-// after, so they win the shared pixel.
+// ── THE RAMP IS 1.19 TO 2.67:1, AND ITS CEILING IS THE COAST ────────────────
+//
+// THE TOP OF THE RAMP IS CAPPED BELOW THE COASTLINE (3.02:1), so the shore is
+// the strongest edge on the ground at every zoom. It reached 4.68:1 for one
+// pass, and at z5-z6 a motorway then read as a firmer line than the edge of the
+// continent it runs across -- which is backwards on a map whose shape comes
+// from its coast.
+//
+//   minor 1.19  tertiary 1.38  secondary 1.78  primary 1.92  trunk 2.15  motorway 2.67
+//
+// PRIMARY CAME DOWN WITH THE TOP TWO, and only because the rule above demands
+// it: at its old 0.27 it would have drawn brighter than a trunk at 0.24.
+//
+// AND THEY ALL PAINT UNDER THE BORDERS. No road is brighter than a country
+// line (3.12:1) now, but order still settles a shared pixel rather than colour:
+// boundaries are drawn after, so a frontier always wins where a road meets it.
 type RoadTier = {
   id: string;
   classes: string[];
@@ -278,13 +380,13 @@ type RoadTier = {
 
 const ROAD_TIERS: RoadTier[] = [
   { id: 'road-minor', classes: ['minor'], minzoom: 13,
-    color: 'rgba(255,255,255,0.08)', width: [[13, 0.4], [16, 0.9], [18, 1.8]] },
+    color: 'rgba(255,255,255,0.07)', width: [[13, 0.4], [16, 0.9], [18, 1.8]] },
   { id: 'road-tertiary', classes: ['tertiary'], minzoom: 11,
-    color: 'rgba(255,255,255,0.11)', width: [[11, 0.4], [14, 1.0], [18, 2.5]] },
+    color: 'rgba(255,255,255,0.12)', width: [[11, 0.4], [14, 1.0], [18, 2.5]] },
   { id: 'road-secondary', classes: ['secondary'], minzoom: 9,
-    color: 'rgba(255,255,255,0.15)', width: [[9, 0.4], [12, 0.9], [15, 1.8], [18, 3.5]] },
+    color: 'rgba(255,255,255,0.19)', width: [[9, 0.4], [12, 0.9], [15, 1.8], [18, 3.5]] },
   { id: 'road-primary', classes: ['primary'], minzoom: 7,
-    color: 'rgba(255,255,255,0.19)', width: [[7, 0.5], [11, 1.0], [14, 2.0], [18, 4.5]] },
+    color: 'rgba(255,255,255,0.21)', width: [[7, 0.5], [11, 1.0], [14, 2.0], [18, 4.5]] },
   { id: 'road-trunk', classes: ['trunk'], minzoom: 6,
     color: 'rgba(255,255,255,0.24)', width: [[6, 0.5], [10, 1.2], [14, 2.4], [18, 5]] },
   { id: 'road-motorway', classes: ['motorway'], minzoom: 5,
@@ -295,7 +397,8 @@ const ROAD_TIERS: RoadTier[] = [
 // other and with the city names, and a street name on a map of a country tells
 // nobody anything.
 const ROAD_LABEL_MIN_ZOOM = 14;
-const ROAD_LABEL_INK = 'rgba(226,226,226,0.38)';
+// 0.62, THE LABEL FLOOR, and 6.1:1 on land. It was 0.38 and 2.80:1.
+const ROAD_LABEL_INK = 'rgba(226,226,226,0.62)';
 
 // Turns a tier's [zoom, px] table into a MapLibre interpolate expression.
 function roadWidth(stops: [number, number][]): unknown[] {
@@ -573,16 +676,15 @@ const STYLE = {
     // the pin appears by setting data, with no addLayer at runtime and no
     // question about paint order.
     pin: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
-    // -- THE FLIGHT OVERLAY'S THREE SOURCES ---------------------------------
+    // -- THE FLIGHT OVERLAY'S TWO SOURCES -----------------------------------
     //
-    // ALL THREE ARE FILLED BY THE PAGE, NOT BY REACT NATIVE. React Native sends
+    // BOTH ARE FILLED BY THE PAGE, NOT BY REACT NATIVE. React Native sends
     // a flight list when it changes and a timestamp once a minute; the page
     // turns those into geometry. Declared empty here for the same reason the
     // pin is -- the layers exist from the first frame, so paint order is
     // settled once and an update is a setData rather than an addLayer.
     arcs: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
     planes: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
-    night: { type: 'geojson', data: { type: 'FeatureCollection', features: [] } },
     // THE AIRPORTS AT THE ENDS OF THE DRAWN ARCS. A separate source rather than
     // a flag on the 1,223, for the reason the pin is separate: that blob is
     // baked into the page as a constant and rebuilding it to mark two dots
@@ -620,6 +722,37 @@ const STYLE = {
       source: 'ofm',
       'source-layer': 'water',
       paint: { 'fill-color': OCEAN },
+    },
+    // ── THE COASTLINE: THE WATER POLYGONS' OWN EDGE, 1px ─────────────────────
+    //
+    // A LINE LAYER ON A FILL'S SOURCE LAYER draws each polygon's rings, which
+    // is exactly a shoreline -- see COAST_LINE for why the tile cuts do not
+    // show up as seams.
+    //
+    // OCEAN AND LAKE ONLY. The tiles also carry river and pond polygons from
+    // about z6; outlining a river draws two parallel lines down every wide
+    // river in India, and a pond outline at z10 is a speck. Lakes stay because
+    // a lake is part of the shape of the land -- dropping them is one word.
+    //
+    // NOT INTERMITTENT WATER. A seasonal lake's outline would draw a firm shore
+    // around something that is dry half the year.
+    //
+    // DIRECTLY OVER THE SEA AND UNDER EVERYTHING ELSE, because it is the ground
+    // itself: a road that reaches the shore or a border that ends at one paints
+    // over it, and a label's halo cuts it like any other line.
+    {
+      id: 'coastline',
+      type: 'line',
+      source: 'ofm',
+      'source-layer': 'water',
+      filter: ['all',
+        ['in', ['get', 'class'], ['literal', ['ocean', 'lake']]],
+        ['!=', ['get', 'intermittent'], 1]],
+      layout: { 'line-join': 'round' },
+      paint: {
+        'line-color': COAST_LINE,
+        'line-width': 1,
+      },
     },
     // THE ROADS, UNDER EVERY BOUNDARY. Least important first so a motorway
     // paints over a lane where they meet. See ROAD_TIERS for the hierarchy.
@@ -674,32 +807,8 @@ const STYLE = {
         'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.5, 5, 0.9, 10, 1.2],
       },
     },
-    // -- THE TERMINATOR, AS THREE NESTED BANDS -------------------------------
-    //
-    // ABOVE THE GEOGRAPHY AND BELOW EVERY LABEL. Night darkens the land and the
-    // sea; it must not darken a place name, because a name is not lit by the
-    // sun and dimming it would read as the map losing confidence rather than as
-    // the world turning.
-    //
-    // THREE LAYERS, NOT ONE POLYGON WITH THREE RINGS. A fill layer composites
-    // its own overlapping parts once, so three nested rings inside a single
-    // layer would come out as a flat 0.10 with two hard creases in it. Separate
-    // layers each composite against what is already on the canvas, and that is
-    // what makes the alphas accumulate to 0.10 / 0.20 / 0.30.
-    //
-    // A FILL HAS NO BLUR IN MAPLIBRE, which is the whole reason for the stack.
-    // One polygon would put a drawn line across the planet -- precisely what a
-    // terminator is not.
-    //
-    // fill-antialias: false FOR THE SAME REASON. Antialiasing a fill draws an
-    // outline pass around it, which on a shape this size is a faint hairline
-    // tracing the terminator -- the exact edge the three bands exist to avoid.
-    { id: 'night-0', type: 'fill', source: 'night', filter: ['==', ['get', 'band'], 0],
-      paint: { 'fill-color': NIGHT_INK, 'fill-opacity': 0.1, 'fill-antialias': false } },
-    { id: 'night-1', type: 'fill', source: 'night', filter: ['==', ['get', 'band'], 1],
-      paint: { 'fill-color': NIGHT_INK, 'fill-opacity': 0.1, 'fill-antialias': false } },
-    { id: 'night-2', type: 'fill', source: 'night', filter: ['==', ['get', 'band'], 2],
-      paint: { 'fill-color': NIGHT_INK, 'fill-opacity': 0.1, 'fill-antialias': false } },
+    // THE TERMINATOR'S THREE BANDS STOOD HERE. See THERE IS NO NIGHT SIDE, after
+    // PLANE_DPR near the top of the file, for why they are gone.
     // ROAD NAMES, AND ONLY WHEN CLOSE. symbol-placement line makes the name
     // follow the road rather than sit beside a point on it, which is the only
     // way a street name reads as belonging to that street.
@@ -726,10 +835,12 @@ const STYLE = {
         'text-color': ROAD_LABEL_INK,
         'text-halo-color': LABEL_HALO,
         'text-halo-width': 1,
+        'text-halo-blur': LABEL_HALO_BLUR,
       },
     },
     // TWO CLASSES OF PLACE NAME — no villages and no water names. A country is
-    // the subject; a city is an annotation on one.
+    // the subject; a city is an annotation on one, and how loud an annotation
+    // is now depends on the place. See PLACE_IMPORTANCE.
     {
       id: 'label-country',
       type: 'symbol',
@@ -747,6 +858,7 @@ const STYLE = {
         'text-color': LABEL_COUNTRY,
         'text-halo-color': LABEL_HALO,
         'text-halo-width': 1,
+        'text-halo-blur': LABEL_HALO_BLUR,
       },
     },
     {
@@ -759,13 +871,37 @@ const STYLE = {
       layout: {
         'text-field': LABEL_NAME,
         'text-font': FONT,
-        'text-size': ['interpolate', ['linear'], ['zoom'], 4, 9, 10, 12],
+        // ── SIZE BY IMPORTANCE, INSIDE SIZE BY ZOOM ──
+        //
+        // THE ZOOM INTERPOLATE IS OUTERMOST AND EACH STOP ASKS THE FEATURE,
+        // which is the one nesting the spec accepts -- see the arcs' width for
+        // what the other order did to the whole style.
+        //
+        // THE BOTTOM OF THE RAMP IS THE OLD SIZE, 9px at z4 and 12px at z10, so
+        // a market town is exactly what every city used to be and the important
+        // places grow away from it. The top at z4 stays under the country name
+        // beside it (about 11.8px there): at that zoom a country is still the
+        // subject.
+        'text-size': ['interpolate', ['linear'], ['zoom'],
+          4, ['interpolate', ['linear'], PLACE_IMPORTANCE, 1, 11.5, 3, 11, 6, 10, 10, 9],
+          10, ['interpolate', ['linear'], PLACE_IMPORTANCE, 1, 17, 3, 15, 6, 13.5, 10, 12]],
         'text-max-width': 8,
+        // THE IMPORTANT PLACE WINS THE COLLISION. A lower sort key is placed
+        // first, so when Mumbai and a suburb want the same pixels it is the
+        // suburb that is dropped -- without this the tiles' order decided.
+        'symbol-sort-key': PLACE_IMPORTANCE,
       },
       paint: {
-        'text-color': LABEL_CITY,
+        // AND INK BY IMPORTANCE, FROM THE TOP DOWN TO THE FLOOR. Every stop is
+        // at or above 4.5:1 on land; see LABEL_CITY_FLOOR.
+        'text-color': ['interpolate', ['linear'], PLACE_IMPORTANCE,
+          1, LABEL_CITY_TOP,
+          3, 'rgba(226,226,226,0.84)',
+          6, 'rgba(226,226,226,0.72)',
+          10, LABEL_CITY_FLOOR],
         'text-halo-color': LABEL_HALO,
         'text-halo-width': 1,
+        'text-halo-blur': LABEL_HALO_BLUR,
       },
     },
     // -- SAVED FLIGHTS, ONE LAYER AT TWO WEIGHTS -----------------------------
@@ -936,8 +1072,12 @@ const STYLE = {
     // at all.
     //
     // THE DARK RING IS WHAT MAKES IT A DISC. An arc terminates inside these, and
-    // without a stroke in the ocean's own colour the dot and the line it meets
-    // merge into one blob at the exact place the eye is trying to read.
+    // without a dark stroke the dot and the line it meets merge into one blob at
+    // the exact place the eye is trying to read.
+    //
+    // IT WAS "the ocean's own colour" AND IT STAYS AT THAT VALUE, #0a0a0a, now
+    // that the ocean has moved. The green marks were deliberately left exactly
+    // as they were; the ring is part of this one.
     //
     // ABOVE THE PLAIN DOTS so an endpoint always wins its own pixels, and below
     // the tap target so the hit geometry is unchanged -- these add emphasis, not
@@ -950,7 +1090,7 @@ const STYLE = {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 2, 3.4, 10, 7],
         'circle-color': AIRPORT_INK,
         'circle-stroke-width': 1.5,
-        'circle-stroke-color': OCEAN,
+        'circle-stroke-color': PAGE_BG,
       },
     },
     // ── THE TAP TARGET, INVISIBLE AND A CONSTANT SIZE ────────────────────────
@@ -1115,7 +1255,7 @@ const HTML = `<!DOCTYPE html>
   * { -webkit-user-select: none; user-select: none;
       -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
   html, body, #map { margin:0; padding:0; height:100%; width:100%;
-                     background:${OCEAN}; overflow:hidden; }
+                     background:${SPACE}; overflow:hidden; }
   .maplibregl-map { position:relative; overflow:hidden; }
   .maplibregl-canvas-container, .maplibregl-canvas {
     position:absolute; top:0; left:0; width:100%; height:100%; }
@@ -1981,15 +2121,15 @@ function start() {
     });
   }
 
-  // ── SAVED FLIGHTS, THE AIRCRAFT ON THEM, AND THE TERMINATOR ────────────────
+  // ── SAVED FLIGHTS AND THE AIRCRAFT ON THEM ─────────────────────────────────
   //
-  // ALL THREE ARE COMPUTED IN HERE, NOT IN REACT NATIVE, and that is a decision
+  // BOTH ARE COMPUTED IN HERE, NOT IN REACT NATIVE, and that is a decision
   // about the bridge. React Native sends the flight list once when it changes,
   // and after that sends nothing but a timestamp once a minute. If the arcs were
   // built on the other side they would be re-sent every minute — twenty flights
   // at 64 points each is about 30KB of JSON per tick, for geometry that has not
   // moved. The page holds the list and recomputes what the clock actually
-  // changes: which arcs are live, where the aircraft are, and where night is.
+  // changes: which arcs are live and where the aircraft are.
   var FLIGHTS = [];
   var NOW = Date.now();
   // WHICH ROUTE'S PANEL IS OPEN, or null. Set from React Native and read only
@@ -2071,69 +2211,6 @@ function start() {
     }
     if (cur.length > 1) segs.push(cur);
     return segs.filter(function (s) { return s.length > 1; });
-  }
-
-  // ── WHERE THE SUN IS ───────────────────────────────────────────────────────
-  //
-  // STANDARD LOW-PRECISION SOLAR POSITION, good to about a minute of arc, which
-  // is far finer than a terminator drawn as a soft band can show. No data source
-  // and no network: the date is the whole input.
-  function subsolar(ms) {
-    var n = ms / 86400000 + 2440587.5 - 2451545.0;      // days since J2000
-    var L = (280.460 + 0.9856474 * n) % 360;            // mean longitude
-    var g = ((357.528 + 0.9856003 * n) % 360) * RAD;    // mean anomaly
-    var lam = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * RAD;
-    var eps = (23.439 - 0.0000004 * n) * RAD;           // obliquity
-    var dec = Math.asin(Math.sin(eps) * Math.sin(lam));
-    var ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
-    var gmst = (18.697374558 + 24.06570982441908 * n) % 24;
-    var lon = ((ra / RAD - gmst * 15) % 360 + 540) % 360 - 180;
-    return { dec: dec, lon: lon };
-  }
-
-  // ── THE NIGHT SIDE, AS THREE NESTED BANDS ──────────────────────────────────
-  //
-  // THE TERMINATOR IS lat = atan(-cos(lon - subsolar) / tan(declination)), the
-  // great circle ninety degrees from the sun. The night polygon is that curve
-  // closed to whichever pole the sun is not over.
-  //
-  // THREE BANDS BECAUSE A FILL HAS A HARD EDGE. MapLibre gives no blur on a
-  // fill, so a single polygon would put a drawn line across the planet — exactly
-  // what a terminator is not. Three polygons, each pushed a few degrees further
-  // into night and each at a tenth of an alpha, accumulate to a soft ramp
-  // instead: 0.10 at the edge, 0.20 behind it, 0.30 deep in the dark.
-  //
-  // THE OFFSET IS A LATITUDE SHIFT AND THEREFORE AN APPROXIMATION. A true
-  // parallel circle at 96 or 102 degrees from the sun is not a constant latitude
-  // offset from the one at 90. For a soft edge nobody measures, the error is
-  // invisible; for anything claiming to be civil or nautical twilight it would
-  // not be, and this does not claim that.
-  //
-  // THE DECLINATION IS CLAMPED AWAY FROM ZERO. At an equinox tan(dec) goes to
-  // nothing and the formula sends every longitude to a pole — a degenerate
-  // polygon. Half a degree of floor keeps the shape valid for the few hours
-  // twice a year when it would otherwise collapse.
-  function nightBands(ms) {
-    var s = subsolar(ms);
-    var dec = s.dec;
-    if (Math.abs(dec) < 0.5 * RAD) dec = (dec < 0 ? -1 : 1) * 0.5 * RAD;
-    var pole = dec > 0 ? -90 : 90;
-    var dir = dec > 0 ? -1 : 1;
-    var out = [];
-    for (var band = 0; band < 3; band++) {
-      var off = band * 6 * dir;
-      var ring = [];
-      for (var lon = -180; lon <= 180; lon += 3) {
-        var lat = Math.atan(-Math.cos((lon - s.lon) * RAD) / Math.tan(dec)) / RAD + off;
-        if (lat > 89.5) lat = 89.5;
-        if (lat < -89.5) lat = -89.5;
-        ring.push([lon, lat]);
-      }
-      ring.push([180, pole], [-180, pole], ring[0]);
-      out.push({ type: 'Feature', properties: { band: band },
-                 geometry: { type: 'Polygon', coordinates: [ring] } });
-    }
-    return out;
   }
 
   // ── REBUILD, ON A FLIGHT LIST CHANGE OR A MINUTE TICK ──────────────────────
@@ -2249,7 +2326,6 @@ function start() {
       }
     }
     map.getSource('ends').setData(fc(ends));
-    map.getSource('night').setData(fc(nightBands(NOW)));
     post({ type: 'overlay', arcs: FLIGHTS.length, planes: planes.length });
     // THE GEOMETRY JUST CHANGED, SO THE ANCHOR HAS. A rebuild is the only thing
     // that can add, remove or move the searched arc.
@@ -2519,8 +2595,8 @@ export type GlobeMapHandle = {
   // set is small and a diff would be more code than the work it saves.
   setFlights: (flights: MapFlight[]) => void;
   // THE CLOCK, ONCE A MINUTE. The page holds the flight list and recomputes what
-  // time actually changes -- which arcs are live, where the aircraft are, and
-  // where night is -- so a tick is one number across the bridge rather than
+  // time actually changes -- which arcs are live and where the aircraft are --
+  // so a tick is one number across the bridge rather than
   // several kilobytes of geometry that has not moved.
   tick: (ms: number) => void;
   // WHETHER ARCS OF FLIGHTS THAT HAVE LANDED ARE DRAWN AT ALL. A filter on a
@@ -2796,5 +2872,5 @@ const GlobeMap = forwardRef<GlobeMapHandle, GlobeMapProps>(
 export default GlobeMap;
 
 const st = StyleSheet.create({
-  web: { flex: 1, backgroundColor: OCEAN },
+  web: { flex: 1, backgroundColor: SPACE },
 });
