@@ -4,11 +4,13 @@
 // formSheet, and that sheet could not be made full-width: react-native-screens
 // 4.26 does not expose edge attachment, and on iOS 26 a partial-height form
 // sheet floats in from the sides with a gap under it. So the sheet is built
-// here, on the map screen, as an overlay -- and everything about its motion
-// that used to be UIKit's is written in the SHELL at the top of the component:
-// the pan, the springs, the detents, the rubber band, the dismiss, the grabber,
-// the dim. What is INSIDE it is the body, unchanged from the route: the pill,
-// the controls, the two picker Modals and the list.
+// here, on the map screen, as an overlay. Everything about its motion that
+// used to be UIKit's -- the pan, the springs, the detents, the rubber band,
+// the dismiss, the grabber, the dim -- was written at the top of this
+// component and is components/DetentSheet.tsx now, lifted out unchanged so
+// the tab drawer can move the same way. What is INSIDE the sheet is still the
+// body, unchanged from the route: the pill, the controls, the two picker
+// Modals and the list.
 //
 // WHERE IT SITS. Under the tab bar, always -- a view in the tab's content is
 // drawn beneath the UITabBar, and the one thing that draws above the bar (a
@@ -16,22 +18,14 @@
 // sheet's surface runs to the screen's bottom edge BEHIND the bar, its content
 // is padded above the bar by the bar's inset, and its three heights are
 // measured from the screen's bottom: the bar inset plus the head, half the
-// sheet's maximum, and nine tenths of it. See sheetGeometry in
-// lib/routeResults.
+// sheet's maximum, and nine tenths of it. The head's height is declared in
+// lib/routeResults beside the styles it is cut from; the arithmetic is
+// sheetDetents in lib/sheet.ts.
 //
-// THE GESTURE MODEL. One Pan on the sheet, one Native gesture on the list,
-// run simultaneously. The pan works in DELTAS, not total translation, so who
-// owns a frame can change mid-drag: the list may scroll only while the sheet
-// is at its largest, and even then a downward delta with the list at offset
-// zero belongs to the sheet. Everything the pan decides it decides on the UI
-// thread; runOnJS is spent on two things only, reporting the settled detent
-// and asking to close.
-//
-// THE PHYSICS. A critically damped spring, response 0.45s. A fling of
-// SHEET_FLING or more goes one detent in its direction and never two; slower,
-// the nearest detent. Above the largest detent the excess is rubber-banded on
-// UIKit's own curve; below the smallest there is no band, because that is the
-// dismiss path: the sheet tracks the finger 1:1 and lets go at the threshold.
+// THE GESTURE MODEL AND THE PHYSICS ARE THE SHELL'S NOW, and are described
+// there. What this file still decides about the motion is exactly what it
+// hands DetentSheet: the three heights, which detent it is at, whether it is
+// closing, and what happens once it has closed.
 //
 // WHAT IT READS. The board, the sort, the filters, the date and every derived
 // list come from lib/routeResults, the provider mounted above the search
@@ -55,7 +49,7 @@
 //     large   0
 //
 // and interpolated between them by the sheet's height, on the UI thread.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -72,14 +66,15 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { GlassView } from 'expo-glass-effect';
-// THE GESTURE AND THE MOTION. The five rules at the top of components/swipe.tsx
-// apply to the pan below: no .enabled(), no manager.fail() from a touch
-// callback, no early returns in a worklet, primitives only into runOnJS.
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+// FOR THE VEIL ALONE. The gesture and the motion are the shell's -- see
+// components/DetentSheet.tsx -- and this file animates one thing of its own:
+// the alpha of the page black over the glass, read off the shell's height.
 import Reanimated, {
-  useSharedValue, useAnimatedStyle, useAnimatedProps, useAnimatedScrollHandler,
-  withSpring, interpolate, Extrapolation, runOnJS,
+  useAnimatedStyle, interpolate, Extrapolation,
 } from 'react-native-reanimated';
+// THE SHELL, AND THE TWO THINGS A CONSUMER GETS FROM IT: a list that the
+// shell's pan knows about, and the height the surface reads.
+import { DetentSheet, SheetScrollView, useSheetMotion } from './DetentSheet';
 import { localIsoDate } from '../lib/saved';
 import { WEEKDAYS, MONTHS, routeDateLabel } from '../lib/flightstatus';
 import {
@@ -90,7 +85,7 @@ import {
   g,
 } from '../lib/glass';
 import {
-  CARD_FILL, CARD_GAP, PAGE_BG, PAGE_RGB, SURFACE_EDGE, GLASS_DARK, GLASS_RADIUS,
+  CARD_FILL, CARD_GAP, PAGE_BG, PAGE_RGB, SURFACE_EDGE, GLASS_DARK,
 } from '../lib/cards';
 import { trimAirportName } from './FlightCard';
 import { RouteRow } from './RouteRow';
@@ -111,8 +106,9 @@ const SANS = 'Inter_400Regular';
 // same value the bubble on the map carries at half strength. See the note at
 // the top for how the other two detents are reached from it.
 const SHEET_TINT = `rgba(${PAGE_RGB},0.3)`;
-// THE VEIL OVER IT, AT EACH DETENT, in the order sheetGeometry declares them;
-// the shell interpolates between these by height. See the arithmetic at the top.
+// THE VEIL OVER IT, AT EACH DETENT, in the order sheetDetents declares them;
+// GlassSurface interpolates between these by the shell's height. See the
+// arithmetic at the top.
 const SHEET_VEIL = [0.571, 0.286, 0] as const;
 // THE BUBBLE'S OWN TINT, which is the page black at half strength -- the same
 // value the map screen's bubble carries, spelled from the same components. The
@@ -120,37 +116,9 @@ const SHEET_VEIL = [0.571, 0.286, 0] as const;
 // one piece of chrome.
 const BUBBLE_TINT = `rgba(${PAGE_RGB},0.5)`;
 
-// ── THE SHEET'S MOTION ──────────────────────────────────────────────────────
-//
-// CRITICALLY DAMPED, RESPONSE 0.45s, which is the sheet UIKit draws: it lands
-// and does not bounce. stiffness = (2 pi / 0.45)^2 = 195; damping = 2 sqrt(195)
-// = 28 at mass 1. Overshoot is clamped so a hard fling cannot carry the sheet
-// past the detent it was sent to. Not SWIPE_SPRING: that is a row's return at
-// a ratio of 0.94, a different motion for a different thing.
-const SHEET_SPRING = { mass: 1, stiffness: 195, damping: 28, overshootClamping: true };
-// A FLING, in points per second. At or above this the sheet goes ONE detent in
-// the fling's direction, never two, which is what UIKit's sheet does with a
-// flick; under it the sheet settles at the nearest detent.
-const SHEET_FLING = 400;
-// WHEN A DRAG BELOW THE SMALL DETENT LETS GO. Released this far under it, or
-// flung downward this fast at or under it, the sheet is dismissed; otherwise it
-// springs back to the small detent.
-const SHEET_DISMISS_BELOW = 40;
-const SHEET_DISMISS_VEL = 500;
-// THE RUBBER BAND ABOVE THE LARGEST DETENT, UIKit's own curve and constant:
-// shown = (1 - 1 / (excess * c / d + 1)) * d, with d the sheet's own height.
-const SHEET_BAND = 0.55;
-// THE GRABBER, UIKit's own dimensions: 36 by 5, five points down. Its ink is
-// the bubble's meta ink, an existing colour and nothing new.
-const SHEET_GRABBER_W = 36;
-const SHEET_GRABBER_H = 5;
-const SHEET_GRABBER_TOP = 5;
-const SHEET_GRABBER_INK = 'rgba(226,226,226,0.45)';
-
-function rubber(excess: number, dimension: number): number {
-  'worklet';
-  return (1 - 1 / ((excess * SHEET_BAND) / dimension + 1)) * dimension;
-}
+// THE SHEET'S MOTION -- the spring, the fling, the dismiss thresholds, the
+// rubber band and the grabber -- is declared in components/DetentSheet.tsx,
+// where it moved with the shell. Nothing here names a physical constant.
 
 // THE LABEL BUDGET, in the pieces it is computed from.
 //
@@ -251,9 +219,8 @@ export function ResultsSheet() {
   // sheet's surface runs under the bar; its content stops above it.
   const insets = useSafeAreaInsets();
   // The hook, not Dimensions.get: this has to re-render on rotation, or the
-  // labels would keep the width they were built for. The height is for the
-  // glass -- see the header in the render.
-  const { width: routeWinWidth, height: winHeight } = useWindowDimensions();
+  // labels would keep the width they were built for.
+  const { width: routeWinWidth } = useWindowDimensions();
   const {
     routeResult,
     routeDate, setRouteDate,
@@ -276,208 +243,18 @@ export function ResultsSheet() {
     hostLoading,
   } = useRouteResults();
 
-  // ── THE SHELL ─────────────────────────────────────────────────────────────
-  //
-  // THE HEIGHT IS THE ONE VALUE. sheetH is how tall the sheet is, measured from
-  // the screen's bottom edge, and everything else is read off it on the UI
-  // thread: the transform that places it, the veil, the dim, whether the list
-  // may scroll. The three detents are shared values too, so the gesture --
-  // built once -- reads whatever this device and rotation say they are.
-  const sheetH = useSharedValue(0);
-  const [smallHeight, midHeight, largeHeight] = sheetHeights;
-  const smallH = useSharedValue(smallHeight);
-  const midH = useSharedValue(midHeight);
-  const largeH = useSharedValue(largeHeight);
-  useEffect(() => {
-    smallH.value = smallHeight;
-    midH.value = midHeight;
-    largeH.value = largeHeight;
-  }, [smallHeight, midHeight, largeHeight, smallH, midH, largeH]);
-  // THE DRAG'S OWN BOOKKEEPING. rawH is where the finger has put the sheet
-  // before the rubber band is applied; lastTy is the last translation seen, so
-  // each frame is a delta. releaseV carries a fling's velocity from the worklet
-  // that decided to dismiss to the effect that runs the dismissal.
-  const rawH = useSharedValue(0);
-  const lastTy = useSharedValue(0);
-  const releaseV = useSharedValue(0);
-  // THE LIST'S TWO FACTS: where it is scrolled to, and whether a finger is on
-  // it. Both are what decide, at the large detent, whether a frame belongs to
-  // the list or to the sheet.
-  const scrollY = useSharedValue(0);
-  const listActive = useSharedValue(false);
-
   // ── GONE, AND THE MAP SCREEN IS TOLD ──────────────────────────────────────
   //
-  // Called on the JS thread once the dismiss spring has landed at zero, from
-  // either path -- a drag off the bottom, or the map screen asking through
-  // sheetClosing. The detent goes back to the first so the next presentation
-  // opens at the small detent, and the presented flag is what unmounts this.
+  // Called on the JS thread once the shell's dismiss spring has landed at
+  // zero, from either path -- a drag off the bottom, or the map screen asking
+  // through sheetClosing. The detent goes back to the first so the next
+  // presentation opens at the small detent, and the presented flag is what
+  // unmounts this.
   const finishDismiss = useCallback(() => {
     setSheetDetent(0);
     setSheetClosing(false);
     setSheetPresented(false);
   }, [setSheetDetent, setSheetClosing, setSheetPresented]);
-
-  // ── PRESENTING, AND CLOSING ───────────────────────────────────────────────
-  //
-  // ONE EFFECT, ON ONE FLAG. Mounting is presentation: the sheet is at zero
-  // and springs to its detent. sheetClosing going true is dismissal: it springs
-  // to zero and, if that spring finishes, reports. And sheetClosing going back
-  // to false WHILE MOUNTED is a presentation that arrived mid-dismissal -- the
-  // route resolved again under a closing sheet -- so it springs back up, and
-  // the cancelled spring's callback sees finished false and reports nothing.
-  useEffect(() => {
-    if (sheetClosing) {
-      sheetH.value = withSpring(0, { ...SHEET_SPRING, velocity: releaseV.value }, finished => {
-        'worklet';
-        if (finished) runOnJS(finishDismiss)();
-      });
-      releaseV.value = 0;
-    } else {
-      sheetH.value = withSpring(sheetHeights[sheetDetent], SHEET_SPRING);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheetClosing]);
-
-  // ── THE LIST'S GESTURE ────────────────────────────────────────────────────
-  //
-  // A Native gesture on the scroll view, so the pan can run simultaneously
-  // with it and so the pan can know a finger is on the list at all. Built
-  // once: a gesture object swapped under a finger loses the touch.
-  //
-  // THE IMMUTABILITY RULE IS OFF FOR THE TWO GESTURES, and only for them. It
-  // reads a shared value written inside useMemo as a render-time mutation of
-  // something an effect depends on. These writes are worklets: they run on the
-  // UI thread when a finger moves, never during render, and a shared value is
-  // exactly the thing built to be written from there. The memo is only how the
-  // gesture is built once.
-  /* eslint-disable react-hooks/immutability */
-  const native = useMemo(
-    () => Gesture.Native()
-      .onBegin(() => { 'worklet'; listActive.value = true; })
-      .onFinalize(() => { 'worklet'; listActive.value = false; }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
-
-  // ── THE PAN ───────────────────────────────────────────────────────────────
-  //
-  // WHO OWNS A FRAME. The list may scroll only at the largest detent. There,
-  // with a finger on it, an upward delta or any delta while it is scrolled
-  // past zero is the list's and the sheet holds still; a downward delta at
-  // offset zero is the sheet's. Everywhere else every delta is the sheet's,
-  // and scrollEnabled below is what stops the scroll view taking any of them.
-  //
-  // DELTAS, so the handover happens whenever the list REACHES zero mid-drag,
-  // not only at the touch that started it. rawH accumulates the unbanded
-  // position and the band is applied on the way to sheetH; while the list
-  // owns a frame rawH is pinned to the sheet's real height so the next frame
-  // the sheet owns starts from where it actually is.
-  //
-  // ON RELEASE. Under the small detent past the threshold, or flung down at
-  // it, the sheet is dismissed -- the effect above runs that spring, with the
-  // fling's velocity carried across in releaseV. Otherwise one detent in the
-  // fling's direction, or the nearest, and the settled index goes to the
-  // provider so the map screen's bubble can clear it.
-  const pan = useMemo(
-    () => Gesture.Pan()
-      .simultaneousWithExternalGesture(native)
-      .onStart(e => {
-        'worklet';
-        lastTy.value = e.translationY;
-        // Assigning the value is what cancels a spring still in flight.
-        sheetH.value = sheetH.value;
-        rawH.value = sheetH.value;
-      })
-      .onUpdate(e => {
-        'worklet';
-        const dy = e.translationY - lastTy.value;
-        lastTy.value = e.translationY;
-        const large = largeH.value;
-        const atTop = sheetH.value >= large - 0.5;
-        const listOwns = atTop && listActive.value && (scrollY.value > 0 || dy < 0);
-        if (listOwns) {
-          rawH.value = sheetH.value;
-        } else {
-          const raw = rawH.value - dy;
-          rawH.value = raw;
-          sheetH.value = raw > large
-            ? large + rubber(raw - large, large)
-            : Math.max(0, raw);
-        }
-      })
-      .onEnd(e => {
-        'worklet';
-        // Upward is positive from here on: the sheet's height grows as the
-        // finger travels up the screen.
-        const v = -e.velocityY;
-        const h = sheetH.value;
-        const small = smallH.value;
-        const mid = midH.value;
-        const large = largeH.value;
-        const dismiss = h < small - SHEET_DISMISS_BELOW
-          || (h <= small + 1 && v < -SHEET_DISMISS_VEL);
-        if (dismiss) {
-          releaseV.value = v;
-          runOnJS(setSheetClosing)(true);
-        } else {
-          let idx = 0;
-          if (v >= SHEET_FLING) {
-            idx = h < small - 1 ? 0 : h < mid - 1 ? 1 : 2;
-          } else if (v <= -SHEET_FLING) {
-            idx = h > large + 1 ? 2 : h > mid + 1 ? 1 : 0;
-          } else {
-            const dS = Math.abs(h - small);
-            const dM = Math.abs(h - mid);
-            const dL = Math.abs(h - large);
-            idx = dS <= dM && dS <= dL ? 0 : dM <= dL ? 1 : 2;
-          }
-          const target = idx === 0 ? small : idx === 1 ? mid : large;
-          sheetH.value = withSpring(target, { ...SHEET_SPRING, velocity: v });
-          runOnJS(setSheetDetent)(idx);
-        }
-      }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  );
-  /* eslint-enable react-hooks/immutability */
-
-  // ── WHAT THE HEIGHT DRIVES ────────────────────────────────────────────────
-  //
-  // The sheet is a box of the LARGE height anchored to the screen's bottom,
-  // translated down by whatever it is short of that. The list may scroll only
-  // at the top. The veil thins and the dim thickens with the height, both
-  // clamped to their ends.
-  const onListScroll = useAnimatedScrollHandler({
-    onScroll: e => { scrollY.value = e.contentOffset.y; },
-  });
-  const listProps = useAnimatedProps(() => ({
-    scrollEnabled: sheetH.value >= largeH.value - 0.5,
-  }));
-  const sheetStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: largeH.value - sheetH.value }],
-  }));
-  const veilStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      sheetH.value,
-      [smallH.value, midH.value, largeH.value],
-      [SHEET_VEIL[0], SHEET_VEIL[1], SHEET_VEIL[2]],
-      Extrapolation.CLAMP,
-    ),
-  }));
-  const dimStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      sheetH.value,
-      [midH.value, largeH.value],
-      [0, 1],
-      Extrapolation.CLAMP,
-    ),
-  }));
-  // THE DIM TAKES A TOUCH ONLY AT THE LARGE DETENT, once settled, and a tap on
-  // it dismisses the sheet -- which is what a tap on UIKit's dimming view does.
-  // Below that detent it is not there to a finger at all, so the map is.
-  const dimActive = sheetDetent === 2 && !sheetClosing;
-  const dismissFromDim = () => { setSheetClosing(true); };
 
   // ── A TAP SELECTS ─────────────────────────────────────────────────────────
   //
@@ -995,379 +772,379 @@ export function ResultsSheet() {
         : null;
 
   return (
-    <>
-      {/* ── THE DIM, UNDER THE SHEET ───────────────────────────────────────
-          The sheets' own scrim, faded in between the middle and the large
-          detents by the height. It is not there to a finger until the sheet
-          has settled at the large detent; then a tap on it closes the sheet.
-          Rendered before the sheet so the sheet draws over it. */}
-      <Reanimated.View
-        pointerEvents={dimActive ? 'auto' : 'none'}
-        style={[StyleSheet.absoluteFill, sh.dim, dimStyle]}
-      >
-        <Pressable style={StyleSheet.absoluteFill} onPress={dismissFromDim} />
-      </Reanimated.View>
+    // ── THE SHELL, WITH THIS SHEET'S ANSWERS ──────────────────────────────
+    // Translate mode, dismissible, mounting from nothing: every default, which
+    // is to say the shell's defaults ARE this sheet's behaviour, lifted out.
+    // The three heights, the detent, the closing flag and the two callbacks
+    // are the provider's, read and written exactly as the shell used to read
+    // and write them when it was written here. The glass and the veil are the
+    // surface, drawn first inside the clipped box.
+    <DetentSheet
+      detents={sheetHeights}
+      detent={sheetDetent}
+      onDetentChange={setSheetDetent}
+      closing={sheetClosing}
+      onDismissRequest={() => setSheetClosing(true)}
+      onDismissed={finishDismiss}
+      surface={<GlassSurface />}
+    >
+      {/* ── THE HEADER ───────────────────────────────────────────────────────
+          The pill, the controls and the two picker Modals. The surface that
+          used to be drawn here is the shell's `surface` now, under everything;
+          the grabber is the shell's too, in the clearance the head keeps for
+          it. */}
+      <View style={sh.header} collapsable={false}>
 
-      {/* ── THE SHEET ──────────────────────────────────────────────────────
-          A box of the LARGE height, anchored to the screen's bottom edge and
-          translated down to the current height -- so hit-testing, which
-          follows the transform, gives everything above its top edge to the
-          map. Its two top corners carry the app's glass radius and it clips,
-          which is what cuts the glass and the veil at those corners. The pan
-          is on the whole of it: header, pill, controls and list alike. */}
-      <GestureDetector gesture={pan}>
-        <Reanimated.View style={[sh.sheet, { height: sheetHeights[2] }, sheetStyle]}>
-          {/* ── THE HEADER ───────────────────────────────────────────────────
-              THE SURFACE LIVES HERE. The same glass the bubble wears, at the
-              large detent's tint, and the veil over it carrying the rest of
-              the alpha, both drawn from the header's top edge down a whole
-              window's height -- far past the header's own box, which does not
-              clip, and under the list, which is drawn after this and is
-              transparent. Neither takes a touch. The grabber is drawn last of
-              the three, in the clearance the head keeps for it. */}
-          <View style={sh.header} collapsable={false}>
-            <GlassView
-              {...GLASS_DARK}
-              tintColor={SHEET_TINT}
-              pointerEvents="none"
-              style={[sh.surface, { height: winHeight }]}
-            />
-            <Reanimated.View
-              pointerEvents="none"
-              style={[sh.surface, sh.veil, { height: winHeight }, veilStyle]}
-            />
-            <View style={sh.grabberRow} pointerEvents="none">
-              <View style={sh.grabber} />
-            </View>
+      {/* ── THE PILL, PINNED UNDER THE GRABBER ─────────────────────────────
+          VISIBLE AT EVERY DETENT AND NEVER SCROLLS. It is in the header, not
+          the list, so the small detent shows the grabber and this and nothing
+          else -- which is the whole of what a shut sheet has to say: how the
+          list under it is ordered. Tapping it drops the four orderings out of
+          it, on the same anchored panel the filters use.
 
-          {/* ── THE PILL, PINNED UNDER THE GRABBER ─────────────────────────────
-              VISIBLE AT EVERY DETENT AND NEVER SCROLLS. It is in the header, not
-              the list, so the small detent shows the grabber and this and nothing
-              else -- which is the whole of what a shut sheet has to say: how the
-              list under it is ordered. Tapping it drops the four orderings out of
-              it, on the same anchored panel the filters use.
-
-              THE WRAPPER IS THE ANCHOR, collapsable false so it exists to be
-              measured, exactly as the filter triggers are wrapped. */}
-          <View style={sh.head}>
-            {routeShown > 0 && (
-              <View
-                collapsable={false}
-                ref={node => { routeAnchorRefs.current.sort = node; }}
-              >
-                <TouchableOpacity
-                  style={sh.sortHead}
-                  activeOpacity={0.85}
-                  accessibilityRole="button"
-                  onPress={() => { if (routeOpenDrop === 'sort') closeRouteDrop(); else openRouteDrop('sort'); }}
-                >
-                  <Text style={sh.sortHeadTxt} numberOfLines={1}>
-                    {ROUTE_SORT_CAPSULE[routeSort]}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
+          THE WRAPPER IS THE ANCHOR, collapsable false so it exists to be
+          measured, exactly as the filter triggers are wrapped. */}
+      <View style={sh.head}>
+        {routeShown > 0 && (
+          <View
+            collapsable={false}
+            ref={node => { routeAnchorRefs.current.sort = node; }}
+          >
+            <TouchableOpacity
+              style={sh.sortHead}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              onPress={() => { if (routeOpenDrop === 'sort') closeRouteDrop(); else openRouteDrop('sort'); }}
+            >
+              <Text style={sh.sortHeadTxt} numberOfLines={1}>
+                {ROUTE_SORT_CAPSULE[routeSort]}
+              </Text>
+            </TouchableOpacity>
           </View>
+        )}
+      </View>
 
-          {/* ── THE CONTROLS, ON ONE ROW ───────────────────────────────────────
-              THE DATE, THE FILTERS AND THE RESET. Sort is not among them any more;
-              it is the pill above. The disambiguators stay above the row, drawn
-              only when a search matched more than one airport at an end. */}
-          <View style={sh.controls}>
-            {routeEndPicker('orig', 'from')}
-            {routeEndPicker('dest', 'to')}
-            <View style={s.routePillRow}>
-              <View style={s.routePillCol}>
-                <TouchableOpacity style={s.routeDrop} activeOpacity={0.7} onPress={openRouteCal}>
-                  <Text
-                    style={routeDate === null ? s.routeDropTxt : s.routeDropTxtOn}
-                    numberOfLines={1}
-                  >
-                    {routeDatePill}
-                  </Text>
-                  <View style={[s.routeDropChev, { transform: [{ rotate: '45deg' }] }]} />
-                </TouchableOpacity>
-              </View>
-              {routeShown > 0 && (
-                <View style={s.routePillCol}>
+      {/* ── THE CONTROLS, ON ONE ROW ───────────────────────────────────────
+          THE DATE, THE FILTERS AND THE RESET. Sort is not among them any more;
+          it is the pill above. The disambiguators stay above the row, drawn
+          only when a search matched more than one airport at an end. */}
+      <View style={sh.controls}>
+        {routeEndPicker('orig', 'from')}
+        {routeEndPicker('dest', 'to')}
+        <View style={s.routePillRow}>
+          <View style={s.routePillCol}>
+            <TouchableOpacity style={s.routeDrop} activeOpacity={0.7} onPress={openRouteCal}>
+              <Text
+                style={routeDate === null ? s.routeDropTxt : s.routeDropTxtOn}
+                numberOfLines={1}
+              >
+                {routeDatePill}
+              </Text>
+              <View style={[s.routeDropChev, { transform: [{ rotate: '45deg' }] }]} />
+            </TouchableOpacity>
+          </View>
+          {routeShown > 0 && (
+            <View style={s.routePillCol}>
+              <TouchableOpacity
+                style={s.routeDrop}
+                activeOpacity={0.7}
+                onPress={() => { setRouteFiltersOpen(o => !o); setRouteOpenDrop(null); }}
+              >
+                <Text style={s.routeDropTxt} numberOfLines={1}>{routeFiltersPill}</Text>
+                <View style={[s.routeDropChev, { transform: [{ rotate: routeFiltersOpen ? '-135deg' : '45deg' }] }]} />
+              </TouchableOpacity>
+            </View>
+          )}
+          {routeControlsDirty && (
+            <TouchableOpacity
+              style={[s.routeResetBtn, s.resetInline]}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={routeResetControls}
+            >
+              <Text style={s.routeReset}>{'Reset'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        {routeShown > 0 && routeFiltersOpen && (
+          <View style={s.routePillRow}>
+            {routeDropdown('air', routeAirPill)}
+            {routeDropdown('dep', routeDepPill)}
+            {routeDropdown('arr', routeArrPill)}
+          </View>
+        )}
+      </View>
+
+      {/* ── THE ANCHORED PANEL ──
+          A Modal, not an inline block, so opening one moves nothing in the
+          sheet. The position comes from measuring the trigger in window
+          coordinates. Scrim and panel animate on SEPARATE values.
+
+          ONE PANEL, TWO SURFACES. The filters and the disambiguators keep
+          GlassLayers, the app's blur-and-fill pair; the sort wears a GlassView
+          in the bubble's own material and tint, because it drops out of the
+          green pill and the two should read as one piece of chrome. The sort
+          also takes the pill's exact width, where a filter panel takes its own
+          content's. */}
+      <Modal visible={routeOpenDrop !== null} transparent animationType="none" onRequestClose={closeRouteDrop}>
+        <Pressable style={s.routeOverlayScrim} onPress={closeRouteDrop}>
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, s.routePanelDim, { opacity: routeScrimAnim }]}
+          />
+          {routeAnchor !== null && (
+            <Animated.View
+              onLayout={e => {
+                const { width, height } = e.nativeEvent.layout;
+                // Bails out when nothing actually changed. Moving the panel fires
+                // onLayout again, and a fresh object each time would re-render
+                // for no reason.
+                setRoutePanelSize(prev =>
+                  prev !== null && prev.w === width && prev.h === height
+                    ? prev
+                    : { w: width, h: height });
+              }}
+              style={[
+                s.routeDropPanel,
+                {
+                  position: 'absolute',
+                  left: routePanelLeft,
+                  // Under the trigger -- or, for the one exception, above it.
+                  ...(routePanelRises
+                    ? { bottom: routeAnchor.bottom }
+                    : { top: routeAnchor.top }),
+                  minWidth: routeAnchor.width,
+                  // The sort is as wide as the pill it dropped out of.
+                  ...(routeOpenDrop === 'sort' ? { maxWidth: routeAnchor.width } : null),
+                  // Left off on the measuring pass: a cap applied before the
+                  // measurement would clamp the very height being measured.
+                  maxHeight: routePanelMeasured ? routePanelSpace : undefined,
+                  opacity: routePanelAnim,
+                  transform: [
+                    // Travels out of its trigger: downward, or upward for the
+                    // one panel that rises.
+                    {
+                      translateY: routePanelAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [routePanelRises ? OVERLAY_RISE : -OVERLAY_RISE, 0],
+                      }),
+                    },
+                    { scale: routePanelAnim.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) },
+                  ],
+                },
+              ]}
+            >
+              {/* Behind the options and clipped by the overflow above. Every
+                  layer here is absolutely positioned, so none can disturb the
+                  onLayout measurement this panel's placement depends on. */}
+              {routeOpenDrop === 'sort' ? (
+                <GlassView
+                  {...GLASS_DARK}
+                  tintColor={BUBBLE_TINT}
+                  pointerEvents="none"
+                  style={StyleSheet.absoluteFill}
+                />
+              ) : (
+                <GlassLayers />
+              )}
+              {/* Scrolls only when the cap above actually bites, and stops the
+                  tap reaching the scrim behind and closing the panel. */}
+              <ScrollView
+                bounces={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {routeOpenOptions.map(o => (
                   <TouchableOpacity
-                    style={s.routeDrop}
+                    key={o.key}
+                    style={s.routeDropItem}
                     activeOpacity={0.7}
-                    onPress={() => { setRouteFiltersOpen(o => !o); setRouteOpenDrop(null); }}
+                    onPress={o.press}
                   >
-                    <Text style={s.routeDropTxt} numberOfLines={1}>{routeFiltersPill}</Text>
-                    <View style={[s.routeDropChev, { transform: [{ rotate: routeFiltersOpen ? '-135deg' : '45deg' }] }]} />
+                    <Text style={o.on ? s.routeDropItemOn : s.routeDropItemTxt}>{o.label}</Text>
+                    {o.on && <Text style={s.routeDropMark}>{'✓'}</Text>}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </Animated.View>
+          )}
+        </Pressable>
+      </Modal>
+      <Modal visible={routeCalOpen} transparent animationType="none" onRequestClose={closeRouteCal}>
+        <Pressable style={g.routeCalScrim} onPress={closeRouteCal}>
+          {/* The dim is its own layer so it can fade on its own curve. */}
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, g.routeCalDim, { opacity: routeCalScrimAnim }]}
+          />
+          <Animated.View
+            style={[
+              g.sheetShell,
+              {
+                opacity: routeCalAnim,
+                transform: [
+                  { translateY: routeCalAnim.interpolate({ inputRange: [0, 1], outputRange: [CAL_RISE, 0] }) },
+                  { scale: routeCalAnim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+                ],
+              },
+            ]}
+          >
+            {/* The same three layers, in the same order, as the archive sheet. */}
+            <GlassLayers />
+            <View style={g.sheetEdge} pointerEvents="none" />
+            <Pressable style={g.sheetBody}>
+              <View style={s.routeCalNav}>
+                {/* Month stepping is one group, so the close control can hold the
+                    right edge on its own. */}
+                <View style={s.routeCalNavGroup}>
+                  <TouchableOpacity
+                    onPress={() => shiftRouteCal(-1)}
+                    disabled={!routeCalCanGoBack}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  >
+                    <Text style={routeCalCanGoBack ? s.routeCalArrow : s.routeCalArrowOff}>{'<'}</Text>
+                  </TouchableOpacity>
+                  <Text style={s.routeCalTitle}>
+                    {`${MONTHS[routeCalMonth.m]} ${routeCalMonth.y}`}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => shiftRouteCal(1)}
+                    disabled={!routeCalCanGoNext}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  >
+                    <Text style={routeCalCanGoNext ? s.routeCalArrow : s.routeCalArrowOff}>{'>'}</Text>
                   </TouchableOpacity>
                 </View>
-              )}
-              {routeControlsDirty && (
+                {/* The same glyph the flight card closes with, in the file's
+                    destructive red. Tapping outside still dismisses. */}
                 <TouchableOpacity
-                  style={[s.routeResetBtn, s.resetInline]}
+                  onPress={closeRouteCal}
                   activeOpacity={0.7}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  onPress={routeResetControls}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  style={s.routeCalClose}
                 >
-                  <Text style={s.routeReset}>{'Reset'}</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            {routeShown > 0 && routeFiltersOpen && (
-              <View style={s.routePillRow}>
-                {routeDropdown('air', routeAirPill)}
-                {routeDropdown('dep', routeDepPill)}
-                {routeDropdown('arr', routeArrPill)}
-              </View>
-            )}
-          </View>
-
-          {/* ── THE ANCHORED PANEL ──
-              A Modal, not an inline block, so opening one moves nothing in the
-              sheet. The position comes from measuring the trigger in window
-              coordinates. Scrim and panel animate on SEPARATE values.
-
-              ONE PANEL, TWO SURFACES. The filters and the disambiguators keep
-              GlassLayers, the app's blur-and-fill pair; the sort wears a GlassView
-              in the bubble's own material and tint, because it drops out of the
-              green pill and the two should read as one piece of chrome. The sort
-              also takes the pill's exact width, where a filter panel takes its own
-              content's. */}
-          <Modal visible={routeOpenDrop !== null} transparent animationType="none" onRequestClose={closeRouteDrop}>
-            <Pressable style={s.routeOverlayScrim} onPress={closeRouteDrop}>
-              <Animated.View
-                pointerEvents="none"
-                style={[StyleSheet.absoluteFill, s.routePanelDim, { opacity: routeScrimAnim }]}
-              />
-              {routeAnchor !== null && (
-                <Animated.View
-                  onLayout={e => {
-                    const { width, height } = e.nativeEvent.layout;
-                    // Bails out when nothing actually changed. Moving the panel fires
-                    // onLayout again, and a fresh object each time would re-render
-                    // for no reason.
-                    setRoutePanelSize(prev =>
-                      prev !== null && prev.w === width && prev.h === height
-                        ? prev
-                        : { w: width, h: height });
-                  }}
-                  style={[
-                    s.routeDropPanel,
-                    {
-                      position: 'absolute',
-                      left: routePanelLeft,
-                      // Under the trigger -- or, for the one exception, above it.
-                      ...(routePanelRises
-                        ? { bottom: routeAnchor.bottom }
-                        : { top: routeAnchor.top }),
-                      minWidth: routeAnchor.width,
-                      // The sort is as wide as the pill it dropped out of.
-                      ...(routeOpenDrop === 'sort' ? { maxWidth: routeAnchor.width } : null),
-                      // Left off on the measuring pass: a cap applied before the
-                      // measurement would clamp the very height being measured.
-                      maxHeight: routePanelMeasured ? routePanelSpace : undefined,
-                      opacity: routePanelAnim,
-                      transform: [
-                        // Travels out of its trigger: downward, or upward for the
-                        // one panel that rises.
-                        {
-                          translateY: routePanelAnim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [routePanelRises ? OVERLAY_RISE : -OVERLAY_RISE, 0],
-                          }),
-                        },
-                        { scale: routePanelAnim.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }) },
-                      ],
-                    },
-                  ]}
-                >
-                  {/* Behind the options and clipped by the overflow above. Every
-                      layer here is absolutely positioned, so none can disturb the
-                      onLayout measurement this panel's placement depends on. */}
-                  {routeOpenDrop === 'sort' ? (
-                    <GlassView
-                      {...GLASS_DARK}
-                      tintColor={BUBBLE_TINT}
-                      pointerEvents="none"
-                      style={StyleSheet.absoluteFill}
+                  <Svg width={20} height={20} viewBox="0 0 24 24">
+                    <Path
+                      d="M19 5 5 19"
+                      fill="none"
+                      stroke="rgba(248,113,113,0.55)"
+                      strokeWidth={1.75}
+                      strokeLinecap="round"
                     />
-                  ) : (
-                    <GlassLayers />
-                  )}
-                  {/* Scrolls only when the cap above actually bites, and stops the
-                      tap reaching the scrim behind and closing the panel. */}
-                  <ScrollView
-                    bounces={false}
-                    keyboardShouldPersistTaps="handled"
-                  >
-                    {routeOpenOptions.map(o => (
+                    <Path
+                      d="M5 5l14 14"
+                      fill="none"
+                      stroke="rgba(248,113,113,0.55)"
+                      strokeWidth={1.75}
+                      strokeLinecap="round"
+                    />
+                  </Svg>
+                </TouchableOpacity>
+              </View>
+
+              <View style={s.routeCalRow}>
+                {WEEKDAYS.map(w => (
+                  <Text key={w} style={s.routeCalHead}>{w}</Text>
+                ))}
+              </View>
+
+              {routeCalWeeks.map((week, wi) => (
+                <View key={wi} style={s.routeCalRow}>
+                  {week.map((day, di) => {
+                    if (day === null) return <View key={di} style={s.routeCalCell} />;
+                    const iso = localIsoDate(new Date(routeCalMonth.y, routeCalMonth.m, day));
+                    const offset = routeDayOffset(routeCalMonth.y, routeCalMonth.m, day);
+                    const usable = offset >= 0 && offset <= ROUTE_MAX_DATE_DAYS;
+                    const isToday = offset === 0;
+                    const picked = routeDate === null ? isToday : routeDate === iso;
+                    return (
                       <TouchableOpacity
-                        key={o.key}
-                        style={s.routeDropItem}
+                        key={di}
+                        style={[
+                          s.routeCalCell,
+                          picked && s.routeCalCellOn,
+                          !picked && isToday && s.routeCalCellToday,
+                        ]}
                         activeOpacity={0.7}
-                        onPress={o.press}
+                        disabled={!usable}
+                        onPress={() => pickRouteCalDay(iso, isToday)}
                       >
-                        <Text style={o.on ? s.routeDropItemOn : s.routeDropItemTxt}>{o.label}</Text>
-                        {o.on && <Text style={s.routeDropMark}>{'✓'}</Text>}
+                        <Text style={
+                          !usable ? s.routeCalDayOff
+                            : picked ? s.routeCalDayOn
+                              : s.routeCalDay
+                        }>{day}</Text>
                       </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </Animated.View>
-              )}
+                    );
+                  })}
+                </View>
+              ))}
             </Pressable>
-          </Modal>
-          <Modal visible={routeCalOpen} transparent animationType="none" onRequestClose={closeRouteCal}>
-            <Pressable style={g.routeCalScrim} onPress={closeRouteCal}>
-              {/* The dim is its own layer so it can fade on its own curve. */}
-              <Animated.View
-                pointerEvents="none"
-                style={[StyleSheet.absoluteFill, g.routeCalDim, { opacity: routeCalScrimAnim }]}
-              />
-              <Animated.View
-                style={[
-                  g.sheetShell,
-                  {
-                    opacity: routeCalAnim,
-                    transform: [
-                      { translateY: routeCalAnim.interpolate({ inputRange: [0, 1], outputRange: [CAL_RISE, 0] }) },
-                      { scale: routeCalAnim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
-                    ],
-                  },
-                ]}
-              >
-                {/* The same three layers, in the same order, as the archive sheet. */}
-                <GlassLayers />
-                <View style={g.sheetEdge} pointerEvents="none" />
-                <Pressable style={g.sheetBody}>
-                  <View style={s.routeCalNav}>
-                    {/* Month stepping is one group, so the close control can hold the
-                        right edge on its own. */}
-                    <View style={s.routeCalNavGroup}>
-                      <TouchableOpacity
-                        onPress={() => shiftRouteCal(-1)}
-                        disabled={!routeCalCanGoBack}
-                        activeOpacity={0.7}
-                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                      >
-                        <Text style={routeCalCanGoBack ? s.routeCalArrow : s.routeCalArrowOff}>{'<'}</Text>
-                      </TouchableOpacity>
-                      <Text style={s.routeCalTitle}>
-                        {`${MONTHS[routeCalMonth.m]} ${routeCalMonth.y}`}
-                      </Text>
-                      <TouchableOpacity
-                        onPress={() => shiftRouteCal(1)}
-                        disabled={!routeCalCanGoNext}
-                        activeOpacity={0.7}
-                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                      >
-                        <Text style={routeCalCanGoNext ? s.routeCalArrow : s.routeCalArrowOff}>{'>'}</Text>
-                      </TouchableOpacity>
-                    </View>
-                    {/* The same glyph the flight card closes with, in the file's
-                        destructive red. Tapping outside still dismisses. */}
-                    <TouchableOpacity
-                      onPress={closeRouteCal}
-                      activeOpacity={0.7}
-                      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                      style={s.routeCalClose}
-                    >
-                      <Svg width={20} height={20} viewBox="0 0 24 24">
-                        <Path
-                          d="M19 5 5 19"
-                          fill="none"
-                          stroke="rgba(248,113,113,0.55)"
-                          strokeWidth={1.75}
-                          strokeLinecap="round"
-                        />
-                        <Path
-                          d="M5 5l14 14"
-                          fill="none"
-                          stroke="rgba(248,113,113,0.55)"
-                          strokeWidth={1.75}
-                          strokeLinecap="round"
-                        />
-                      </Svg>
-                    </TouchableOpacity>
-                  </View>
+          </Animated.View>
+        </Pressable>
+      </Modal>
+      </View>
 
-                  <View style={s.routeCalRow}>
-                    {WEEKDAYS.map(w => (
-                      <Text key={w} style={s.routeCalHead}>{w}</Text>
-                    ))}
-                  </View>
+      {/* ── THE LIST ─────────────────────────────────────────────────────────
+          FLAT, UNDER EVERY ORDERING. No part-of-day headings, no pinned row
+          with a heading over it, no captions under it: a list somebody opened
+          to choose between options, and rows are the options. The fastest
+          rows still wear their in-row tag; that is the row's, not a section's.
 
-                  {routeCalWeeks.map((week, wi) => (
-                    <View key={wi} style={s.routeCalRow}>
-                      {week.map((day, di) => {
-                        if (day === null) return <View key={di} style={s.routeCalCell} />;
-                        const iso = localIsoDate(new Date(routeCalMonth.y, routeCalMonth.m, day));
-                        const offset = routeDayOffset(routeCalMonth.y, routeCalMonth.m, day);
-                        const usable = offset >= 0 && offset <= ROUTE_MAX_DATE_DAYS;
-                        const isToday = offset === 0;
-                        const picked = routeDate === null ? isToday : routeDate === iso;
-                        return (
-                          <TouchableOpacity
-                            key={di}
-                            style={[
-                              s.routeCalCell,
-                              picked && s.routeCalCellOn,
-                              !picked && isToday && s.routeCalCellToday,
-                            ]}
-                            activeOpacity={0.7}
-                            disabled={!usable}
-                            onPress={() => pickRouteCalDay(iso, isToday)}
-                          >
-                            <Text style={
-                              !usable ? s.routeCalDayOff
-                                : picked ? s.routeCalDayOn
-                                  : s.routeCalDay
-                            }>{day}</Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  ))}
-                </Pressable>
-              </Animated.View>
-            </Pressable>
-          </Modal>
-          </View>
+          IT FILLS WHAT THE HEADER LEAVES of the sheet's large height, and
+          scrolls only at that height: SheetScrollView is the shell's own list,
+          registered with its pan, so at the other detents a drag on the rows
+          moves the sheet. See the shell for the rule.
 
-          {/* ── THE LIST ─────────────────────────────────────────────────────
-              FLAT, UNDER EVERY ORDERING. No part-of-day headings, no pinned
-              row with a heading over it, no captions under it: a list somebody
-              opened to choose between options, and rows are the options. The
-              fastest rows still wear their in-row tag; that is the row's, not
-              a section's.
+          THE BOTTOM PADDING IS THE TAB BAR. The sheet's surface runs on under
+          the bar to the screen's edge; its last row does not. */}
+      <SheetScrollView
+        style={sh.list}
+        contentContainerStyle={{ paddingBottom: insets.bottom + CARD_GAP }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {emptyLine !== null ? (
+          <Text style={sh.empty}>{emptyLine}</Text>
+        ) : (
+          routeSorted.map(r => (
+            <RouteRow key={routeRowKey(r)} r={r} onPress={selectRow} />
+          ))
+        )}
+      </SheetScrollView>
+    </DetentSheet>
+  );
+}
 
-              IT FILLS WHAT THE HEADER LEAVES of the sheet's large height, and
-              scrolls only at that height -- scrollEnabled is animated off the
-              sheet's own value, so at the other detents a drag on the rows
-              moves the sheet. bounces is off so the list stops dead at zero
-              and the sheet takes the next delta; see the pan.
-
-              THE BOTTOM PADDING IS THE TAB BAR. The sheet's surface runs on
-              under the bar to the screen's edge; its last row does not. */}
-          <GestureDetector gesture={native}>
-            <Reanimated.ScrollView
-              style={sh.list}
-              animatedProps={listProps}
-              onScroll={onListScroll}
-              scrollEventThrottle={16}
-              bounces={false}
-              contentContainerStyle={{ paddingBottom: insets.bottom + CARD_GAP }}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              {emptyLine !== null ? (
-                <Text style={sh.empty}>{emptyLine}</Text>
-              ) : (
-                routeSorted.map(r => (
-                  <RouteRow key={routeRowKey(r)} r={r} onPress={selectRow} />
-                ))
-              )}
-            </Reanimated.ScrollView>
-          </GestureDetector>
-        </Reanimated.View>
-      </GestureDetector>
+// ── THE SURFACE, WHICH IS GLASS, AND THE GLASS THINS AS THE SHEET RISES ────
+//
+// The same glass the bubble wears, at the large detent's tint, and the veil
+// over it carrying the rest of the alpha. Both fill the shell's clipped box,
+// which is what used to be drawn from the header's top edge down a whole
+// window's height -- the box is shorter than the window and clips, so the two
+// are the same picture. Neither takes a touch.
+//
+// THE VEIL READS THE SHELL'S HEIGHT AND DETENTS, on the UI thread, which is
+// why this is a component under the shell rather than an element built above
+// it: the shared values are only reachable from inside.
+function GlassSurface() {
+  const { height, detents } = useSheetMotion();
+  const veilStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(height.value, detents.value, [...SHEET_VEIL], Extrapolation.CLAMP),
+  }));
+  return (
+    <>
+      <GlassView
+        {...GLASS_DARK}
+        tintColor={SHEET_TINT}
+        pointerEvents="none"
+        style={StyleSheet.absoluteFill}
+      />
+      <Reanimated.View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, sh.veil, veilStyle]}
+      />
     </>
   );
 }
@@ -1376,37 +1153,16 @@ export function ResultsSheet() {
 //
 // NO NEW COLOURS. The page black, the one green, the card fill and the two
 // hairlines are all the app's own -- see lib/cards and lib/glass.
+//
+// THE BOX, THE SCRIM AND THE GRABBER ARE THE SHELL'S NOW and are styled there.
 const sh = StyleSheet.create({
-  // THE SHEET'S BOX. Full width, on the screen's bottom edge, its height set
-  // inline to the large detent; the transform is what places it. The two top
-  // corners are the app's glass radius and the box clips to them, which is
-  // what cuts the surface below at the corners.
-  sheet: {
-    position: 'absolute', left: 0, right: 0, bottom: 0,
-    borderTopLeftRadius: GLASS_RADIUS, borderTopRightRadius: GLASS_RADIUS,
-    overflow: 'hidden',
-  },
-  // THE SHEETS' SCRIM, full screen under the sheet. Its opacity is the shell's.
-  dim: { backgroundColor: SHEET_SCRIM },
   // THE HEADER. No flex and no fixed height: its layout height is the pill and
-  // the controls and nothing else, and the list takes the rest. overflow
-  // visible is React Native's default on iOS and is stated because it is
-  // load-bearing -- the glass below runs past this box.
-  header: { overflow: 'visible' },
-  // THE GLASS AND THE VEIL, from the header's top edge down. The height is set
-  // inline to the window's, which is more than any detent, so the surface runs
-  // under the whole list whatever the sheet's height.
-  surface: { position: 'absolute', top: 0, left: 0, right: 0 },
+  // the controls and nothing else, and the list takes the rest. It carried
+  // overflow visible while the glass was drawn inside it and ran past its
+  // box; the glass is the shell's surface now and nothing here overflows.
+  header: {},
   // THE PAGE BLACK, at whatever opacity the height asks for. See SHEET_VEIL.
   veil: { backgroundColor: PAGE_BG },
-  // THE GRABBER, centred in the clearance the head keeps above the pill. A row
-  // rather than alignSelf on an absolute child, so the centring is Yoga's
-  // ordinary kind.
-  grabberRow: { position: 'absolute', top: SHEET_GRABBER_TOP, left: 0, right: 0, alignItems: 'center' },
-  grabber: {
-    width: SHEET_GRABBER_W, height: SHEET_GRABBER_H,
-    borderRadius: SHEET_GRABBER_H / 2, backgroundColor: SHEET_GRABBER_INK,
-  },
   // UNDER THE GRABBER. The clearance is the grabber's room;
   // the sides are the page's own inset. THE FOUR VERTICAL NUMBERS IN THIS BLOCK
   // ARE THE SMALL DETENT: they come from lib/routeResults, where the detent is

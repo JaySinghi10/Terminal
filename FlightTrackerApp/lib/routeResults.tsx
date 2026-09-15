@@ -36,6 +36,8 @@ import { useSaved, API_BASE, flightUrl, NO_TIME, SAVE_MSG } from './saved';
 import { useToast } from './toast';
 import { airportByCode, resolveAirportName } from './airports';
 import type { Airport } from './airports';
+// THE DETENT ARITHMETIC, which no sheet owns. See its note.
+import { sheetDetents } from './sheet';
 
 // Decoration the provider puts on board names that the airport dataset does
 // not carry: "Bengaluru Intl Airport", "Dubai Intl (Terminal 3)", "Khorog
@@ -106,11 +108,9 @@ export const ROUTE_MAX_DATE_DAYS = 60;
 // below, which are the head's own styles, declared here so the detent and the
 // layout it is cut from cannot drift apart.
 //
-// THE MIDDLE AND THE LARGE are half and nine tenths of the window less 28.
-// That 28 was UIKit's, measured when the sheet was UIKit's: on an 874 point
-// window its middle detent settled at 423, so its maximum was 846. The custom
-// sheet keeps the same two numbers so the two are the same heights on the
-// same device -- 423 and 761 here.
+// THE MIDDLE AND THE LARGE ARE lib/sheet.ts's -- half and nine tenths of the
+// window less a gap, shared by every sheet the shell draws. Only the small
+// height is this sheet's, because only this sheet knows its head.
 //
 // TWO POINTS SHORT OF THE HEAD, on purpose, so the head's own bottom air is
 // what the cut takes rather than the top of the controls row. The pill itself
@@ -126,23 +126,6 @@ export const SHEET_HEAD_HEIGHT =
   SHEET_GRABBER_CLEARANCE + SHEET_PILL_PAD * 2 + SHEET_PILL_LINE + SHEET_HEAD_PAD;
 const SHEET_SMALL_TOLERANCE = 2;
 const SHEET_SMALL_HEIGHT = SHEET_HEAD_HEIGHT - SHEET_SMALL_TOLERANCE;
-// WHAT THE WINDOW KEEPS FROM THE SHEET AT ITS LARGEST -- see the note above.
-const SHEET_TOP_GAP = 28;
-const SHEET_MIDDLE = 0.5;
-const SHEET_LARGE = 0.9;
-
-export type SheetGeometry = {
-  // The three heights in points from the screen's bottom edge, smallest first:
-  // what the shell springs between, and what the map screen's bubble clears.
-  heights: number[];
-};
-
-export function sheetGeometry(winHeight: number, barInset: number): SheetGeometry {
-  const max = Math.max(1, winHeight - SHEET_TOP_GAP);
-  return {
-    heights: [barInset + SHEET_SMALL_HEIGHT, SHEET_MIDDLE * max, SHEET_LARGE * max],
-  };
-}
 
 // Local-only view controls. Nothing here re-fetches: every option reorders or
 // hides rows already in state.
@@ -393,7 +376,7 @@ function useRouteResultsState() {
   // between these and the map screen's bubble clears them.
   const { height: sheetWinHeight } = useWindowDimensions();
   const sheetInsets = useSafeAreaInsets();
-  const sheetHeights = sheetGeometry(sheetWinHeight, sheetInsets.bottom).heights;
+  const sheetHeights = sheetDetents(sheetWinHeight, sheetInsets.bottom, SHEET_SMALL_HEIGHT);
 
   // THE HOST'S `loading`, FOR THE SHEET'S PICKERS. A date pick or an end pick
   // must not fire a second fetch over one in flight, and the flag that says so
