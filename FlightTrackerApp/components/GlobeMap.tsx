@@ -140,10 +140,10 @@ const COAST_LINE = '#616161';
 //
 // THE HIGHLIGHT IS THE ONE WITH A CEILING, and the ceiling is the coast. A solid
 // grey line loses contrast on lighter ground faster than a white-alpha line
-// does, so on a lit slope the motorway gains on the coast; at 0.10 the coast
-// is still ahead (2.81:1 against 2.73:1), and from 0.14 the order flips. The
-// country border holds 2.5:1 across the whole span, and the faintest label
-// ink 5.9:1 on the brightest relief.
+// does; at 0.10 the coast holds 2.81:1 on the brightest slope, still over
+// the country border's 2.5:1 there. Roads no longer see the slope at all --
+// they are drawn on a strip of LAND, see ROAD_CASING_WIDTH -- and the
+// faintest label ink holds 5.9:1 on the brightest relief.
 //
 // ATTRIBUTION IS A CONDITION OF USE: the 3DEP, GMTED2010 and SRTM data is
 // courtesy of the U.S. Geological Survey. See MAP_CREDIT.
@@ -513,6 +513,26 @@ const ROAD_TIERS: RoadTier[] = [
     color: 'rgba(255,255,255,0.30)', width: [[5, 0.5], [10, 1.4], [14, 3.0], [18, 6]] },
 ];
 
+// ── THE CASING: A STRIP OF LAND UNDER EVERY ROAD ────────────────────────────
+//
+// THE RELIEF WAS DROWNING THE ROADS, WITHOUT DARKENING THEM. It draws first,
+// underneath, so it never touches a road's own pixels; what it does is surround
+// them with texture. Its lit and shaded faces meet at up to 1.17:1, a tertiary
+// road is 1.30-1.42:1 and a minor one 1.13-1.21:1 depending on the slope under
+// it, and mountain roads run along the very ridges and valleys that texture
+// outlines. The road was on the screen and lost in it.
+//
+// SO EACH ROAD SITS ON A STRIP OF LAND, 1.5px wider than itself -- 0.75px each
+// side, a little over two device pixels on this screen. On flat ground the
+// strip is LAND on LAND and cannot be seen. Over relief it cuts a clean channel,
+// and the road inside reads at exactly the figures in the ramp above, which
+// were measured on LAND, whatever the slope does.
+//
+// UNDER THE WATER FILL, so a bridge or a causeway keeps its road and loses its
+// strip -- a band of land drawn across a river would read as land. And off at
+// z13 with the relief, where there is no relief left to cut through.
+const ROAD_CASING_WIDTH = 1.5;
+
 // ROAD NAMES ARE A CLOSE-ZOOM LUXURY. Below this the labels collide with each
 // other and with the city names, and a street name on a map of a country tells
 // nobody anything.
@@ -869,6 +889,31 @@ const STYLE = {
           2, 0.6, 10, 0.45, 11, 0.45, 13, 0],
       },
     },
+    // ── THE ROAD CASINGS, OVER THE RELIEF AND UNDER THE WATER ─────────────────
+    //
+    // ALL OF THEM BEFORE ANY ROAD, so no casing can ever cut through a road of
+    // another class where they cross. Each follows its road's own minzoom and
+    // fade, so a strip never appears before the road it is for. See
+    // ROAD_CASING_WIDTH.
+    //
+    // NO CASING FOR A CLASS THAT ONLY STARTS AT z13. Minor roads appear there,
+    // where the relief is already gone.
+    ...ROAD_TIERS.filter((t) => t.minzoom < 13).map((t) => ({
+      id: `${t.id}-casing`,
+      type: 'line',
+      source: 'ofm',
+      'source-layer': 'transportation',
+      minzoom: t.minzoom,
+      maxzoom: 13,
+      filter: ['in', ['get', 'class'], ['literal', t.classes]],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': LAND,
+        'line-width': roadWidth(t.width.map(([z, w]): [number, number] => [z, w + ROAD_CASING_WIDTH])),
+        'line-opacity': ['interpolate', ['linear'], ['zoom'],
+          t.minzoom, 0, t.minzoom + 1, 1],
+      },
+    })),
     {
       id: 'water',
       type: 'fill',
