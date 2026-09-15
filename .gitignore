@@ -2,6 +2,11 @@
 .env
 .env.*
 !.env.example
+# A key pasted into a file to feed `gcloud secrets create --data-file`. The
+# Dockerfile ends with `COPY . .`, so a key left here does not merely risk a
+# commit -- it ships inside the image.
+key.txt
+*.key
 
 # Python
 __pycache__/

@@ -3,4 +3,7 @@ __pycache__
 *.pyc
 *.pyo
 .env
+# See .gitignore: COPY . . would otherwise bake a key file into the image.
+key.txt
+*.key
 .git
