@@ -98,37 +98,43 @@ const SPACE = PAGE_BG;
 const COAST_LINE = '#616161';
 // ── THE RELIEF: TEXTURE ON THE LAND, NOT A TONE ─────────────────────────────
 //
-// ELEVATION FROM AWS OPEN DATA, Mapzen's terrarium tiles: PNGs whose red,
-// green and blue channels spell out metres, 256px, the whole planet to z15.
-// The encoding is set explicitly because MapLibre assumes `mapbox` for a
-// raster-dem source, and a terrarium tile decoded as mapbox is a map of
-// nonsense heights rather than an error.
+// ELEVATION FROM MAPTERHORN: terrarium-encoded WebP tiles, 512px, whose red,
+// green and blue channels spell out metres. The global layer is Copernicus
+// GLO-30, about 30 m a sample. The encoding is set explicitly because MapLibre
+// assumes `mapbox` for a raster-dem source, and a terrarium tile decoded as
+// mapbox is a map of nonsense heights rather than an error.
 //
-// CAPPED AT z12. SRTM is about 30 m a sample; a 256px tile at z12 is about
-// 36 m a pixel at the equator, so z12 is where the tiles stop carrying new
-// ground and start carrying upsampled pixels.
+// MAPTERHORN RATHER THAN AWS OPEN DATA, AND THE REASON IS THE WIRE. The S3
+// bucket answers over HTTP/1.1 only, from Virginia, with no CDN: six
+// connections, each a ~0.6 s TLS handshake away, and on a cold view of Delhi
+// 19 tiles queued a median 1.3 s behind one another before they were even
+// sent. A zoom-in cancelled 44 of 52 in flight, and on HTTP/1.1 a cancelled
+// request takes its connection with it. Mapterhorn is Cloudflare over HTTP/2
+// from the Mumbai edge with a seven-day cache: 8 tiles on the same view,
+// queued a median 0.15 s, relief complete in 1.4 s against 3.3 s. Measured
+// from a desktop in India over three runs each, so the shape is sound and the
+// exact seconds are this connection's.
+//
+// 512 IS THE SIZE THESE TILES ARE, and tileSize must say so. A 512 tile is
+// fetched at the display zoom rather than one above it, so it takes a quarter
+// of the requests the 256px PNGs did for the same number of samples on screen.
+//
+// CAPPED AT z12. Mapterhorn's planet archive runs to z12, where a 512px tile
+// is about 38 m a pixel at the equator -- the data's own resolution. Above it
+// there are only national extracts, none of them over India.
 //
 // AND THE LAYER GOES OFF AT z13, because past the cap the relief is a blur.
 // MapLibre shades each tile once, into a texture the size of the tile's own
-// pixels -- 256 across -- and then draws that texture however large the tile
-// is on screen. At the ideal zoom that is 256 CSS pixels, already three times
-// upscaled on this screen; a z12 tile drawn at display z13 covers 1024, at
-// z14 2048, and the shading smears into soft mottling behind crisp roads.
-// The same smear is what shows for a moment on every zoom in, while the
-// parent tile stands in for a child that has not arrived. Fading the
-// exaggeration to nothing over z11-z13 and cutting the layer at 13 removes
-// the permanent case -- and, because a source with no visible layer is not
-// fetched, removes the elevation requests at the city zooms as well. The
-// depth layer on the same source is cut at the same zoom -- see DEPTH_ABYSS.
-//
-// 256 IS THE SIZE THE PNGS ARE. Declaring tileSize 512 would quarter the
-// request count at every zoom by fetching one level coarser and stretching
-// each tile over twice the screen -- the blur above, everywhere, to save
-// about a third of a megabyte a view. Not taken.
+// pixels -- 512 across -- and then draws that texture however large the tile
+// is on screen: 512 CSS pixels at display z12, 1024 at z13, 2048 at z14, and
+// the shading smears into soft mottling behind crisp roads. Fading the
+// exaggeration to nothing over z11-z13 and cutting the layer at RELIEF_OFF
+// ends it before the stretch shows -- and, because a source with no visible
+// layer is not fetched, there are no elevation requests at the city zooms.
 //
 // BELOW THE SEA, deliberately. The layer sits on the land background and under
-// the water fill, so bathymetry never textures the ocean and the shore is
-// still drawn by COAST_LINE, not by a change in shading.
+// the water fill, so the sea is never shaded and the shore is still drawn by
+// COAST_LINE, not by a change in shading.
 //
 // EACH COLOUR'S ALPHA IS THE MOST IT CAN EVER DO, because MapLibre multiplies
 // all three by a slope factor that tops out at 1. Worst cases on LAND, with
@@ -145,19 +151,27 @@ const COAST_LINE = '#616161';
 // they are drawn on a strip of LAND, see ROAD_CASING_WIDTH -- and the
 // faintest label ink holds 5.9:1 on the brightest relief.
 //
-// ATTRIBUTION IS A CONDITION OF USE: the 3DEP, GMTED2010 and SRTM data is
-// courtesy of the U.S. Geological Survey. See MAP_CREDIT.
-const DEM_TILES = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
-const DEM_MAXZOOM = 12;
+// ATTRIBUTION: (c) Mapterhorn, whose attribution page carries the Copernicus
+// credit for GLO-30. See MAP_CREDIT.
+const RELIEF_TILES = 'https://tiles.mapterhorn.com/{z}/{x}/{y}.webp';
+const RELIEF_MAXZOOM = 12;
+// The zoom both elevation layers switch off at, and the road casings with them.
+const RELIEF_OFF = 13;
 const RELIEF_SHADOW = 'rgba(0,0,0,0.60)';
 const RELIEF_HIGHLIGHT = 'rgba(140,140,140,0.10)';
 const RELIEF_ACCENT = 'rgba(0,0,0,0.35)';
-// ── THE SEA'S DEPTH, FROM THE SAME TILES ────────────────────────────────────
+// ── THE SEA'S DEPTH, FROM ITS OWN TILES ─────────────────────────────────────
 //
-// THE ELEVATION TILES ALREADY CARRY THE OCEAN FLOOR. Below the shoreline the
-// terrarium data is ETOPO1 bathymetry -- a z3 tile over the Indian Ocean
-// bottoms out at -5,539 m -- so depth costs no new source and no new request;
-// the relief layer has already paid for these tiles.
+// MAPTERHORN HAS NO SEA FLOOR. Its open ocean is 0 m -- a z3 tile over the
+// Indian Ocean is 97.7% exactly zero -- so depth stays on the AWS Open Data
+// terrarium tiles, whose ocean is ETOPO1 bathymetry: the same z3 tile there
+// bottoms out at -5,539 m.
+//
+// CAPPED AT z4, WHICH IS WHAT MAKES S3 AFFORDABLE HERE. A handful of 256px
+// tiles covers the view at any zoom -- 4 requests on a cold view of Delhi,
+// and none at all on a zoom-in, because everything past z4 is those same
+// tiles stretched. That costs nothing a depth ramp can show: the shelf break
+// is a gradient over tens of kilometres, and a z4 pixel is about ten.
 //
 // THE SHALLOWS ARE LIFTED, AND THE DEEP IS WHERE THE SEA ALWAYS WAS. Darkening
 // the abyss below #08090b had no room: #050507 is one step off black. So the
@@ -191,15 +205,17 @@ const RELIEF_ACCENT = 'rgba(0,0,0,0.35)';
 // above sea level, so the ramp leaves them alone. Shallow water reads as
 // shallow water.
 //
-// ANTARCTICA IS THE ONE PLACE THIS IS WRONG. From tile z5 -- about display z4
-// -- the tiles give the bedrock under the ice sheets rather than the ice
-// surface: the Bentley Subglacial Trench reads 1,816 m at z4 and -1,842 m at
-// z5. Where that bedrock is below -200 m, the ice sheet darkens as if it were
-// sea, by up to #0e0e0e on land at the deepest basins. Nothing the style can
-// express separates land from sea for a raster layer, and both ways round it
-// cost more than they save: a second elevation source bounded clear of the
-// poles would fetch every tile twice, and cutting this layer at z4 would take
-// the depth off the home view, which opens at 4.5.
+// AND THE CAP IS WHAT KEEPS ANTARCTICA RIGHT. From tile z5 these tiles give
+// the bedrock under the ice sheets rather than the ice surface: the Bentley
+// Subglacial Trench reads 1,818 m at z4 and -1,842 m at z5, and this layer,
+// which cannot tell ice from sea, would darken the ice sheet wherever the rock
+// is below -200 m. At z4 and under, the tiles hold the surface. Do not raise
+// DEPTH_MAXZOOM past 4 without that in mind.
+//
+// ATTRIBUTION: the terrarium tiles are courtesy of the U.S. Geological Survey.
+// See MAP_CREDIT.
+const DEPTH_TILES = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const DEPTH_MAXZOOM = 4;
 const DEPTH_ABYSS = 'rgba(0,0,0,0.35)';
 // ── THE BORDERS, A STEP UNDER THE COAST ─────────────────────────────────────
 //
@@ -530,7 +546,7 @@ const ROAD_TIERS: RoadTier[] = [
 //
 // UNDER THE WATER FILL, so a bridge or a causeway keeps its road and loses its
 // strip -- a band of land drawn across a river would read as land. And off at
-// z13 with the relief, where there is no relief left to cut through.
+// RELIEF_OFF, where there is no relief left to cut through.
 const ROAD_CASING_WIDTH = 1.5;
 
 // ROAD NAMES ARE A CLOSE-ZOOM LUXURY. Below this the labels collide with each
@@ -810,13 +826,22 @@ const STYLE = {
   glyphs: OFM_GLYPHS,
   sources: {
     ofm: { type: 'vector', url: OFM_TILES },
-    // Elevation for the relief layer only; there is no terrain. See DEM_TILES.
-    dem: {
+    // Elevation for the relief layer only; the style sets no 3D terrain, and
+    // this source is not the terrain feature. See RELIEF_TILES.
+    terrain: {
       type: 'raster-dem',
-      tiles: [DEM_TILES],
+      tiles: [RELIEF_TILES],
+      encoding: 'terrarium',
+      tileSize: 512,
+      maxzoom: RELIEF_MAXZOOM,
+    },
+    // The sea floor, for the depth layer. See DEPTH_TILES.
+    bathymetry: {
+      type: 'raster-dem',
+      tiles: [DEPTH_TILES],
       encoding: 'terrarium',
       tileSize: 256,
-      maxzoom: DEM_MAXZOOM,
+      maxzoom: DEPTH_MAXZOOM,
     },
     airports: { type: 'geojson', data: '__AIRPORTS__' },
     // EMPTY UNTIL THERE IS A POSITION. Declaring it in the style rather than
@@ -872,21 +897,21 @@ const STYLE = {
     //
     // EXAGGERATION EASES OFF AS YOU ZOOM IN, THEN GOES TO NOTHING. At the
     // globe's own zooms a mountain range is a few pixels of slope and needs
-    // the push. From z11 the data is being stretched -- see DEM_MAXZOOM -- and
-    // the shading fades out over two zooms so the layer's cut at 13 is not a
-    // step. Exaggeration 0 is a complete fade: the shader scales the accent
+    // the push. Past RELIEF_MAXZOOM the data is being stretched, and the
+    // shading fades out over the two zooms before RELIEF_OFF so the cut is not
+    // a step. Exaggeration 0 is a complete fade: the shader scales the accent
     // by it as well as the shade.
     {
       id: 'relief',
       type: 'hillshade',
-      source: 'dem',
-      maxzoom: 13,
+      source: 'terrain',
+      maxzoom: RELIEF_OFF,
       paint: {
         'hillshade-shadow-color': RELIEF_SHADOW,
         'hillshade-highlight-color': RELIEF_HIGHLIGHT,
         'hillshade-accent-color': RELIEF_ACCENT,
         'hillshade-exaggeration': ['interpolate', ['linear'], ['zoom'],
-          2, 0.6, 10, 0.45, 11, 0.45, 13, 0],
+          2, 0.6, 10, 0.45, 11, 0.45, RELIEF_OFF, 0],
       },
     },
     // ── THE ROAD CASINGS, OVER THE RELIEF AND UNDER THE WATER ─────────────────
@@ -896,15 +921,15 @@ const STYLE = {
     // fade, so a strip never appears before the road it is for. See
     // ROAD_CASING_WIDTH.
     //
-    // NO CASING FOR A CLASS THAT ONLY STARTS AT z13. Minor roads appear there,
-    // where the relief is already gone.
-    ...ROAD_TIERS.filter((t) => t.minzoom < 13).map((t) => ({
+    // NO CASING FOR A CLASS THAT ONLY STARTS AT RELIEF_OFF. Minor roads appear
+    // at 13, where the relief is already gone.
+    ...ROAD_TIERS.filter((t) => t.minzoom < RELIEF_OFF).map((t) => ({
       id: `${t.id}-casing`,
       type: 'line',
       source: 'ofm',
       'source-layer': 'transportation',
       minzoom: t.minzoom,
-      maxzoom: 13,
+      maxzoom: RELIEF_OFF,
       filter: ['in', ['get', 'class'], ['literal', t.classes]],
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
@@ -923,7 +948,7 @@ const STYLE = {
     },
     // ── THE DEPTH, OVER THE SEA AND UNDER THE COAST ───────────────────────────
     //
-    // A color-relief LAYER ON THE ELEVATION SOURCE, directly over the water
+    // A color-relief LAYER ON THE BATHYMETRY SOURCE, directly over the water
     // fill, so it takes the SHELF fill back down to #08090b offshore and touches
     // nothing drawn on top of it. See DEPTH_ABYSS for the ramp and the one
     // place it misreads.
@@ -931,20 +956,19 @@ const STYLE = {
     // PAST z13 ALL WATER IS SHELF. That is the right reading at the zooms where
     // the layer is off: a harbour, a river, a lake.
     //
-    // OFF AT z13 LIKE THE RELIEF, and faded over the same two zooms, for the
-    // same reason: past the elevation tiles' z12 cap it is stretched data, and
-    // with both layers hidden the elevation source is not fetched at all at the
-    // city zooms. Leaving this one on would bring every elevation request back.
+    // OFF AT RELIEF_OFF LIKE THE RELIEF, and faded over the same two zooms. By
+    // then a z4 pixel of sea floor is hundreds of screen pixels across, and at
+    // a harbour's zoom SHELF is the honest reading anyway.
     {
       id: 'depth',
       type: 'color-relief',
-      source: 'dem',
-      maxzoom: 13,
+      source: 'bathymetry',
+      maxzoom: RELIEF_OFF,
       paint: {
         'color-relief-color': ['interpolate', ['linear'], ['elevation'],
           -4000, DEPTH_ABYSS,
           -200, 'rgba(0,0,0,0)'],
-        'color-relief-opacity': ['interpolate', ['linear'], ['zoom'], 11, 1, 13, 0],
+        'color-relief-opacity': ['interpolate', ['linear'], ['zoom'], 11, 1, RELIEF_OFF, 0],
       },
     },
     // ── THE COASTLINE: THE WATER POLYGONS' OWN EDGE, 1px ─────────────────────
@@ -1732,23 +1756,23 @@ function start() {
   // between "the style is wrong" and "the tiles will not come". sourceId is set
   // for tile and geojson failures and absent for style and runtime ones.
   //
-  // THE ELEVATION TILES ARE COUNTED APART. They come from S3, not OpenFreeMap,
-  // and the relief is texture: an S3 outage leaves a complete map without it.
-  // Sharing the count let three failed elevation tiles use up the reports an
-  // OpenFreeMap failure would need, and fired the OpenFreeMap probes at a host
-  // that was fine. So they report under their own name, with their own cap, and
-  // probe nothing -- the status and URL a failed fetch carries are the whole
-  // diagnosis, and they go out with the message.
+  // THE ELEVATION TILES ARE COUNTED APART. They come from Mapterhorn and S3,
+  // not OpenFreeMap, and relief and depth are texture: an outage at either
+  // leaves a complete map without it. Sharing the count let three failed
+  // elevation tiles use up the reports an OpenFreeMap failure would need, and
+  // fired the OpenFreeMap probes at a host that was fine. So they report under
+  // their own name, with their own cap, and probe nothing -- the source, and
+  // the status and URL a failed fetch carries, are the whole diagnosis.
   var reported = 0;
   var reportedDem = 0;
   map.on('error', function (ev) {
     var m = (ev && ev.error && ev.error.message) ? ev.error.message : 'unknown';
-    if (ev && ev.sourceId === 'dem') {
+    if (ev && (ev.sourceId === 'terrain' || ev.sourceId === 'bathymetry')) {
       reportedDem = reportedDem + 1;
       if (reportedDem > 3) return;
       if (ev.error && ev.error.status) m = m + ' [http ' + ev.error.status + ']';
       if (ev.error && ev.error.url) m = m + ' [url ' + ev.error.url + ']';
-      err('elevation', m);
+      err('elevation:' + ev.sourceId, m);
       return;
     }
     var where = (ev && ev.sourceId) ? ('source:' + ev.sourceId) : STAGE;
@@ -3130,11 +3154,13 @@ export default GlobeMap;
 
 // ── THE CREDIT LINE ─────────────────────────────────────────────────────────
 //
-// THREE SOURCES AND FOUR NAMES. OpenFreeMap serves the tiles and asks, in its
+// FOUR SOURCES AND FIVE NAMES. OpenFreeMap serves the tiles and asks, in its
 // own TileJSON, for "OpenFreeMap (c) OpenMapTiles Data from OpenStreetMap":
 // OpenMapTiles is the schema the tiles are cut to and is licensed separately
-// from the data. OpenStreetMap is the data, under the ODbL. USGS is the
-// elevation under the relief -- see DEM_TILES.
+// from the data. OpenStreetMap is the data, under the ODbL. Mapterhorn is the
+// elevation under the relief, and asks for "(c) Mapterhorn" -- its attribution
+// page carries the credits for the data it is built from. USGS is the sea
+// floor under the depth. See RELIEF_TILES and DEPTH_TILES.
 //
 // BOTTOM RIGHT. The top of this screen belongs to the island, the consent strip
 // and the home button's column; the airport panel runs down the left. The only
@@ -3145,11 +3171,12 @@ export default GlobeMap;
 // which is the brightest lit slope of the relief (#1a1a1a):
 //
 //   0.51  ->  4.41:1   under
-//   0.52  ->  4.53:1   this      4.62:1 on flat land, 4.63:1 on the sea
+//   0.52  ->  4.53:1   this      4.62:1 on flat land, 4.63:1 on SHELF
 //
 // The halo is SPACE, so an arc or a map label passing under the words darkens
 // behind them rather than running through them.
-const MAP_CREDIT = 'OpenFreeMap \u00a9 OpenMapTiles \u00a9 OpenStreetMap \u00b7 USGS';
+const MAP_CREDIT =
+  'OpenFreeMap \u00a9 OpenMapTiles \u00a9 OpenStreetMap \u00b7 \u00a9 Mapterhorn \u00b7 USGS';
 const CREDIT_INK = 'rgba(226,226,226,0.52)';
 const CREDIT_GAP = 6;
 
