@@ -64,6 +64,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+import dispatch
 import fr24
 import pollstate
 import notify
@@ -766,7 +767,7 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None):
 
 # ── WHEN A FINISHED FLIGHT MAY BE FORGOTTEN ─────────────────────────────────
 
-def _drained(doc):
+def _drained(doc, now=None):
     """Has everything this flight had to say been sent, or given up on?
 
     A MESSAGE IS FINISHED WHEN ITS SLOT IS TERMINAL. dispatch writes sent_at on a
@@ -782,8 +783,29 @@ def _drained(doc):
     device had a token, or the pass has not run since the message was written --
     and deleting it would be deleting something nobody has been told. One of the
     live objects, QP1149, is in exactly that state with three unsent messages.
+
+    ── UNLESS IT IS TOO OLD FOR DISPATCH EVER TO SEND ─────────────────────────
+
+    AND THAT IS WHAT QP1149 ACTUALLY WAS. Its three messages had no slot because
+    its only watch carried no push token -- an install's first save was
+    registered before the permission prompt -- and dispatch only writes a slot,
+    even a stale-drop slot, for a device it can reach. So the messages were
+    never sent and never given up on, the flight never drained, and it sat DONE
+    until the date sweep deleted it days later with the messages still in it.
+    Holding it bought nothing: dispatch drops a message past its useful life
+    rather than sending it, so a slotless message that old will never be told to
+    anybody however long the object is kept.
+
+    SO A MESSAGE PAST dispatch's USEFUL LIFE IS NOT OWED, slot or no slot,
+    measured exactly as dispatch measures it -- from the later of when it was
+    written and when it became due. A message without a timestamp cannot be
+    judged, and is still owed.
+
+    AND THE DELIVERY RECORD'S SHAPE DOES NOT ENTER INTO IT. `sent` was created as
+    a list and dispatch writes a dict; either way a message with no slot has no
+    slot, and the answer is the same.
     """
-    return _undelivered(doc) == 0
+    return _undelivered(doc, now) == 0
 
 
 def _undelivered(doc, now=None):
@@ -792,15 +814,19 @@ def _undelivered(doc, now=None):
     A COUNT RATHER THAN A YES OR NO because the orphan sweep deletes objects
     regardless, and what it has to say in the log is how much went with them.
     """
+    now = now or _now()
     ns = (doc or {}).get("notify") or {}
     outbox = ns.get("outbox") or []
     if not outbox:
         return 0
     slots = (doc or {}).get("sent")
-    # A LIST HOLDS NO SLOTS, as dispatch._slots reads it.
+    # A LIST IS AN EMPTY RECORD, as dispatch._slots reads it. See _drained.
     slots = slots if isinstance(slots, dict) else {}
     owed = 0
     for msg in outbox:
+        age = dispatch._age(msg, now)
+        if age is not None and age > dispatch._useful_life(msg.get("kind")):
+            continue
         key = msg.get("key")
         mine = [s for sid, s in slots.items()
                 if isinstance(s, dict) and sid.split("|", 1)[0] == key]
@@ -816,7 +842,7 @@ def _deletable(doc, now):
     stamped = _parse(doc.get("done_at"))
     if stamped is None or now - stamped < DELETE_AFTER_DONE:
         return False
-    return _drained(doc)
+    return _drained(doc, now)
 
 
 def _stamp_done(now):

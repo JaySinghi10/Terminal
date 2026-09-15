@@ -294,7 +294,7 @@ check("and sees the gate move",
 
 doc, _ = pollstate.read_state("6E5071", "2026-09-07")
 check("the change is on the ledger", len(doc["pending"]) == 1, doc["pending"])
-check("nothing has been sent", doc["sent"] == [], doc["sent"])
+check("nothing has been sent", doc["sent"] == {}, doc["sent"])
 check("the DTO was stored whole", doc["dto"]["departure"]["gate"] == "B4")
 
 print()
@@ -856,6 +856,61 @@ put(done_state(done_at=iso(NOW - timedelta(days=3)),
 poller.poll_one("AI999", "2026-09-07", now=NOW)
 doc, _ = pollstate.read_state("AI999", "2026-09-07")
 check("a message given up on counts as drained", doc is None, doc)
+
+print()
+print("-- a message nobody can ever be sent does not hold a finished flight --")
+
+# ── QP1149, AS IT WAS STORED ────────────────────────────────────────────────
+#
+# DONE, three messages, NO SLOT FOR ANY OF THEM, and `sent` still the empty list
+# blank_state used to write. Its only watch carried no push token, so dispatch --
+# which writes a slot only for a device it can reach -- never touched it. The
+# flight never drained, and the date sweep deleted it days later with the three
+# messages still in it. Dispatch drops a message past its useful life rather than
+# sending it, so those three could never have been sent however long it waited.
+DAYS_OLD = iso(NOW - timedelta(days=3))
+QP_OUTBOX = [
+    {"key": "gate:1", "kind": notify.GATE, "at": DAYS_OLD},
+    {"key": "delay:1", "kind": notify.DELAY, "at": DAYS_OLD},
+    {"key": "belt:1", "kind": notify.BELT, "at": DAYS_OLD},
+]
+
+
+def qp_state(outbox, sent):
+    return done_state(done_at=iso(NOW - timedelta(hours=27)),
+                      notify={"outbox": outbox, "keys": [m["key"] for m in outbox]},
+                      sent=sent)
+
+
+put(qp_state(QP_OUTBOX, []))
+r = poller.poll_one("AI999", "2026-09-07", now=NOW)
+doc, _ = pollstate.read_state("AI999", "2026-09-07")
+check("a DONE flight whose slotless messages are all past their useful life is deleted",
+      doc is None and r.get("deleted") is True, (doc, r))
+
+# ONE MESSAGE STILL YOUNG ENOUGH TO SEND HOLDS IT. Ten minutes old is inside
+# every kind's useful life, so dispatch could still deliver it.
+fresh = QP_OUTBOX[:2] + [{"key": "belt:1", "kind": notify.BELT,
+                          "at": iso(NOW - timedelta(minutes=10))}]
+put(qp_state(fresh, []))
+poller.poll_one("AI999", "2026-09-07", now=NOW)
+doc, _ = pollstate.read_state("AI999", "2026-09-07")
+check("the same flight with one message still young enough to send is kept",
+      doc is not None, doc)
+
+# THE SHAPE OF THE DELIVERY RECORD CHANGES NOTHING. A list and an empty dict are
+# both a record with no slots in it, for a stale outbox and a live one alike.
+for label, outbox in (("all stale", QP_OUTBOX), ("one still sendable", fresh)):
+    as_list = qp_state(outbox, [])
+    as_dict = qp_state(outbox, {})
+    check("`sent` as [] and as {} give the same answer (%s)" % label,
+          poller._undelivered(as_list, NOW) == poller._undelivered(as_dict, NOW)
+          and poller._drained(as_list, NOW) == poller._drained(as_dict, NOW),
+          (poller._undelivered(as_list, NOW), poller._undelivered(as_dict, NOW)))
+
+check("a new state object's delivery record is a dict",
+      isinstance(pollstate.blank_state("AI999", "2026-09-07")["sent"], dict),
+      pollstate.blank_state("AI999", "2026-09-07")["sent"])
 
 print()
 print("-- the sweep reaches what the poller cannot --")

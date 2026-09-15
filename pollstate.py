@@ -221,7 +221,13 @@ def blank_state(number, day):
         # WHAT CHANGED AND HAS NOT BEEN SENT. Dispatch does not exist; this
         # fills anyway. See the note at the top of the file.
         "pending": [],
-        "sent": [],
+        # THE DELIVERY RECORD, slot id -> slot, and a DICT FROM THE START. It was
+        # reserved as a list before dispatch existed, and dispatch -- its only
+        # writer -- has always stored a map. The list outlived that on every
+        # object dispatch never slotted, and every reader had to special-case it.
+        # Readers still accept a list: objects written before this change carry
+        # one until dispatch rewrites them.
+        "sent": {},
     }
 
 
