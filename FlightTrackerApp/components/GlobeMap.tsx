@@ -110,7 +110,8 @@ const COAST_LINE = '#616161';
 // parent tile stands in for a child that has not arrived. Fading the
 // exaggeration to nothing over z11-z13 and cutting the layer at 13 removes
 // the permanent case -- and, because a source with no visible layer is not
-// fetched, removes the elevation requests at the city zooms as well.
+// fetched, removes the elevation requests at the city zooms as well. The
+// depth layer on the same source is cut at the same zoom -- see DEPTH_ABYSS.
 //
 // 256 IS THE SIZE THE PNGS ARE. Declaring tileSize 512 would quarter the
 // request count at every zoom by fetching one level coarser and stretching
@@ -143,6 +144,40 @@ const DEM_MAXZOOM = 12;
 const RELIEF_SHADOW = 'rgba(0,0,0,0.60)';
 const RELIEF_HIGHLIGHT = 'rgba(140,140,140,0.10)';
 const RELIEF_ACCENT = 'rgba(0,0,0,0.35)';
+// ── THE SEA'S DEPTH, FROM THE SAME TILES ────────────────────────────────────
+//
+// THE ELEVATION TILES ALREADY CARRY THE OCEAN FLOOR. Below the shoreline the
+// terrarium data is ETOPO1 bathymetry -- a z3 tile over the Indian Ocean
+// bottoms out at -5,539 m -- so depth costs no new source and no new request;
+// the relief layer has already paid for these tiles.
+//
+// DARKER, NEVER LIGHTER. The shelf stays OCEAN: transparent from the shore
+// down to -200 m, which is roughly where continental shelves end. From there
+// the sea darkens to its full depth at -4,000 m, the abyssal plain, and
+// stays there below it. That is the one direction this map can add structure
+// in without lifting the ground.
+//
+//   shelf, 0 to -200 m     OCEAN #08090b            1.006:1 against the page
+//   abyss, -4,000 m        #050507                  1.029:1 against the page
+//
+// The globe stays rimless: the deep sea against space is 1.03:1. The coast is
+// at 0 m, where the depth is fully transparent, so it keeps its 3.22:1.
+//
+// BLACK AT AN ALPHA, NOT #050506 AS A COLOUR. MapLibre stores the ramp with
+// straight alpha and premultiplies on upload; a black stop is the same colour
+// either way, so the shelf cannot pick up a faint lift from a transparent stop
+// whose colour channels are not zero. 0.40 of black over OCEAN is #050507.
+//
+// ANTARCTICA IS THE ONE PLACE THIS IS WRONG. From tile z5 -- about display z4
+// -- the tiles give the bedrock under the ice sheets rather than the ice
+// surface: the Bentley Subglacial Trench reads 1,816 m at z4 and -1,842 m at
+// z5. Where that bedrock is below -200 m, the ice sheet darkens as if it were
+// sea, by up to #0e0e0e on land at the deepest basins. Nothing the style can
+// express separates land from sea for a raster layer, and both ways round it
+// cost more than they save: a second elevation source bounded clear of the
+// poles would fetch every tile twice, and cutting this layer at z4 would take
+// the depth off the home view, which opens at 4.5.
+const DEPTH_ABYSS = 'rgba(0,0,0,0.40)';
 // ── THE BORDERS, A STEP UNDER THE COAST ─────────────────────────────────────
 //
 // Contrast on LAND, where both are drawn (maritime lines are excluded):
@@ -817,6 +852,28 @@ const STYLE = {
       source: 'ofm',
       'source-layer': 'water',
       paint: { 'fill-color': OCEAN },
+    },
+    // ── THE DEPTH, OVER THE SEA AND UNDER THE COAST ───────────────────────────
+    //
+    // A color-relief LAYER ON THE ELEVATION SOURCE, directly over the water
+    // fill, so it darkens the fill and nothing drawn on top of it. See
+    // DEPTH_ABYSS for the ramp and the one place it misreads.
+    //
+    // OFF AT z13 LIKE THE RELIEF, and faded over the same two zooms, for the
+    // same reason: past the elevation tiles' z12 cap it is stretched data, and
+    // with both layers hidden the elevation source is not fetched at all at the
+    // city zooms. Leaving this one on would bring every elevation request back.
+    {
+      id: 'depth',
+      type: 'color-relief',
+      source: 'dem',
+      maxzoom: 13,
+      paint: {
+        'color-relief-color': ['interpolate', ['linear'], ['elevation'],
+          -4000, DEPTH_ABYSS,
+          -200, 'rgba(0,0,0,0)'],
+        'color-relief-opacity': ['interpolate', ['linear'], ['zoom'], 11, 1, 13, 0],
+      },
     },
     // ── THE COASTLINE: THE WATER POLYGONS' OWN EDGE, 1px ─────────────────────
     //
