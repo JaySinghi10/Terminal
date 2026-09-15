@@ -783,20 +783,30 @@ def _drained(doc):
     and deleting it would be deleting something nobody has been told. One of the
     live objects, QP1149, is in exactly that state with three unsent messages.
     """
+    return _undelivered(doc) == 0
+
+
+def _undelivered(doc, now=None):
+    """How many outbox messages are still owed to somebody. See _drained.
+
+    A COUNT RATHER THAN A YES OR NO because the orphan sweep deletes objects
+    regardless, and what it has to say in the log is how much went with them.
+    """
     ns = (doc or {}).get("notify") or {}
     outbox = ns.get("outbox") or []
     if not outbox:
-        return True
+        return 0
     slots = (doc or {}).get("sent")
-    if not isinstance(slots, dict):
-        return False
+    # A LIST HOLDS NO SLOTS, as dispatch._slots reads it.
+    slots = slots if isinstance(slots, dict) else {}
+    owed = 0
     for msg in outbox:
         key = msg.get("key")
         mine = [s for sid, s in slots.items()
                 if isinstance(s, dict) and sid.split("|", 1)[0] == key]
         if not mine or not all(s.get("sent_at") or s.get("gave_up") for s in mine):
-            return False
-    return True
+            owed += 1
+    return owed
 
 
 def _deletable(doc, now):
@@ -885,7 +895,23 @@ def run_once(now=None):
     #
     # AFTER THE FLIGHTS, so a pass that deletes a flight's state on the tier
     # rule does not then list it again in the same breath.
-    swept = pollstate.sweep_state(SWEEP_STATE_AFTER_DAYS, now=now)
+    #
+    # AND WITH THE WATCH LIST THIS PASS READ, which is what lets the same listing
+    # take an object no watch points at and nothing has written for a day -- see
+    # pollstate.sweep. THE SAME READ AS THE FLIGHTS ABOVE: this line is only
+    # reached when the store could be read, so an unreadable store never gets as
+    # far as deciding that nobody is watching.
+    #
+    # WHY DELETE_AFTER_DONE AND NOT A NEW NUMBER. It is the same question -- how
+    # long before an object nobody is working on may go -- and 26 hours already
+    # outlasts dispatch's 24-hour receipt window. It is also what keeps a re-save
+    # safe: a flight unsaved and saved again inside a day keeps the record of what
+    # it was already told, so nothing is said twice.
+    watched_keys = {(f["flight_number"], f["flight_date"]) for f in flights}
+    sweep = pollstate.sweep(SWEEP_STATE_AFTER_DAYS, now=now, watched=watched_keys,
+                            idle_after=DELETE_AFTER_DONE,
+                            undelivered=lambda doc: _undelivered(doc, now))
+    swept = sweep["dated"]
 
     tiers = {}
     for r in records:
@@ -907,11 +933,15 @@ def run_once(now=None):
         "adb_calls": spend["adb"],
         "fr24_calls": spend["fr24"],
         "flights_changed": changed,
-        # WHAT WAS FORGOTTEN THIS PASS. Both numbers, because they answer
-        # different questions: `deleted` is flights that finished cleanly and
-        # `swept` is objects nothing was watching any more.
+        # WHAT WAS FORGOTTEN THIS PASS. Three numbers, because they answer
+        # different questions: `deleted` is flights that finished cleanly,
+        # `swept` is objects past the date bound, and `orphans_swept` is objects
+        # no watch pointed at and nothing had written for a day -- with how many
+        # messages they still owed, which should almost always be zero.
         "deleted": sum(1 for r in records if r.get("deleted")),
         "swept": swept,
+        "orphans_swept": sweep["orphaned"],
+        "orphans_undelivered": sweep["undelivered"],
         "budget": budget,
         "unresolved": [{"flight": n, "date": d, "misses": m}
                        for n, d, m in stale],
@@ -924,9 +954,10 @@ def run_once(now=None):
         "notifications": [{"flight": r["flight"], "date": r["date"], "kinds": r["notifications"]}
                           for r in records if r.get("notifications")],
     }
-    logger.info("poll: %d flights, %d adb, %d fr24, %d changed, %d deleted, %d swept",
+    logger.info("poll: %d flights, %d adb, %d fr24, %d changed, %d deleted, %d swept, "
+                "%d orphans swept",
                 out["flights"], out["adb_calls"], out["fr24_calls"], changed,
-                out["deleted"], out["swept"])
+                out["deleted"], out["swept"], out["orphans_swept"])
     return out
 
 

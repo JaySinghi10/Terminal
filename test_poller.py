@@ -888,5 +888,95 @@ check("the bound reads the date out of the key, not updated_at",
       pollstate.sweep_state(500, now=NOW) == 0)
 
 print()
+print("-- an unwatched object nobody writes to goes, whatever its date --")
+
+# ── THE ORPHAN THE DATE RULE CANNOT REACH ──────────────────────────────────
+#
+# AN UNSAVE BEFORE THE FLIGHT leaves a state object that no watch points at and
+# that nothing will write again -- and its date is weeks away, so the date rule
+# above waits weeks. Four live objects were exactly this, holding provider
+# records six days old and due to be kept for up to eight weeks. These pin the
+# rule that takes them: no watch row, and unwritten for DELETE_AFTER_DONE.
+FUTURE = "2026-10-14"
+
+
+def put_idle(num, day, idle, **over):
+    """A state object whose last write was `idle` ago. write_state stamps the
+    wall clock, so the stamp is set afterwards -- which is what GCS's `updated`
+    would say about an object nothing had touched for that long."""
+    st = pollstate.blank_state(num, day)
+    st.update(over)
+    pollstate.write_state(num, day, st, None)
+    pollstate._local_state[pollstate.state_key(num, day)]["updated_at"] = iso(NOW - idle)
+
+
+pollstate.forget_local()
+put_idle("UA83", FUTURE, timedelta(hours=27))
+put_idle("BA138", FUTURE, timedelta(hours=25))
+poller.store.watched_flights = lambda: []
+out = poller.run_once(now=NOW)
+gone, _ = pollstate.read_state("UA83", FUTURE)
+kept, _ = pollstate.read_state("BA138", FUTURE)
+check("an orphan with no watch, unwritten for more than 26 hours, is deleted",
+      gone is None, gone)
+check("one unwritten for less than 26 hours is kept", kept is not None, kept)
+check("the pass counts it apart from the date rule",
+      out.get("orphans_swept") == 1 and out.get("swept") == 0,
+      (out.get("orphans_swept"), out.get("swept")))
+
+# A LIVE WATCH IS NEVER AN ORPHAN, HOWEVER LONG SINCE ANYTHING WROTE. Asked of
+# the sweep directly, because a full pass would poll the watched flight and
+# rewrite it, and the test would pass for the wrong reason.
+pollstate.forget_local()
+put_idle("AI191", FUTURE, timedelta(days=400))
+res = pollstate.sweep(poller.SWEEP_STATE_AFTER_DAYS, now=NOW,
+                      watched={("AI191", FUTURE)},
+                      idle_after=poller.DELETE_AFTER_DONE,
+                      undelivered=poller._undelivered)
+still, _ = pollstate.read_state("AI191", FUTURE)
+check("an object with a live watch is kept however long it has sat unwritten",
+      still is not None and res["orphaned"] == 0, (still, res))
+# And through a whole pass, with the watch row the pass itself reads.
+poller.store.watched_flights = lambda: [
+    {"flight_number": "AI191", "flight_date": FUTURE, "devices": [{}]}]
+poller.run_once(now=NOW)
+still, _ = pollstate.read_state("AI191", FUTURE)
+check("and a whole pass that reads that watch keeps it too", still is not None, still)
+
+# AN UNREADABLE WATCH STORE IS NOT AN EMPTY ONE. If it read as nobody watching,
+# every object would be an orphan; the pass stops before the sweep instead, so
+# neither rule runs -- not the orphan rule, and not the date rule either.
+pollstate.forget_local()
+put_idle("UA1729", FUTURE, timedelta(days=30))
+ancient = (NOW - timedelta(days=30)).strftime("%Y-%m-%d")
+put_idle("ZZ333", ancient, timedelta(days=30))
+poller.store.watched_flights = lambda: None
+bad = poller.run_once(now=NOW)
+orphan_kept, _ = pollstate.read_state("UA1729", FUTURE)
+dated_kept, _ = pollstate.read_state("ZZ333", ancient)
+check("an unreadable watch store skips the sweep entirely",
+      bad.get("ok") is False and orphan_kept is not None and dated_kept is not None,
+      (bad, orphan_kept, dated_kept))
+# And the sweep itself, told nothing about watches, leaves orphans alone.
+res = pollstate.sweep(poller.SWEEP_STATE_AFTER_DAYS, now=NOW)
+orphan_kept, _ = pollstate.read_state("UA1729", FUTURE)
+check("the sweep without a watch set never applies the orphan rule",
+      orphan_kept is not None and res["orphaned"] == 0, res)
+
+# WHAT WENT WITH IT IS COUNTED. One message sent, one never reached: the count
+# is one, and it is what the log line reports on deletion.
+pollstate.forget_local()
+put_idle("QP1149", FUTURE, timedelta(hours=30),
+         notify={"outbox": [{"key": "gate:1", "kind": "gate"}, {"key": "belt:1", "kind": "belt"}],
+                 "keys": ["gate:1", "belt:1"]},
+         sent={"gate:1|dev-a": {"sent_at": iso(NOW - timedelta(hours=31))}})
+poller.store.watched_flights = lambda: []
+out = poller.run_once(now=NOW)
+gone, _ = pollstate.read_state("QP1149", FUTURE)
+check("an orphan still owing messages is deleted, and the count says how many",
+      gone is None and out.get("orphans_swept") == 1 and out.get("orphans_undelivered") == 1,
+      (gone, out.get("orphans_swept"), out.get("orphans_undelivered")))
+
+print()
 print("PASSED: %d   FAILURES: %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

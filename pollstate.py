@@ -261,52 +261,158 @@ def delete_state(number, day):
 # AN UNPARSEABLE KEY IS LEFT ALONE. Something not written by state_key is
 # something this function did not put there and does not understand, and deleting
 # by a rule it does not fit is how a sweep takes out the wrong object.
-def sweep_state(older_than_days, now=None):
-    """Delete every state object whose flight date is older than the bound.
+#
+# ── AND THE ORPHAN NOBODY WILL VISIT, WHATEVER ITS DATE ─────────────────────
+#
+# THE DATE RULE CANNOT REACH A FLIGHT THAT HAS NOT HAPPENED YET. A watch removed
+# by an unsave or a dead push token before its flight leaves an object that
+# neither the poller nor dispatch will ever read again -- and the date rule waits
+# for that date plus five days. MEASURED: four such objects in the live bucket,
+# all saved and unsaved within twelve minutes on 9 September, holding provider
+# records that would have been kept for between three weeks and eight: well past
+# the seven days the provider's terms allow from 7 November.
+#
+# SO AN OBJECT WITH NO WATCH ROW THAT NOTHING HAS WRITTEN FOR `idle_after` GOES
+# TOO. The write time is the right clock here, where the date is the right clock
+# above: an object that is still being written is an object something is still
+# working on, and one that is not has been abandoned. The caller sets the bound;
+# the poller uses DELETE_AFTER_DONE, which already outlasts dispatch's receipts.
+#
+# ONLY WHEN THE CALLER KNOWS WHO IS WATCHING. `watched` None means "not told",
+# and the orphan rule does not run at all -- an unreadable watch store must never
+# read as "nobody is watching anything", or every object would qualify.
+#
+# THE WRITE TIME COMES FROM THE LISTING, not from the object. GCS returns each
+# blob's `updated` with the list, so deciding costs nothing more than the listing
+# the date rule already makes. Only an object about to be deleted is read, and
+# only to count what it still had to say.
+def sweep(older_than_days, now=None, watched=None, idle_after=None, undelivered=None):
+    """Delete expired and abandoned state objects in one listing.
 
-    Returns the number removed. Never raises: a sweep that cannot list is a
-    sweep that does nothing, and it must not take the poll down with it.
+    older_than_days  the date rule: flight date further back than this goes.
+    watched          a set of (NUMBER, date) with a live watch, or None to skip
+                     the orphan rule entirely.
+    idle_after       timedelta: an unwatched object not written for this long goes.
+    undelivered      fn(doc) -> int, messages still owed; logged on deletion.
+
+    Returns {"dated": n, "orphaned": n, "undelivered": n}. Never raises: a sweep
+    that cannot list is a sweep that does nothing, and it must not take the poll
+    down with it.
     """
     now = now or _now()
     cutoff = (now - timedelta(days=older_than_days)).date()
+    orphan_rule = watched is not None and idle_after is not None
+    out = {"dated": 0, "orphaned": 0, "undelivered": 0}
 
-    def expired(key):
-        m = re.match(r"^state/[^/]+/(\d{4}-\d{2}-\d{2})\.json$", key)
+    def parts(key):
+        m = re.match(r"^state/([^/]+)/(\d{4}-\d{2}-\d{2})\.json$", key)
         if m is None:
-            return False
+            return None
         try:
-            return datetime.strptime(m.group(1), "%Y-%m-%d").date() < cutoff
+            return m.group(1), datetime.strptime(m.group(2), "%Y-%m-%d").date()
         except ValueError:
+            return None
+
+    def abandoned(number, day, written):
+        if not orphan_rule or (number, day.isoformat()) in watched:
             return False
+        # AN UNKNOWN WRITE TIME IS NOT PROOF OF ABANDONMENT. Kept, and left to
+        # the date rule, rather than deleted on a guess.
+        return written is not None and now - written >= idle_after
+
+    def owed(doc):
+        if undelivered is None or doc is None:
+            return 0
+        try:
+            return int(undelivered(doc) or 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def note_orphan(key, written, count):
+        out["orphaned"] += 1
+        out["undelivered"] += count
+        idle_h = (now - written).total_seconds() / 3600
+        if count:
+            logger.warning("pollstate: swept orphan %s, unwritten for %.1fh, with %d "
+                           "undelivered message(s)", key, idle_h, count)
+        else:
+            logger.info("pollstate: swept orphan %s, unwritten for %.1fh", key, idle_h)
 
     bucket = _bucket()
     if bucket is None:
-        # THE SAME RULE OVER THE IN-PROCESS FALLBACK, so this is testable with no
-        # bucket at all -- which is the only way the poller's tests run.
-        doomed = [k for k in list(_local_state) if expired(k)]
-        for k in doomed:
-            _local_state.pop(k, None)
-        return len(doomed)
+        # THE SAME RULES OVER THE IN-PROCESS FALLBACK, so this is testable with no
+        # bucket at all -- which is the only way the poller's tests run. The write
+        # time is the one write_state stamped, which is what `updated` is in GCS.
+        for key in list(_local_state):
+            got = parts(key)
+            if got is None:
+                continue
+            number, day = got
+            doc = _local_state.get(key)
+            if day < cutoff:
+                _local_state.pop(key, None)
+                out["dated"] += 1
+                continue
+            written = _parse_instant_or_none(str((doc or {}).get("updated_at") or "").encode())
+            if abandoned(number, day, written):
+                count = owed(doc)
+                _local_state.pop(key, None)
+                note_orphan(key, written, count)
+        return out
 
-    removed = 0
     try:
-        names = [b.name for b in bucket.list_blobs(prefix="state/")]
+        blobs = [(b.name, b.updated) for b in bucket.list_blobs(prefix="state/")]
     except gcs.errors().GoogleAPIError:
         logger.warning("pollstate: could not list state/ to sweep it")
-        return 0
-    for name in names:
-        if not expired(name):
+        return out
+    for name, updated in blobs:
+        got = parts(name)
+        if got is None:
             continue
+        number, day = got
+        if day < cutoff:
+            try:
+                bucket.blob(name).delete()
+                out["dated"] += 1
+            except gcs.errors().GoogleAPIError:
+                # One object that will not delete must not stop the rest.
+                logger.warning("pollstate: could not delete %s", name)
+            continue
+        written = updated if updated is None or updated.tzinfo else \
+            updated.replace(tzinfo=timezone.utc)
+        if not abandoned(number, day, written):
+            continue
+        doc = None
+        try:
+            doc = json.loads(bucket.blob(name).download_as_bytes().decode("utf-8"))
+        except gcs.errors().GoogleAPIError:
+            # A READ THAT FAILS IS A SWEEP THAT WAITS. The object is still
+            # abandoned next pass; deleting it unread would lose the count of
+            # what it still had to say, which is the one thing worth logging.
+            logger.warning("pollstate: could not read orphan %s; kept for now", name)
+            continue
+        except (ValueError, UnicodeDecodeError):
+            # Unreadable for good. Abandoned and corrupt is still abandoned.
+            doc = None
         try:
             bucket.blob(name).delete()
-            removed += 1
         except gcs.errors().GoogleAPIError:
-            # One object that will not delete must not stop the rest.
-            logger.warning("pollstate: could not delete %s", name)
-    if removed:
+            logger.warning("pollstate: could not delete orphan %s", name)
+            continue
+        note_orphan(name, written, owed(doc))
+    if out["dated"]:
         logger.info("pollstate: swept %d state object(s) older than %d days",
-                    removed, older_than_days)
-    return removed
+                    out["dated"], older_than_days)
+    return out
+
+
+def sweep_state(older_than_days, now=None):
+    """The date rule alone. Returns the number removed.
+
+    Kept for callers that have no watch store to hand, which is exactly the
+    case where the orphan rule must not run.
+    """
+    return sweep(older_than_days, now=now)["dated"]
 
 
 # ── THE FR24 RUNTIME, SHARED ACROSS INSTANCES ───────────────────────────────
