@@ -84,7 +84,9 @@ const SPACE = PAGE_BG;
 // A SOLID GREY RATHER THAN AN ALPHA, because this line straddles two grounds
 // and should be the same line on both. #616161 is 3.02:1 against the land and
 // 3.22:1 against the sea, at 1px -- crisp, and the brightest edge on the
-// ground, which is what the shape of a continent should be.
+// ground, which is what the shape of a continent should be. Nothing else on
+// the ground is allowed to reach it: the country border is a step under, see
+// COUNTRY_LINE.
 const COAST_LINE = '#616161';
 // ── THE RELIEF: TEXTURE ON THE LAND, NOT A TONE ─────────────────────────────
 //
@@ -96,8 +98,24 @@ const COAST_LINE = '#616161';
 //
 // CAPPED AT z12. SRTM is about 30 m a sample; a 256px tile at z12 is about
 // 36 m a pixel at the equator, so z12 is where the tiles stop carrying new
-// ground and start carrying upsampled pixels. Past it MapLibre overzooms the
-// z12 tile, which costs nothing and looks the same.
+// ground and start carrying upsampled pixels.
+//
+// AND THE LAYER GOES OFF AT z13, because past the cap the relief is a blur.
+// MapLibre shades each tile once, into a texture the size of the tile's own
+// pixels -- 256 across -- and then draws that texture however large the tile
+// is on screen. At the ideal zoom that is 256 CSS pixels, already three times
+// upscaled on this screen; a z12 tile drawn at display z13 covers 1024, at
+// z14 2048, and the shading smears into soft mottling behind crisp roads.
+// The same smear is what shows for a moment on every zoom in, while the
+// parent tile stands in for a child that has not arrived. Fading the
+// exaggeration to nothing over z11-z13 and cutting the layer at 13 removes
+// the permanent case -- and, because a source with no visible layer is not
+// fetched, removes the elevation requests at the city zooms as well.
+//
+// 256 IS THE SIZE THE PNGS ARE. Declaring tileSize 512 would quarter the
+// request count at every zoom by fetching one level coarser and stretching
+// each tile over twice the screen -- the blur above, everywhere, to save
+// about a third of a megabyte a view. Not taken.
 //
 // BELOW THE SEA, deliberately. The layer sits on the land background and under
 // the water fill, so bathymetry never textures the ocean and the shore is
@@ -115,7 +133,7 @@ const COAST_LINE = '#616161';
 // grey line loses contrast on lighter ground faster than a white-alpha line
 // does, so on a lit slope the motorway gains on the coast; at 0.10 the coast
 // is still ahead (2.81:1 against 2.73:1), and from 0.14 the order flips. The
-// country border holds 3.1:1 across the whole span, and the faintest label
+// country border holds 2.5:1 across the whole span, and the faintest label
 // ink 5.9:1 on the brightest relief.
 //
 // ATTRIBUTION IS A CONDITION OF USE: the 3DEP, GMTED2010 and SRTM data is
@@ -125,14 +143,18 @@ const DEM_MAXZOOM = 12;
 const RELIEF_SHADOW = 'rgba(0,0,0,0.60)';
 const RELIEF_HIGHLIGHT = 'rgba(140,140,140,0.10)';
 const RELIEF_ACCENT = 'rgba(0,0,0,0.35)';
-// ── THE BORDERS, HELD AT 3:1 ON THE DARK LAND ───────────────────────────────
+// ── THE BORDERS, A STEP UNDER THE COAST ─────────────────────────────────────
 //
 // Contrast on LAND, where both are drawn (maritime lines are excluded):
 //
-//   country   0.34  ->  3.12:1   level with the coast, a frontier as strong
-//                                as a shore
+//   country   0.28  ->  2.47:1   a clear step under the coast's 3.02:1, and
+//                                between the motorway and the trunk inks
 //   admin-1   0.10  ->  1.31:1   present, and still the quietest
-const COUNTRY_LINE = 'rgba(255,255,255,0.34)';
+//
+// THE COUNTRY LINE WAS 0.34, which is 3.12:1 -- over the coast, not level with
+// it, and with the coast the two outlines shouted together. One edge is the
+// strongest, and it is the shore.
+const COUNTRY_LINE = 'rgba(255,255,255,0.28)';
 const ADMIN1_LINE = 'rgba(255,255,255,0.10)';
 // The road inks are not here: they are a six-step ramp and belong beside the
 // hierarchy they express. See ROAD_TIERS.
@@ -770,18 +792,23 @@ const STYLE = {
     // paints over it at full strength. 2D shading only: the style sets no
     // terrain, so nothing is lifted and the globe's geometry is unchanged.
     //
-    // EXAGGERATION EASES OFF AS YOU ZOOM IN. At the globe's own zooms a mountain
-    // range is a few pixels of slope and needs the push; at city zooms the same
-    // factor turns every ridge into a sharp relief print behind the roads.
+    // EXAGGERATION EASES OFF AS YOU ZOOM IN, THEN GOES TO NOTHING. At the
+    // globe's own zooms a mountain range is a few pixels of slope and needs
+    // the push. From z11 the data is being stretched -- see DEM_MAXZOOM -- and
+    // the shading fades out over two zooms so the layer's cut at 13 is not a
+    // step. Exaggeration 0 is a complete fade: the shader scales the accent
+    // by it as well as the shade.
     {
       id: 'relief',
       type: 'hillshade',
       source: 'dem',
+      maxzoom: 13,
       paint: {
         'hillshade-shadow-color': RELIEF_SHADOW,
         'hillshade-highlight-color': RELIEF_HIGHLIGHT,
         'hillshade-accent-color': RELIEF_ACCENT,
-        'hillshade-exaggeration': ['interpolate', ['linear'], ['zoom'], 2, 0.6, 10, 0.45],
+        'hillshade-exaggeration': ['interpolate', ['linear'], ['zoom'],
+          2, 0.6, 10, 0.45, 11, 0.45, 13, 0],
       },
     },
     {
@@ -797,13 +824,13 @@ const STYLE = {
     // is exactly a shoreline -- see COAST_LINE for why the tile cuts do not
     // show up as seams.
     //
-    // OCEAN AND LAKE ONLY. The tiles also carry river and pond polygons from
-    // about z6; outlining a river draws two parallel lines down every wide
-    // river in India, and a pond outline at z10 is a speck. Lakes stay because
-    // a lake is part of the shape of the land -- dropping them is one word.
-    //
-    // NOT INTERMITTENT WATER. A seasonal lake's outline would draw a firm shore
-    // around something that is dry half the year.
+    // OCEAN ONLY. The tiles also carry lake, river and pond polygons; outlining
+    // a river draws two parallel lines down every wide river in India, a pond
+    // outline at z10 is a speck, and lakes -- which were in, on the argument
+    // that a lake is part of the shape of the land -- turned out to be the
+    // clutter: one z8 tile over central India carries 43 of them, and 43 hard
+    // rings on a plain read as noise, not shape. Lakes are still filled in
+    // OCEAN; they just have no edge. The sea is the one shore that matters.
     //
     // DIRECTLY OVER THE SEA AND UNDER EVERYTHING ELSE, because it is the ground
     // itself: a road that reaches the shore or a border that ends at one paints
@@ -813,9 +840,7 @@ const STYLE = {
       type: 'line',
       source: 'ofm',
       'source-layer': 'water',
-      filter: ['all',
-        ['in', ['get', 'class'], ['literal', ['ocean', 'lake']]],
-        ['!=', ['get', 'intermittent'], 1]],
+      filter: ['==', ['get', 'class'], 'ocean'],
       layout: { 'line-join': 'round' },
       paint: {
         'line-color': COAST_LINE,
