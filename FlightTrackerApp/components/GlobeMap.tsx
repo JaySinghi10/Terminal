@@ -30,7 +30,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { allAirports, airportByCode } from '../lib/airports';
 // THE PAGE, which is what the space around the globe is. The sea is not the
-// page any more; see OCEAN below.
+// page any more; see SHELF below.
 import { PAGE_BG } from '../lib/cards';
 import {
   timezoneHome, HOME_ZOOM_POSITION, HOME_ZOOM_FALLBACK, HOME_ZOOM_MAX,
@@ -51,17 +51,24 @@ import {
 // about #2e2e2e however black the sea is -- turns the whole map grey, and this
 // app reads black.
 //
-// SO THE GROUND STAYS DARK AND THE DEFINITION IS DRAWN. The two tones below
-// are still nearly equal, on purpose; COAST_LINE is what makes India a shape.
+// SO THE GROUND STAYS DARK AND THE DEFINITION IS DRAWN. The tones below are
+// still nearly equal, on purpose; COAST_LINE is what makes India a shape.
 //
-//   OCEAN  #08090b   a hair under the page (1.006:1) and a touch blue, so it
-//                    reads as water rather than as a hole.
-//   LAND   #121212   where it has always been, 1.06:1 over the sea.
+//   SHELF  #0c0e11   the shallow sea, and what the water is filled with.
+//                    Halfway between its two neighbours: 1.031:1 over the
+//                    deep sea, 1.032:1 under the land.
+//   deep   #08090b   not a constant -- it is where the depth layer takes
+//                    SHELF by -4,000 m, and what the whole sea used to be: a
+//                    hair under the page (1.006:1) and a touch blue, so it
+//                    reads as water rather than as a hole. See DEPTH_ABYSS.
+//   LAND   #121212   where it has always been, 1.06:1 over the deep sea.
 //
 // THE GLOBE STILL SITS IN THE PAGE. The space around it is PAGE_BG -- see
-// SPACE -- and the sea is 1.006:1 from that, so there is no ring where an
-// ocean meets space; the coastline is what gives the planet its outline.
-const OCEAN = '#08090b';
+// SPACE -- and the deep sea is 1.006:1 from that, so there is no ring where an
+// ocean meets space. Where a shelf reaches the limb -- Siberia, the Sunda
+// Shelf -- it is 1.024:1: a tone, not a rim. The coastline is what gives the
+// planet its outline.
+const SHELF = '#0c0e11';
 const LAND = '#121212';
 // THE PAGE AROUND THE GLOBE. The canvas is created with alpha and cleared to
 // transparent every frame, so outside the planet what shows is the document's
@@ -83,7 +90,8 @@ const SPACE = PAGE_BG;
 //
 // A SOLID GREY RATHER THAN AN ALPHA, because this line straddles two grounds
 // and should be the same line on both. #616161 is 3.02:1 against the land and
-// 3.22:1 against the sea, at 1px -- crisp, and the brightest edge on the
+// 3.12:1 against the shelf water every coast actually borders, at 1px -- the
+// same line on both sides to within a hair, and the brightest edge on the
 // ground, which is what the shape of a continent should be. Nothing else on
 // the ground is allowed to reach it: the country border is a step under, see
 // COUNTRY_LINE.
@@ -151,22 +159,37 @@ const RELIEF_ACCENT = 'rgba(0,0,0,0.35)';
 // bottoms out at -5,539 m -- so depth costs no new source and no new request;
 // the relief layer has already paid for these tiles.
 //
-// DARKER, NEVER LIGHTER. The shelf stays OCEAN: transparent from the shore
-// down to -200 m, which is roughly where continental shelves end. From there
-// the sea darkens to its full depth at -4,000 m, the abyssal plain, and
-// stays there below it. That is the one direction this map can add structure
-// in without lifting the ground.
+// THE SHALLOWS ARE LIFTED, AND THE DEEP IS WHERE THE SEA ALWAYS WAS. Darkening
+// the abyss below #08090b had no room: #050507 is one step off black. So the
+// water is filled with SHELF, a step lighter, and this layer takes it back
+// down: transparent from the shore to -200 m, which is roughly where
+// continental shelves end, then darkening to #08090b by -4,000 m, the abyssal
+// plain, and staying there below it.
 //
-//   shelf, 0 to -200 m     OCEAN #08090b            1.006:1 against the page
-//   abyss, -4,000 m        #050507                  1.029:1 against the page
+//   shelf, 0 to -200 m     SHELF #0c0e11     1.024:1 against the page
+//   slope, -2,100 m        #0a0c0e
+//   abyss, -4,000 m        #08090b           1.006:1 against the page
+//   shelf against abyss                     1.031:1
 //
-// The globe stays rimless: the deep sea against space is 1.03:1. The coast is
-// at 0 m, where the depth is fully transparent, so it keeps its 3.22:1.
+// WHY THE LIFT IS IN THE FILL AND NOT IN THIS LAYER. A ramp that lightened
+// the shallows would have to start at 0 m, and this layer cannot tell water
+// from ground: it paints wherever the elevation says. Dry land below sea
+// level would light up as shelf -- the Dutch polders read -3 to -7 m, the
+// Caspian lowland -25 m, Turpan -152 m -- while the Gulf of Khambhat, at -5 m,
+// is shallower than a polder. Lifting the fill confines the lift to the water
+// polygons, and this layer only ever darkens, below -200 m.
 //
-// BLACK AT AN ALPHA, NOT #050506 AS A COLOUR. MapLibre stores the ramp with
+// BLACK AT AN ALPHA, NOT #08090b AS A COLOUR. MapLibre stores the ramp with
 // straight alpha and premultiplies on upload; a black stop is the same colour
 // either way, so the shelf cannot pick up a faint lift from a transparent stop
-// whose colour channels are not zero. 0.40 of black over OCEAN is #050507.
+// whose colour channels are not zero. And a stop that dims the ground rather
+// than replacing it keeps the Antarctic misreading below as small as it can
+// be. SHELF is #08090b divided by 0.65, so 0.35 of black over SHELF lands on
+// #08090b exactly.
+//
+// LAKES AND RIVERS ARE SHELF TOO. They are the same fill, and their surface is
+// above sea level, so the ramp leaves them alone. Shallow water reads as
+// shallow water.
 //
 // ANTARCTICA IS THE ONE PLACE THIS IS WRONG. From tile z5 -- about display z4
 // -- the tiles give the bedrock under the ice sheets rather than the ice
@@ -177,7 +200,7 @@ const RELIEF_ACCENT = 'rgba(0,0,0,0.35)';
 // cost more than they save: a second elevation source bounded clear of the
 // poles would fetch every tile twice, and cutting this layer at z4 would take
 // the depth off the home view, which opens at 4.5.
-const DEPTH_ABYSS = 'rgba(0,0,0,0.40)';
+const DEPTH_ABYSS = 'rgba(0,0,0,0.35)';
 // ── THE BORDERS, A STEP UNDER THE COAST ─────────────────────────────────────
 //
 // Contrast on LAND, where both are drawn (maritime lines are excluded):
@@ -851,13 +874,17 @@ const STYLE = {
       type: 'fill',
       source: 'ofm',
       'source-layer': 'water',
-      paint: { 'fill-color': OCEAN },
+      paint: { 'fill-color': SHELF },
     },
     // ── THE DEPTH, OVER THE SEA AND UNDER THE COAST ───────────────────────────
     //
     // A color-relief LAYER ON THE ELEVATION SOURCE, directly over the water
-    // fill, so it darkens the fill and nothing drawn on top of it. See
-    // DEPTH_ABYSS for the ramp and the one place it misreads.
+    // fill, so it takes the SHELF fill back down to #08090b offshore and touches
+    // nothing drawn on top of it. See DEPTH_ABYSS for the ramp and the one
+    // place it misreads.
+    //
+    // PAST z13 ALL WATER IS SHELF. That is the right reading at the zooms where
+    // the layer is off: a harbour, a river, a lake.
     //
     // OFF AT z13 LIKE THE RELIEF, and faded over the same two zooms, for the
     // same reason: past the elevation tiles' z12 cap it is stretched data, and
@@ -887,7 +914,7 @@ const STYLE = {
     // that a lake is part of the shape of the land -- turned out to be the
     // clutter: one z8 tile over central India carries 43 of them, and 43 hard
     // rings on a plain read as noise, not shape. Lakes are still filled in
-    // OCEAN; they just have no edge. The sea is the one shore that matters.
+    // SHELF; they just have no edge. The sea is the one shore that matters.
     //
     // DIRECTLY OVER THE SEA AND UNDER EVERYTHING ELSE, because it is the ground
     // itself: a road that reaches the shore or a border that ends at one paints
