@@ -85,6 +85,46 @@ const SPACE = PAGE_BG;
 // 3.22:1 against the sea, at 1px -- crisp, and the brightest edge on the
 // ground, which is what the shape of a continent should be.
 const COAST_LINE = '#616161';
+// ── THE RELIEF: TEXTURE ON THE LAND, NOT A TONE ─────────────────────────────
+//
+// ELEVATION FROM AWS OPEN DATA, Mapzen's terrarium tiles: PNGs whose red,
+// green and blue channels spell out metres, 256px, the whole planet to z15.
+// The encoding is set explicitly because MapLibre assumes `mapbox` for a
+// raster-dem source, and a terrarium tile decoded as mapbox is a map of
+// nonsense heights rather than an error.
+//
+// CAPPED AT z12. SRTM is about 30 m a sample; a 256px tile at z12 is about
+// 36 m a pixel at the equator, so z12 is where the tiles stop carrying new
+// ground and start carrying upsampled pixels. Past it MapLibre overzooms the
+// z12 tile, which costs nothing and looks the same.
+//
+// BELOW THE SEA, deliberately. The layer sits on the land background and under
+// the water fill, so bathymetry never textures the ocean and the shore is
+// still drawn by COAST_LINE, not by a change in shading.
+//
+// EACH COLOUR'S ALPHA IS THE MOST IT CAN EVER DO, because MapLibre multiplies
+// all three by a slope factor that tops out at 1. Worst cases on LAND, with
+// the accent and the shade combined at every slope and aspect:
+//
+//   darkest   shadow 0.60 + accent 0.35, sheer   #050505   1.09:1 under land
+//   brightest highlight 0.10, lit, ~65 deg        #1a1a1a   1.08:1 over land
+//   span                                                    1.17:1 end to end
+//
+// THE HIGHLIGHT IS THE ONE WITH A CEILING, and the ceiling is the coast. A solid
+// grey line loses contrast on lighter ground faster than a white-alpha line
+// does, so on a lit slope the motorway gains on the coast; at 0.10 the coast
+// is still ahead (2.81:1 against 2.73:1), and from 0.14 the order flips. The
+// country border holds 3.1:1 across the whole span, and the faintest label
+// ink 5.9:1 on the brightest relief.
+//
+// ATTRIBUTION IS A CONDITION OF USE: the 3DEP, GMTED2010 and SRTM data is
+// courtesy of the U.S. Geological Survey. This map shows no attribution for
+// any source, OpenFreeMap included.
+const DEM_TILES = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+const DEM_MAXZOOM = 12;
+const RELIEF_SHADOW = 'rgba(0,0,0,0.60)';
+const RELIEF_HIGHLIGHT = 'rgba(140,140,140,0.10)';
+const RELIEF_ACCENT = 'rgba(0,0,0,0.35)';
 // ── THE BORDERS, HELD AT 3:1 ON THE DARK LAND ───────────────────────────────
 //
 // Contrast on LAND, where both are drawn (maritime lines are excluded):
@@ -670,6 +710,14 @@ const STYLE = {
   glyphs: OFM_GLYPHS,
   sources: {
     ofm: { type: 'vector', url: OFM_TILES },
+    // Elevation for the relief layer only; there is no terrain. See DEM_TILES.
+    dem: {
+      type: 'raster-dem',
+      tiles: [DEM_TILES],
+      encoding: 'terrarium',
+      tileSize: 256,
+      maxzoom: DEM_MAXZOOM,
+    },
     airports: { type: 'geojson', data: '__AIRPORTS__' },
     // EMPTY UNTIL THERE IS A POSITION. Declaring it in the style rather than
     // adding the source later means the layers exist from the first frame and
@@ -716,6 +764,26 @@ const STYLE = {
     // round the OpenMapTiles schema requires: there is no land polygon, only
     // water, so land is what is left where water is not.
     { id: 'land', type: 'background', paint: { 'background-color': LAND } },
+    // ── THE RELIEF, ON THE LAND AND UNDER EVERYTHING DRAWN ON IT ─────────────
+    //
+    // DIRECTLY ON THE BACKGROUND, so the sea covers it and every line and label
+    // paints over it at full strength. 2D shading only: the style sets no
+    // terrain, so nothing is lifted and the globe's geometry is unchanged.
+    //
+    // EXAGGERATION EASES OFF AS YOU ZOOM IN. At the globe's own zooms a mountain
+    // range is a few pixels of slope and needs the push; at city zooms the same
+    // factor turns every ridge into a sharp relief print behind the roads.
+    {
+      id: 'relief',
+      type: 'hillshade',
+      source: 'dem',
+      paint: {
+        'hillshade-shadow-color': RELIEF_SHADOW,
+        'hillshade-highlight-color': RELIEF_HIGHLIGHT,
+        'hillshade-accent-color': RELIEF_ACCENT,
+        'hillshade-exaggeration': ['interpolate', ['linear'], ['zoom'], 2, 0.6, 10, 0.45],
+      },
+    },
     {
       id: 'water',
       type: 'fill',
