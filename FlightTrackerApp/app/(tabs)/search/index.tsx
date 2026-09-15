@@ -340,6 +340,23 @@ type SearchParse =
 // A day number with or without its ordinal tail: 3, 3rd, 21st, 22nd.
 const NL_DAY_RE = /^([0-9]{1,2})(st|nd|rd|th)?$/;
 const NL_YEAR_RE = /^(20[0-9]{2})$/;
+// A day number ON ITS OWN must carry the tail. "24th" is a date; a bare "24" is
+// as likely a count, a gate or the digits of a flight number typed with a space.
+const NL_ORDINAL_RE = /^([0-9]{1,2})(st|nd|rd|th)$/;
+// What may FOLLOW a bare ordinal that is not introduced by "on" or "on the": only
+// words the peel itself takes. "BLR DEL 24th morning" is a date; "1st class" and
+// "2nd flight" are not, and a following word the peel does not know is what
+// tells the two apart.
+const NL_AFTER_ORDINAL = new Set([
+  ...Object.keys(NL_BANDS), ...Object.keys(NL_SORTS),
+  ...Object.keys(NL_BAND_PAIRS).flatMap(p => p.split(' ')),
+]);
+
+// THE FLIGHT ENDPOINT'S OWN CEILING, which is not the board's. The server allows
+// a single flight 180 days ahead (FLIGHT_MAX_FUTURE_DAYS in mcp_server.py) where
+// a route board stops at 60; refusing here, with the same number, is what stops
+// an out-of-range date costing a round trip to be told so.
+const FLIGHT_MAX_DATE_DAYS = 180;
 
 // Whole days from today, or null when the date is not a real one. Built the same
 // way routeDayOffset builds it, from local midnight, because the window the
@@ -380,6 +397,30 @@ function nlWeekdayDate(target: number, skipToday: boolean): Date {
   return d;
 }
 
+// ── A DAY OF THE MONTH WITH NO MONTH ────────────────────────────────────────
+//
+// THE NEXT TIME THE CALENDAR SHOWS THAT NUMBER, TODAY INCLUDED. "The 24th" said
+// on the 15th is this month's; said on the 25th it is next month's, because
+// nobody asks for a flight on a day that has gone by naming only its number.
+// Said on the 24th itself it is today, as "today" is.
+//
+// A MONTH WITHOUT THE DAY IS SKIPPED, NOT ROLLED. "The 31st" said in September
+// is 31 October: new Date(2026, 8, 31) quietly becomes 1 October, which is the
+// wrong day, so a month whose date does not come back as the number asked for
+// is passed over. Twelve months always contain a 31st, so the loop always ends
+// in a date for any real day number and null only for one that is not.
+function nlNextDayOfMonth(day: number): Date | null {
+  if (day < 1 || day > 31) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  for (let k = 0; k < 12; k++) {
+    const d = new Date(today.getFullYear(), today.getMonth() + k, day);
+    if (d.getDate() !== day) continue;
+    if (d.getTime() >= today.getTime()) return d;
+  }
+  return null;
+}
+
 type NlPeel = {
   candidates: string[];
   mods: SearchMods;
@@ -387,6 +428,14 @@ type NlPeel = {
   // Held rather than thrown, because it only becomes an error if the ROUTE
   // resolves — otherwise the sentence was never a route search at all.
   dateError: string | null;
+  // THE PEELED DATE BEFORE ANY WINDOW WAS APPLIED. mods.date is the ROUTE's
+  // reading, null outside the board's 60 days; a single flight has a window of
+  // its own and has to judge the same date against it. See parseFlightQuery.
+  day: { iso: string; offset: number } | null;
+  // What is left once modifiers AND filler are gone -- the second candidate,
+  // held under its own name because the flight rung needs it even when it is
+  // identical to the first and so was never pushed.
+  rest: string;
 };
 
 // Walk the words once, longest phrase first, and take out what is recognised.
@@ -441,6 +490,24 @@ function nlPeel(q: string): NlPeel | null {
       const n = yr === null ? 2 : 3;
       if (setDate(nlFromDayMonth(Number(md[1]), NL_MONTHS[w], yr), i, n)) { i += n - 1; continue; }
     }
+    // "the 24th" / "on 24th" / "SK936 24th" -- a day with no month. AFTER both
+    // month forms, so "24th October" is always read whole and never as the 24th
+    // of this month with a stray month left over.
+    //
+    // ONLY WHERE A DATE IS THE ONLY READING. Introduced by "on" or "on the", or
+    // with nothing after it but words this peel takes. "the" ALONE IS NOT ENOUGH:
+    // "the 1st flight from BLR to DEL" is a ranking, and taking it as 1 October
+    // searched a board nobody asked for. NOT before "of": "the 24th of October"
+    // is a month form this does not parse, and reading its first half as the
+    // 24th of THIS month is a wrong date rather than a missed one.
+    const od = NL_ORDINAL_RE.exec(w);
+    if (od && w1 !== 'of') {
+      const prev = i > 0 ? low[i - 1] : '';
+      const prev2 = i > 1 ? low[i - 2] : '';
+      const introduced = prev === 'on' || (prev === 'the' && prev2 === 'on');
+      const trailing = low.slice(i + 1).every(x => NL_AFTER_ORDINAL.has(x));
+      if ((introduced || trailing) && setDate(nlNextDayOfMonth(Number(od[1])), i, 1)) continue;
+    }
     // Two-word bands before one-word ones, or "red" and "eye" both survive.
     const pair = `${w} ${w1}`;
     if (pair in NL_BAND_PAIRS) {
@@ -486,14 +553,16 @@ function nlPeel(q: string): NlPeel | null {
 
   let dateError: string | null = null;
   let iso: string | null = null;
+  let day: NlPeel['day'] = null;
   if (date !== null) {
     const off = nlOffset(date);
+    day = { iso: localIsoDate(date), offset: off };
     if (off < 0) dateError = 'that date has already gone';
     else if (off > ROUTE_MAX_DATE_DAYS) dateError = `route search reaches ${ROUTE_MAX_DATE_DAYS} days ahead at most`;
     else iso = localIsoDate(date);
   }
 
-  return { candidates, mods: { date: iso, band, sort }, dateError };
+  return { candidates, mods: { date: iso, band, sort }, dateError, day, rest: b };
 }
 
 // THE ROUTER for everything typed into the command line that is not a flight
@@ -540,6 +609,49 @@ function parseSearchQuery(q: string): SearchParse {
   // STEP 3. Whatever the raw parse said, unchanged — including null, which is
   // what sends a sentence to /chat.
   return raw;
+}
+
+// ── A FLIGHT NUMBER, AND THE DAY IT IS ASKED ABOUT ──────────────────────────
+//
+// A DATED FLIGHT WAS UNREACHABLE. The rung stripped every space and tested the
+// whole line, so "SK936 24 September" was not a flight number, fell past every
+// free rung and reached /chat -- whose flight tool takes a number and nothing
+// else. The server then answered with the instance nearest to now, and saving
+// that card saved the wrong day.
+//
+// THE WHOLE LINE FIRST, EXACTLY AS BEFORE. A bare number never reaches the peel,
+// so everything that worked keeps the undated lookup it always had.
+//
+// THEN THE PEEL, AND ONLY A DATE MAY COME OFF. If what is left, filler and all
+// spaces removed, is a flight number, that number is looked up on that day. A
+// band or a sort peeled alongside is not a flight question -- "SK936 morning"
+// names no day -- so it stays out, and so does anything else still in the
+// remainder: "SK936 delayed on the 24th" is a question, and a question is not a
+// flight number. Refused, it goes where it went before.
+//
+// THE FLIGHT'S OWN WINDOW, NOT THE BOARD'S. A clean date outside it is said
+// here and spends nothing, for the reason parseSearchQuery gives for routes: a
+// lookup with the date quietly dropped answers a different question.
+type FlightParse =
+  | { kind: 'ok'; number: string; date: string | null }
+  | { kind: 'error'; message: string }
+  | null;
+
+function parseFlightQuery(q: string): FlightParse {
+  const whole = q.trim().toUpperCase().replace(/\s/g, '');
+  if (isFlightNumber(whole)) return { kind: 'ok', number: whole, date: null };
+
+  const peeled = nlPeel(q);
+  if (peeled === null || peeled.day === null) return null;
+  if (peeled.mods.band !== null || peeled.mods.sort !== null) return null;
+  const number = peeled.rest.toUpperCase().replace(/\s/g, '');
+  if (!isFlightNumber(number)) return null;
+
+  if (peeled.day.offset < 0) return { kind: 'error', message: 'that date has already gone' };
+  if (peeled.day.offset > FLIGHT_MAX_DATE_DAYS) {
+    return { kind: 'error', message: `flight lookup reaches ${FLIGHT_MAX_DATE_DAYS} days ahead at most` };
+  }
+  return { kind: 'ok', number, date: peeled.day.iso };
 }
 
 // The user's own words back, not the app's internal values: a band renders as
@@ -1246,8 +1358,18 @@ export default function Search() {
     // characters with at least one letter, then one to four digits -- so a
     // number this screen accepts is a number the rest of the app can read the
     // airline off. 6E5071 and QP1133 used to fall past here into the model.
-    if (isFlightNumber(cleaned)) {
-      await runFlightLookup(cleaned);
+    //
+    // AND IT MAY CARRY A DAY. See parseFlightQuery: the bare number is tested
+    // first and looked up undated exactly as before; a number with a date on it
+    // is looked up on that date, which runFlightLookup has always accepted.
+    const flightAsk = parseFlightQuery(query);
+    if (flightAsk !== null && flightAsk.kind === 'error') {
+      setError(flightAsk.message);
+      setErrorCounter(c => c + 1);
+      return;
+    }
+    if (flightAsk !== null) {
+      await runFlightLookup(flightAsk.number, false, flightAsk.date);
       return;
     }
 
