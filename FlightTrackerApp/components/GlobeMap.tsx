@@ -146,8 +146,8 @@ const COAST_LINE = '#616161';
 //
 // THE HIGHLIGHT IS THE ONE WITH A CEILING, and the ceiling is the coast. A solid
 // grey line loses contrast on lighter ground faster than a white-alpha line
-// does; at 0.10 the coast holds 2.81:1 on the brightest slope, still over
-// the country border's 2.5:1 there. Roads no longer see the slope at all --
+// does; at 0.10 the coast holds 2.81:1 on the brightest slope, well over
+// the country border's 1.77:1 there. Roads no longer see the slope at all --
 // they are drawn on a strip of LAND, see ROAD_CASING_WIDTH -- and the
 // faintest label ink holds 5.9:1 on the brightest relief.
 //
@@ -221,14 +221,19 @@ const DEPTH_ABYSS = 'rgba(0,0,0,0.35)';
 //
 // Contrast on LAND, where both are drawn (maritime lines are excluded):
 //
-//   country   0.28  ->  2.47:1   a clear step under the coast's 3.02:1, and
-//                                between the motorway and the trunk inks
+//   country   0.18  ->  1.72:1   a division, not an outline: well under the
+//                                coast's 3.02:1, 1.77:1 on the brightest relief
 //   admin-1   0.10  ->  1.31:1   present, and still the quietest
 //
 // THE COUNTRY LINE WAS 0.34, which is 3.12:1 -- over the coast, not level with
 // it, and with the coast the two outlines shouted together. One edge is the
 // strongest, and it is the shore.
-const COUNTRY_LINE = 'rgba(255,255,255,0.28)';
+//
+// AND THEN 0.28, 2.47:1, WHICH STILL READ AS A BRIGHT LINE. At the globe's own
+// zooms the borders are most of the ink on a continent, and at 2.47:1 Africa
+// and Europe read as a map of frontiers with a coast round it. 0.18 keeps a
+// clear step over admin-1 so a frontier is still told from a state line.
+const COUNTRY_LINE = 'rgba(255,255,255,0.18)';
 const ADMIN1_LINE = 'rgba(255,255,255,0.10)';
 // The road inks are not here: they are a six-step ramp and belong beside the
 // hierarchy they express. See ROAD_TIERS.
@@ -502,9 +507,10 @@ const AIRPORT_FULL_ZOOM = 6;
 // PRIMARY CAME DOWN WITH THE TOP TWO, and only because the rule above demands
 // it: at its old 0.27 it would have drawn brighter than a trunk at 0.24.
 //
-// AND THEY ALL PAINT UNDER THE BORDERS. No road is brighter than a country
-// line (3.12:1) now, but order still settles a shared pixel rather than colour:
-// boundaries are drawn after, so a frontier always wins where a road meets it.
+// AND THEY ALL PAINT UNDER THE BORDERS. The country line is 1.72:1 now, so a
+// secondary road and everything above it is brighter than a frontier -- which
+// is why order, not colour, settles a shared pixel: boundaries are drawn after,
+// so a frontier always wins where a road meets it.
 type RoadTier = {
   id: string;
   classes: string[];
