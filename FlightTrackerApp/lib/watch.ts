@@ -43,7 +43,24 @@ const PUSH_ASKED_KEY = 'watch:pushAsked';
 // backfillWatches: this is what makes the re-registration happen once per token
 // rather than on every launch, and what makes it happen AGAIN if Expo ever
 // issues this install a different one.
-const TOKEN_SENT_KEY = 'watch:tokenRegisteredFor';
+//
+// ONE MARKER PER ACCOUNT, NOT PER INSTALL. Sign-out removes this device's watches
+// for the account leaving -- see deregisterWatches -- and clears that account's
+// marker, so its next sign-in re-registers the list. An install-wide marker could
+// not do that: the guest list loads the moment the account signs out, its
+// backfill re-marks the token, and the account's sign-in would then be skipped
+// with every one of its flights saved and none of them watched.
+//
+// THE OLD UNSCOPED KEY IS SIMPLY NO LONGER READ. The first launch after this
+// change backfills each list once more, which is a round of idempotent upserts
+// and nothing worse.
+const TOKEN_SENT_PREFIX = 'watch:tokenRegisteredFor:';
+
+// WHOSE LIST A BACKFILL IS FOR: the account's email as the saved store keys it,
+// or the guest list. Exported so every caller spells a scope the same way.
+export function watchScope(email: string | null): string {
+  return email ? email.trim().toLowerCase() : 'guest';
+}
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -340,31 +357,52 @@ export function registerWatch(apiBase: string, flightNumber: string, flightDate:
 // belongs to a save. With no token it does nothing at all -- which also means it
 // can never overwrite a row's good token with a null one.
 //
-// ONCE PER TOKEN. The token it finished for is remembered on disk, so this is a
-// single read on every later launch; a token Expo has rotated is a new value and
-// runs again. Nothing is marked unless every send succeeded, so an offline
-// launch retries on the next one rather than recording a lie.
-let backfillDone: string | null = null;
+// ONCE PER TOKEN, PER ACCOUNT. The token it finished for is remembered on disk
+// under the list's scope, so this is a single read on every later launch; a token
+// Expo has rotated is a new value and runs again, and so does an account whose
+// marker sign-out cleared. Nothing is marked unless every send succeeded, so an
+// offline launch retries on the next one rather than recording a lie.
+const backfillDone = new Map<string, string>();
 let backfillRunning = false;
+// A BACKFILL ASKED FOR WHILE ANOTHER IS RUNNING IS HELD, NOT DROPPED. Signing in
+// straight after signing out starts the account's backfill while the guest
+// list's is still sending, and the store's effect will not ask again until the
+// list changes. The latest request wins; an older held one is for a list that
+// has since been replaced.
+let backfillHeld: { apiBase: string; scope: string; flights: readonly BackfillFlight[] } | null = null;
+
+type BackfillFlight = { flightNumber: string; flightDate: string; tripId: string | null };
 
 export async function backfillWatches(
   apiBase: string,
-  flights: readonly { flightNumber: string; flightDate: string; tripId: string | null }[],
+  scope: string,
+  flights: readonly BackfillFlight[],
 ): Promise<void> {
-  if (backfillRunning) return;
+  if (backfillRunning) {
+    backfillHeld = { apiBase, scope, flights };
+    return;
+  }
+  backfillRunning = true;
   try {
+    // A SIGN-OUT STILL REMOVING THIS SAME ACCOUNT'S WATCHES STOPS FIRST. Left
+    // running, an unwatch in flight could land after the register below and
+    // take the row straight back out, with the marker already saying done.
+    const leaving = deregistering;
+    if (leaving !== null && leaving.scope === scope) {
+      leaving.cancelled = true;
+      await leaving.done;
+    }
     const token = await ensurePushToken(false);
     if (token === null) return;
-    if (backfillDone === token) return;
-    const stored = await AsyncStorage.getItem(TOKEN_SENT_KEY);
+    if (backfillDone.get(scope) === token) return;
+    const stored = await AsyncStorage.getItem(TOKEN_SENT_PREFIX + scope);
     if (stored === token) {
-      backfillDone = token;
+      backfillDone.set(scope, token);
       return;
     }
     // Flights the server would still accept. See isoDay.
     const floor = isoDay(Date.now() - DAY_MS);
     const due = flights.filter(f => ISO_DAY_RE.test(f.flightDate) && f.flightDate >= floor);
-    backfillRunning = true;
     let every = true;
     let firstBad: number | null = null;
     // ONE AT A TIME. Every one of these is a read-modify-write of a single
@@ -382,14 +420,102 @@ export async function backfillWatches(
     // toasts would say it twenty times.
     if (!every) report('/watch (backfill)', firstBad);
     if (every) {
-      backfillDone = token;
-      await AsyncStorage.setItem(TOKEN_SENT_KEY, token);
+      backfillDone.set(scope, token);
+      await AsyncStorage.setItem(TOKEN_SENT_PREFIX + scope, token);
     }
   } catch {
     // Silent, exactly as everything else here is. See the top of the file.
   } finally {
     backfillRunning = false;
+    const next = backfillHeld;
+    backfillHeld = null;
+    if (next !== null) void backfillWatches(next.apiBase, next.scope, next.flights);
   }
+}
+
+// ── THE MARKER, FORGOTTEN, SO THE NEXT SIGN-IN RE-REGISTERS ────────────────
+//
+// CALLED BY SIGN-OUT, for the account leaving. Its watches are about to be
+// removed, so "every flight in this list has been sent the token" stops being
+// true, and the next time this account's list loads the backfill has to run.
+export async function forgetBackfill(scope: string): Promise<void> {
+  backfillDone.delete(scope);
+  try {
+    await AsyncStorage.removeItem(TOKEN_SENT_PREFIX + scope);
+  } catch {
+    // A marker that will not clear leaves this account's next sign-in without a
+    // backfill, which is what happened before this function existed: flights
+    // re-registered one by one as they are saved. Nothing better is available.
+  }
+}
+
+// ── EVERY WATCH A LEAVING ACCOUNT HAD ON THIS DEVICE ───────────────────────
+//
+// SIGN-OUT TOUCHED NO WATCH, so a signed-out phone went on receiving pushes for
+// the old account's flights until the rows aged out, two days after each date.
+// The rows carry no account -- they are keyed on device, number and date -- so
+// removing them needs the device id and the watch secret and nothing else, and
+// works after the session is gone.
+//
+// ONE AT A TIME, AND THAT IS A WORKAROUND. Every /unwatch is a read-modify-write
+// of one Cloud Storage object with a generation precondition and five attempts;
+// fired together, about one write lands per round and the rest give up as
+// "storage is busy", silently. THE CLEAN END STATE IS A SERVER-SIDE BATCH UNWATCH
+// -- one request naming the device and its flights, one write -- and when that
+// exists this loop should become a single call.
+//
+// NOT AWAITED BY SIGN-OUT. Twenty flights take seconds, and the person signing
+// out is not waiting for them; the app being closed part way leaves the rest to
+// age out, which is where things stood before.
+//
+// THE RESPONSE BODY IS READ, not only the status. /unwatch answers a rejected or
+// contended request with 200 and an `error` field, which the status alone reports
+// as success.
+//
+// PAST FLIGHTS ARE SKIPPED on the backfill's own floor: the server refuses a
+// date that far back and has pruned its row already.
+let deregistering: { scope: string; cancelled: boolean; done: Promise<void> } | null = null;
+
+export function deregisterWatches(
+  apiBase: string,
+  scope: string,
+  flights: readonly { flightNumber: string; flightDate: string }[],
+): void {
+  const floor = isoDay(Date.now() - DAY_MS);
+  const due = flights.filter(f => ISO_DAY_RE.test(f.flightDate) && f.flightDate >= floor);
+  if (due.length === 0) return;
+  const run = { scope, cancelled: false, done: Promise.resolve() };
+  run.done = (async () => {
+    let firstBad: number | null | undefined;
+    for (const f of due) {
+      // A sign-in for this same account has started its backfill. See there.
+      if (run.cancelled) break;
+      try {
+        const resp = await fetch(`${apiBase}/unwatch`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Watch-Secret': WATCH_SECRET },
+          body: JSON.stringify({
+            device_id: await deviceId(),
+            flight_number: f.flightNumber.toUpperCase(),
+            flight_date: f.flightDate,
+          }),
+        });
+        let refused = resp.status < 200 || resp.status >= 300;
+        if (!refused) {
+          const body = await resp.json().catch(() => null);
+          refused = body === null || (body as { error?: unknown }).error != null;
+        }
+        if (refused && firstBad === undefined) firstBad = resp.status;
+      } catch {
+        if (firstBad === undefined) firstBad = null;
+      }
+    }
+    // ONE REPORT FOR THE PASS, for the reason the backfill gives.
+    if (firstBad !== undefined) report('/unwatch (sign-out)', firstBad);
+  })().finally(() => {
+    if (deregistering === run) deregistering = null;
+  });
+  deregistering = run;
 }
 
 export function deregisterWatch(apiBase: string, flightNumber: string, flightDate: string): void {

@@ -54,7 +54,12 @@ import { ensurePermission } from '../lib/reminders';
 // every flight already on the device can be given the token it was saved
 // without, and backfillWatches is idempotent per token so calling it here
 // cannot double anything the launch effect already did.
-import { backfillWatches } from '../lib/watch';
+// AND, ON SIGN-OUT, THE OTHER DIRECTION: this device's watches for the account
+// leaving, and the marker that would stop its next sign-in re-registering them.
+import {
+  backfillWatches, deregisterWatches, forgetBackfill, watchScope,
+} from '../lib/watch';
+import { getSavedFlights } from '../lib/storage';
 import { GREEN } from '../lib/cards';
 // The swipe threshold's haptic, on the switch: one medium impact, the same one
 // the rest of the app answers a threshold with.
@@ -234,7 +239,7 @@ export default function Profile() {
       // AND EVERY FLIGHT ALREADY ON THE DEVICE GETS THE TOKEN. A flight saved
       // before this moment was registered with a null token and nothing
       // revisits a row; this is the one moment that can be put right.
-      if (ok) void backfillWatches(API_BASE, savedFlights);
+      if (ok) void backfillWatches(API_BASE, watchScope(email), savedFlights);
       return;
     }
     // DENIED, OR GRANTED AND FLIPPED OFF: neither changes from inside the app.
@@ -293,6 +298,39 @@ export default function Profile() {
 
   // ── SIGN-OUT, CONFIRMED BY THE SYSTEM'S ACTION SHEET ──────────────────────
   const logout = async () => {
+    // ── THIS DEVICE STOPS WATCHING THE ACCOUNT'S FLIGHTS ──
+    //
+    // STARTED FIRST AND NEVER AWAITED. It needs only the device id and the
+    // watch secret, so it does not care that the session is cleared below, and
+    // nothing about signing out waits on it. See deregisterWatches.
+    //
+    // THE LIST IS READ FROM DISK under the email being signed out, not taken
+    // from the store's state, which is the account's only once its load has
+    // finished; the email is captured here before it is cleared.
+    //
+    // A FLIGHT THE GUEST LIST ALSO HOLDS IS KEPT. A watch row belongs to the
+    // device, not the account, and the guest list -- which is what this phone
+    // shows once signed out -- can hold the same flight: leftovers a sign-in's
+    // merge could not fit. Removing that row would silently cut off a flight
+    // still on screen. If the guest list cannot be read, nothing is removed:
+    // pushes carrying on is where things stood before, and cutting a flight off
+    // on a guess is worse.
+    if (email !== null) {
+      const leaving = email;
+      void (async () => {
+        try {
+          const [account, guest] = await Promise.all([
+            getSavedFlights(leaving), getSavedFlights(null),
+          ]);
+          const guestIds = new Set(guest.map(f => f.id));
+          await forgetBackfill(watchScope(leaving));
+          deregisterWatches(API_BASE, watchScope(leaving),
+            account.filter(f => !guestIds.has(f.id)));
+        } catch {
+          // See above.
+        }
+      })();
+    }
     // THE SAME THREE DELETIONS IN THE SAME ORDER: username, email,
     // displayName. The two persists clear the store and the state together;
     // email is the saved store's to delete, and setEmail below is still the

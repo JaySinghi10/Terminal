@@ -58,7 +58,7 @@ import {
   cancelFor,
   reconcile,
 } from './reminders';
-import { registerWatch, deregisterWatch, backfillWatches } from './watch';
+import { registerWatch, deregisterWatch, backfillWatches, watchScope } from './watch';
 // THE PENDING LEGS: flights the user has booked that the provider does not
 // carry yet. Their own store beside this one, never inside it -- see the note
 // at the top of lib/pendingRules.ts for why a pending leg is not a SavedFlight.
@@ -2295,10 +2295,14 @@ export function SavedProvider({ children }: { children: ReactNode }) {
   // register nothing and mark the token as done, which is the one outcome worth
   // guarding against; everything else about running twice is handled in
   // lib/watch.ts, which is why this can depend on savedFlights without care.
+  //
+  // UNDER THE ACCOUNT'S OWN SCOPE, so an account that signed out -- which
+  // removes its watches and forgets its marker -- is backfilled again when it
+  // signs back in. See forgetBackfill.
   useEffect(() => {
     if (!hydrated) return;
-    void backfillWatches(API_BASE, savedFlights);
-  }, [hydrated, savedFlights]);
+    void backfillWatches(API_BASE, watchScope(email), savedFlights);
+  }, [hydrated, email, savedFlights]);
 
   const value = useMemo(() => ({
     savedFlights,
