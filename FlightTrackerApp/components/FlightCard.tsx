@@ -50,6 +50,11 @@ import Reanimated, {
   useAnimatedStyle, useSharedValue,
   runOnJS, type SharedValue,
   withTiming,
+  // THE PROGRESS BAR'S OWN TWO. withDelay is the 300ms wait that used to be
+  // Animated.timing's `delay`; REasing is Reanimated's curve set -- the same
+  // shapes under a different name, aliased because react-native's Easing is
+  // imported here too and drives the arc. See ProgressBar.
+  withDelay, Easing as REasing,
   // THE ONE ADDITION, AND THE PULSE IS ITS ONLY READER. withRepeat(-1, true) is
   // an unbounded reversing loop, which is what makes the dot breathe rather than
   // blink: the value walks down and back up rather than snapping to the start.
@@ -2030,57 +2035,67 @@ function FlightArc({ progress }: { progress: number }) {
   );
 }
 
+// ── THE BAR, ON THE UI THREAD ────────────────────────────────────────────────
+//
+// IT WAS TWO Animated VALUES AT useNativeDriver: false, which is a JS-thread
+// write per frame for 1.4 seconds -- and it ran on every minute tick, on a
+// screen that also has a swipe, a scroll and a list re-render to get through.
+// The note at FlightArc says this in as many words: layout properties cannot go
+// on the native driver, so the bar's plane cost a JS write per frame where the
+// arc's costs none.
+//
+// SO ONE Reanimated SHARED VALUE DRIVES BOTH, and both readers are worklets. The
+// timing, the delay and the curve are the same numbers the old pair used, so
+// nothing about the motion changes.
+//
+// THE TRACK IS MEASURED RATHER THAN EXPRESSED AS A PERCENTAGE. A worklet cannot
+// interpolate to a "%" string, and it does not need to: onLayout writes the
+// track's width into a shared value once, and the fill and the plane are both a
+// fraction of that number. The measurement is the only thing that crosses from
+// JS, and it crosses when the layout changes rather than when the bar moves.
+//
+// WIDTH RATHER THAN scaleX, and that is a deliberate trade. A scale would be
+// pure paint and cost no layout at all -- but this bar is 3pt tall with a 2pt
+// radius, and scaling it horizontally squashes the rounded ends into slivers at
+// low progress. Reanimated applies a width from the UI thread, so the layout
+// still costs nothing on the JS thread; the fill keeps its shape.
+const PROGRESS_MS = 1400;
+// It arrives after the card has settled, which is what the old `delay` was for.
+const PROGRESS_DELAY_MS = 300;
+// HOW FAR THE GLYPH TRAVELS AT FULL PROGRESS, as a fraction of the track. 0.88
+// is the old interpolation's own end stop: the plane is 20pt wide and drawn from
+// its left edge, so the last stretch is what keeps it inside the card.
+const PLANE_SPAN = 0.88;
+
 function ProgressBar({ progress, color, style }: { progress: number; color: string; style?: any }) {
-  const anim = useRef(new Animated.Value(0)).current;
-  const planeAnim = useRef(new Animated.Value(0)).current;
+  const at = useSharedValue(0);
+  // 0 UNTIL THE FIRST LAYOUT, which draws a fill of no width and a plane at the
+  // left -- exactly what progress 0 looks like -- for one frame.
+  const trackW = useSharedValue(0);
 
   // Keyed on `progress` so the bar re-animates as the flight advances. The old
   // useState-callback form ran once and never again.
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(anim, {
-        toValue: progress,
-        duration: 1400,
-        delay: 300,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: false,
-      }),
-      Animated.timing(planeAnim, {
-        toValue: progress,
-        duration: 1400,
-        delay: 300,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: false,
-      }),
-    ]).start();
+    at.value = withDelay(
+      PROGRESS_DELAY_MS,
+      withTiming(progress, { duration: PROGRESS_MS, easing: REasing.out(REasing.cubic) }),
+    );
   }, [progress]);
+
+  const fillStyle = useAnimatedStyle(() => ({ width: trackW.value * at.value }));
+  const planeStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: trackW.value * PLANE_SPAN * at.value }],
+  }));
 
   return (
     <View style={[pg.wrap, style]}>
-      <View style={pg.track}>
-        <Animated.View
-          style={[
-            pg.fill,
-            {
-              width: anim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
-              backgroundColor: color,
-            },
-          ]}
-        />
-      </View>
-      <Animated.Text
-        style={[
-          pg.plane,
-          {
-            left: planeAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: ["0%", "88%"],
-            }),
-          },
-        ]}
+      <View
+        style={pg.track}
+        onLayout={e => { trackW.value = e.nativeEvent.layout.width; }}
       >
-        ✈
-      </Animated.Text>
+        <Reanimated.View style={[pg.fill, { backgroundColor: color }, fillStyle]} />
+      </View>
+      <Reanimated.Text style={[pg.plane, planeStyle]}>✈</Reanimated.Text>
     </View>
   );
 }
@@ -2089,7 +2104,10 @@ const pg = StyleSheet.create({
   wrap: { marginVertical: 24, position: "relative" },
   track: { height: 3, backgroundColor: "rgba(255,255,255,0.07)", borderRadius: 2, marginBottom: 14 },
   fill: { height: 3, borderRadius: 2 },
-  plane: { position: "absolute", top: -11, fontSize: 20, color: "#ffffff" },
+  // left: 0 NOW, AND THE TRAVEL IS A TRANSFORM. It used to be an animated `left`
+  // percentage, which is a layout property and therefore a JS-thread write per
+  // frame; the glyph is moved from its own left edge instead. See ProgressBar.
+  plane: { position: "absolute", top: -11, left: 0, fontSize: 20, color: "#ffffff" },
 });
 
 // WHAT THE SCREEN KNOWS AND THE CARD CANNOT.
@@ -4876,8 +4894,32 @@ export function FlightCard({
                   </View>
                 </View>
 
-                {/* Hidden entirely when the flight state cannot place it. */}
-                {progressValue !== null && (flight.status === 'ACTIVE' || flight.status === 'LANDED') && (
+                {/* ── HIDDEN WHEN THE FLIGHT STATE CANNOT PLACE IT ──
+                    AND IT TESTED A WORD THE BADGE ALMOST NEVER SAYS. flight.status
+                    is badgeLabel's output, which is the PROVIDER's vocabulary
+                    uppercased: IN AIR, DEPARTED, LANDING, LANDED, BOARDING, GATE
+                    CLOSED, SCHEDULED, DELAYED, DIVERTED, CANCELLED, NO UPDATE.
+                    "ACTIVE" is not in it. It can only appear through badgeLabel's
+                    last fallback -- the mapped status uppercased -- which needs
+                    raw_status to be absent or a word BADGE_LABEL does not know.
+                    Every airborne flight the provider names as EnRoute, Departed
+                    or Approaching came through here as IN AIR, DEPARTED or
+                    LANDING and failed this test, so the bar drew for landed
+                    flights and for almost nothing else. The same mistake is
+                    written up at tripPhase, which was introduced to fix it and
+                    never reached this line.
+
+                    SO IT ASKS tripPhase, which is this file's own word for what
+                    the flight is doing: effectiveStatus, the clock's verdict on
+                    the stored status, in the five-word vocabulary the card
+                    already branches on. 'air' and 'landed' are the two states a
+                    fraction of a journey means anything in.
+
+                    computeProgress STILL DECIDES WHETHER THERE IS A NUMBER. It
+                    returns null for a flight it cannot place and reads the same
+                    effectiveStatus, so the two cannot disagree; this only decides
+                    whether a number that exists is worth drawing. */}
+                {progressValue !== null && (tripPhase === 'air' || tripPhase === 'landed') && (
                   <ProgressBar
                     progress={progressValue}
                     color={flight.statusColor}
