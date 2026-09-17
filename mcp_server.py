@@ -642,13 +642,19 @@ def _build_dto(item) -> dict:
     }
 
 
-def _movement_utc(item: dict, movement: str):
-    """Scheduled UTC for one movement, as an aware datetime, or None."""
-    raw = ((item.get(movement) or {}).get("scheduledTime") or {}).get("utc")
-    dt = _parse_dt(raw)
+def _block_utc(block):
+    """The UTC instant of one provider time block ({local, utc}), as an aware
+    datetime, or None. The provider's utc strings carry no offset, so a naive
+    parse is pinned to UTC rather than left to compare as local."""
+    dt = _parse_dt((block or {}).get("utc"))
     if dt is not None and dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def _movement_utc(item: dict, movement: str):
+    """Scheduled UTC for one movement, as an aware datetime, or None."""
+    return _block_utc((item.get(movement) or {}).get("scheduledTime"))
 
 
 def _arrival_key(item: dict):
@@ -1063,9 +1069,30 @@ def _build_route_row(item):
     dep_tz = dep_airport.get("timeZone")
     arr_tz = dest_airport.get("timeZone")
 
+    # THE LIVE TIMES, WHICH THIS ROW USED TO THROW AWAY. The same three things
+    # _build_movement reads on the flight-number path: revisedTime (the gate
+    # time, an estimate before the event and the actual after it), runwayTime
+    # (wheels-off, when known) and quality (whether the movement has live
+    # coverage at all). Carried per movement because they are the only honest
+    # evidence a board row has of progress -- the status word is not, see
+    # _row_departed. Emitted raw, under names that do not claim "actual": which
+    # of them counts as one is decided at emission time against the clock.
+    dep_rev_local, dep_rev_utc = _times(departure, "revisedTime")
+    dep_run_local, dep_run_utc = _times(departure, "runwayTime")
+    arr_rev_local, arr_rev_utc = _times(arrival, "revisedTime")
+    arr_run_local, arr_run_utc = _times(arrival, "runwayTime")
+
     return {
         "flight_number": re.sub(r"\s+", "", str(it.get("number") or "")).upper(),
         "airline": (it.get("airline") or {}).get("name"),
+        # THE AIRPORT THIS ROW LEAVES FROM. Implied by the board until now --
+        # every row on IDR's board leaves IDR -- and read off routeResult.origin
+        # on the device. A connecting itinerary's second leg leaves from the hub,
+        # so a leg has to carry its own. None when the provider named the
+        # departure airport without coding it, exactly as destination_iata is;
+        # the device falls back to the board's origin. Additive: a client that
+        # does not know this key behaves precisely as it does today.
+        "origin_iata": dep_airport.get("iata"),
         # None when the provider named the airport without coding it. The KEY
         # is always present, so the payload keeps its shape.
         "destination_iata": dest_iata,
@@ -1089,11 +1116,87 @@ def _build_route_row(item):
         "arrival_scheduled": format_time(arr_local, arr_tz) if arr_local else None,
         "arrival_scheduled_iso": _to_wire_iso(arr_local, arr_utc_raw),
         "arrival_timezone": arr_tz,
+        # Local wall clock with the true offset, like every other *_iso here.
+        # None when the provider sent nothing for that block.
+        "departure_revised_iso": _to_wire_iso(dep_rev_local, dep_rev_utc) if dep_rev_local else None,
+        "departure_runway_iso": _to_wire_iso(dep_run_local, dep_run_utc) if dep_run_local else None,
+        "departure_live": _live_feed(departure.get("quality")),
+        "arrival_revised_iso": _to_wire_iso(arr_rev_local, arr_rev_utc) if arr_rev_local else None,
+        "arrival_runway_iso": _to_wire_iso(arr_run_local, arr_run_utc) if arr_run_local else None,
+        "arrival_live": _live_feed(arrival.get("quality")),
+        # THE PROVIDER'S WORD, STILL MAPPED AND STILL SENT, and still not to be
+        # read as progress: "active" here means the provider has flagged the
+        # flight Departed or EnRoute, which it does hours before the event.
+        # "departed" is the field that answers that question.
         "status": map_status(it.get("status")),
         "aircraft_model": (it.get("aircraft") or {}).get("model"),
         # Sort and window key. Private, and stripped before anything is emitted.
         "_dep_utc": dep_utc,
+        # The two departure instants as instants, for _row_departed. Private
+        # for the same reason: the cache holds these rows for up to twelve
+        # hours, and the flag has to be decided against the clock at the moment
+        # a row is SERVED, not the moment it was fetched.
+        "_dep_rev_utc": _block_utc(departure.get("revisedTime")),
+        "_dep_run_utc": _block_utc(departure.get("runwayTime")),
+        # The provider's own word, unmapped, for the veto in _row_departed.
+        "_raw_status": str(it.get("status") or "").strip().lower(),
     }
+
+
+# THE PROVIDER'S PRE-DEPARTURE WORDS. Its failure mode runs one way only -- it
+# claims Departed/EnRoute early, never CheckIn late -- so one of these is
+# believable and vetoes the flag outright.
+_PRE_DEPARTURE_STATUSES = frozenset({"expected", "checkin", "boarding", "gateclosed", "delayed"})
+
+
+def _row_departed(row: dict, now) -> bool:
+    """Whether a board row's flight has actually left, decided at `now`.
+
+    NOT FROM THE STATUS WORD. AeroDataBox marks a flight "Departed" or
+    "EnRoute" while it is still at the gate, hours ahead of the schedule: the
+    poller observed it on 6E6188 and refuses the word (_has_departed), and a
+    board that mapped the word straight through printed "active" on every row
+    of a twelve-hour window. One live BOM board (251 rows, 2026-09-17) carried
+    "Departed" on 248 of them, including one whose revised time was still three
+    minutes in the future.
+
+    So the evidence is the movement's own times, and three things must hold:
+    the scheduled time has passed; the movement has live coverage, so its
+    times are being corrected as the flight happens rather than copied from a
+    timetable; and a runway time or a revised time is IN THE PAST. That last
+    clause is the flight-number path's rule -- an actual in the future is not
+    an actual -- and it is what keeps the premature "Departed" out.
+
+    AND ONE VETO. The provider often publishes a revised time equal to the
+    schedule and leaves it there, so for a flight a few minutes past its time
+    with no correction yet, "revised in the past" says no more than "scheduled
+    in the past". Two rows on that board (a CheckIn and an Expected, both
+    minutes past schedule with the schedule copied into revised) came out True
+    on the times alone. So a raw pre-departure status forces False: the
+    provider over-claims in the departed direction only, which makes its
+    "still checking in" the one word here that is believed. runwayTime, which
+    would settle it outright, was present on 3 rows of 251.
+    """
+    if row.get("_raw_status") in _PRE_DEPARTURE_STATUSES:
+        return False
+    if not row.get("departure_live"):
+        return False
+    sched = row.get("_dep_utc")
+    if sched is None or sched > now:
+        return False
+    for key in ("_dep_run_utc", "_dep_rev_utc"):
+        t = row.get(key)
+        if t is not None and t <= now:
+            return True
+    return False
+
+
+def _emit_row(row: dict, now) -> dict:
+    """A fresh dict for the wire: the flag decided now, the private instants
+    stripped. A caller must never hold a reference into the cache."""
+    out = {k: v for k, v in row.items() if not k.startswith("_")}
+    out["departed"] = _row_departed(row, now)
+    return out
 
 
 def _fetch_board_window(code: str, day, start, end):
@@ -1295,9 +1398,11 @@ def fetch_route(origin, destination, hours=12, date=None) -> dict:
                              error=f"Could not load the departure board for {o}.",
                              date=day)
 
+    # One reading of the clock for the window and for every row's departed
+    # flag, so the two cannot disagree about a flight leaving this second.
+    now = datetime.now(timezone.utc)
     if day is None:
         # Unchanged: the rolling window from now.
-        now = datetime.now(timezone.utc)
         horizon = now + timedelta(hours=window)
         def in_window(r):
             return now <= r["_dep_utc"] <= horizon
@@ -1324,9 +1429,8 @@ def fetch_route(origin, destination, hours=12, date=None) -> dict:
 
     return _route_result(
         o, d, window,
-        # Fresh dicts. A caller must never hold a reference into the cache.
-        flights=[{k: v for k, v in r.items() if k != "_dep_utc"} for r in kept],
-        unresolved=[{k: v for k, v in r.items() if k != "_dep_utc"} for r in unresolved],
+        flights=[_emit_row(r, now) for r in kept],
+        unresolved=[_emit_row(r, now) for r in unresolved],
         total_found=len(matched),
         data_age_seconds=age_seconds,
         date=day,
