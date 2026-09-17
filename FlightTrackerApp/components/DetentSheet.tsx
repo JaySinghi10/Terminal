@@ -74,6 +74,19 @@ const SHEET_FLING = 400;
 // springs back to the small detent.
 const SHEET_DISMISS_BELOW = 40;
 const SHEET_DISMISS_VEL = 500;
+// HOW FAR A FINGER MUST KEEP GOING, in points, after a scrolling list reaches
+// offset zero under it, before the sheet takes the drag. A scroll back to the
+// top of a list overshoots the first row by a handful of points as a matter of
+// course, and with the handover at zero points every such overshoot dragged
+// the sheet down. Twenty-four is a little over two pan activations (UIKit's
+// is ten): far enough that a scroll's overshoot never reaches it, short enough
+// that a finger that means to pull the sheet down barely notices the wait.
+// A DISTANCE, NOT A VELOCITY: the overshoot to guard against is FAST -- it is
+// the tail of a flick -- so a velocity gate would let exactly the wrong drags
+// through and hold back the slow deliberate ones. Only for a handover that
+// happens mid-drag; a drag that begins with the list already at the top has
+// nothing to overshoot and takes the sheet at once, as it always has.
+const SHEET_HANDOVER_SLACK = 24;
 // THE RUBBER BAND PAST THE END DETENTS, UIKit's own curve and constant:
 // shown = (1 - 1 / (excess * c / d + 1)) * d, with d the sheet's own height.
 const SHEET_BAND = 0.55;
@@ -182,6 +195,14 @@ export function DetentSheet({
   const rawH = useSharedValue(0);
   const lastTy = useSharedValue(0);
   const releaseV = useSharedValue(0);
+  // THE HANDOVER'S TWO FACTS. slack is how many points of downward travel the
+  // sheet still ignores after a list under the finger reached zero mid-drag --
+  // SHEET_HANDOVER_SLACK at the start of a drag that began on a scrolled list,
+  // zero otherwise -- and moved is whether any frame of this drag was the
+  // sheet's own. A release from a drag that moved nothing does nothing: the
+  // fling that ended a scroll must not be read as a fling of the sheet.
+  const slack = useSharedValue(0);
+  const moved = useSharedValue(false);
   // THE LIST'S TWO FACTS: where it is scrolled to, and whether a finger is on
   // it. Both are what decide, at the large detent, whether a frame belongs to
   // the list or to the sheet. Written by SheetScrollView.
@@ -272,11 +293,22 @@ export function DetentSheet({
   // owns a frame rawH is pinned to the sheet's real height so the next frame
   // the sheet owns starts from where it actually is.
   //
+  // BUT NOT ON THE FIRST POINT PAST ZERO. A scroll back to the top overshoots
+  // the first row, and handing that overshoot to the sheet dragged it down on
+  // every such scroll. So a drag that began on a scrolled list is given
+  // SHEET_HANDOVER_SLACK points of downward travel to spend at zero before
+  // the sheet moves; those frames are the sheet's -- the list has stopped --
+  // but they move nothing. A drag that began with the list at the top has no
+  // slack and moves the sheet at once. The lower detents are untouched: the
+  // slack exists only at the largest, which is the only place a list scrolls.
+  //
   // ON RELEASE. Under the small detent past the threshold, or flung down at
   // it, a dismissible sheet asks its owner to close -- the effect above runs
   // that spring, with the fling's velocity carried across in releaseV.
   // Otherwise one detent in the fling's direction, or the nearest, and the
-  // settled index is reported.
+  // settled index is reported. A DRAG THAT NEVER MOVED THE SHEET RELEASES
+  // WITH NO VELOCITY, so the flick that ended a scroll settles the sheet where
+  // it already is rather than sending it a detent down.
   //
   // THE IMMUTABILITY RULE IS OFF FOR THE TWO GESTURES, and only for them. It
   // reads a shared value written inside useMemo as a render-time mutation of
@@ -294,6 +326,10 @@ export function DetentSheet({
         // Assigning the value is what cancels a spring still in flight.
         height.value = height.value;
         rawH.value = height.value;
+        moved.value = false;
+        // Slack only for a drag that begins on a list scrolled past zero: that
+        // is the drag whose handover, if it comes, is an overshoot.
+        slack.value = listActive.value && scrollY.value > 0 ? SHEET_HANDOVER_SLACK : 0;
       })
       .onUpdate(e => {
         'worklet';
@@ -304,9 +340,16 @@ export function DetentSheet({
         const large = ds[ds.length - 1];
         const atTop = height.value >= large - 0.5;
         const listOwns = atTop && listActive.value && (scrollY.value > 0 || dy < 0);
+        // The frame is the sheet's but there is slack to spend first: the
+        // list has stopped at zero under a finger still travelling down.
+        const holding = !listOwns && atTop && listActive.value && slack.value > 0;
         if (listOwns) {
           rawH.value = height.value;
+        } else if (holding) {
+          slack.value = Math.max(0, slack.value - Math.max(0, dy));
+          rawH.value = height.value;
         } else {
+          moved.value = true;
           const raw = rawH.value - dy;
           rawH.value = raw;
           if (raw > large) {
@@ -328,8 +371,9 @@ export function DetentSheet({
       .onEnd(e => {
         'worklet';
         // Upward is positive from here on: the sheet's height grows as the
-        // finger travels up the screen.
-        const v = -e.velocityY;
+        // finger travels up the screen. Zero when the drag moved nothing, so
+        // the release below can only settle the sheet where it stands.
+        const v = moved.value ? -e.velocityY : 0;
         const h = height.value;
         const ds = detentsSV.value;
         const small = ds[0];
