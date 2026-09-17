@@ -92,11 +92,17 @@ async function readPushState(): Promise<PushState> {
 }
 
 // THE PAGES THE PRIVACY POLICY AND TERMS ACTUALLY LIVE AT. The site is a Vercel
-// project with no custom domain -- `vercel domains ls` reports none -- and of
-// its two aliases only this one is public; the other sits behind a Vercel login
-// wall. Verified serving the current text rather than assumed.
-const PRIVACY_URL = 'https://terminal-website-topaz.vercel.app/privacy';
-const TERMS_URL = 'https://terminal-website-topaz.vercel.app/terms';
+// project and terminalaero.com is its domain now; the terminal-website-topaz
+// alias it used to be reached by still serves the same pages.
+//
+// www, NOT THE APEX. The apex only redirects to www, so the browser lands on
+// www either way -- and on the day this was changed the apex record had not
+// reached every resolver (Google's 8.8.8.8 returned nothing while Cloudflare's
+// and Quad9's answered), where the www record resolved everywhere tried. A
+// phone on the wrong resolver would have got "cannot open the page" for a
+// link that works. Verified serving the current text rather than assumed.
+const PRIVACY_URL = 'https://www.terminalaero.com/privacy';
+const TERMS_URL = 'https://www.terminalaero.com/terms';
 
 // ── THE VERSION LINE ────────────────────────────────────────────────────────
 //
