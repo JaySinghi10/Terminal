@@ -4845,10 +4845,30 @@ export function FlightCard({
                     <Text style={s.routeIATA}>{flight.from}</Text>
                     <Text style={s.routeCity} numberOfLines={2}>{trimAirportName(flight.fromCity)}</Text>
                   </View>
+                  {/* ── "Direct" STOOD HERE AND WAS NOT A FACT ──
+                      IT WAS A LITERAL, printed under every route on every card,
+                      and nothing in the record supports it. The DTO carries the
+                      airline, the number, the date, the status, the aircraft and
+                      the two movements -- see _build_dto in mcp_server.py -- and
+                      no count of stops, no segments and no leg count. The
+                      provider answers a flight number with one item per LEG, and
+                      the server picks between them by departure airport, so a
+                      number that stops on the way is two items and this card only
+                      ever describes one of them.
+
+                      WHICH MAKES IT WRONG EXACTLY WHERE IT MATTERS. A tag flight
+                      -- one number, BOM-DEL then DEL-BOM -- is the case the
+                      refresh path already passes an origin to disambiguate, and
+                      it read "Direct" like everything else.
+
+                      THE DURATION AND THE ARROW STAY, because both are derived
+                      from the two movements this card is actually about. When a
+                      stop count arrives in the payload, this is the slot for it,
+                      and it should print what the data says rather than a word
+                      chosen at build time. */}
                   <View style={s.routeMid}>
                     {flight.duration !== null && <Text style={s.routeDuration}>{flight.duration}</Text>}
                     <Text style={s.routeArrow}>· ✈ ·</Text>
-                    <Text style={s.routeDirect}>Direct</Text>
                   </View>
                   <View style={s.routeRight}>
                     <Text style={s.routeIATA}>{flight.to}</Text>
@@ -5009,7 +5029,7 @@ const s = StyleSheet.create({
   routeCity: { fontSize: 13, color: "rgba(226,226,226,0.55)", marginTop: 2, fontFamily: SANS },
   routeDuration: { fontSize: 13, color: "rgba(226,226,226,0.5)", marginBottom: 6, fontFamily: MONO },
   routeArrow: { fontSize: 20, color: "rgba(226,226,226,0.45)", fontFamily: MONO },
-  routeDirect: { fontSize: 13, color: "rgba(226,226,226,0.5)", marginTop: 6, fontFamily: MONO },
+  // routeDirect WENT WITH THE WORD IT DRESSED. See the note at the route row.
   // ── THE LONG-PRESS MENU ────────────────────────────────────────────────────
   //
   // alignSelf CENTRE, so the panel is only as wide as the longest line in it
