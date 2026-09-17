@@ -497,6 +497,25 @@ function normalizeRecord(flight: SavedFlight): { record: SavedFlight | null; cha
     changed = true;
   }
 
+  // ── KNOWN FAULT, NOT YET FIXED: THIS PINS 11 WHILE NEW RECORDS ARE WRITTEN AT 13 ──
+  //
+  // savedFlightFromApi stamps SCHEMA_VERSION, which is 13. This line then
+  // rewrites any record that is not exactly 11 -- so every freshly saved record
+  // is "changed" on its very next read, and readKey writes the whole list back
+  // to disk on EVERY READ of a list that contains one. The v13 fields were
+  // defaulted above, so nothing in the data is wrong; what is wrong is the
+  // rewrite.
+  //
+  // THAT REWRITE IS A LOST-UPDATE RACE. Two reads in flight at once -- the sign-out
+  // snapshot and the store's own reload, a refresh and a save -- each read the
+  // list, each write it back, and whichever lands second overwrites whatever the
+  // first one's caller wrote in between. It cannot empty a list, but it can
+  // silently drop the most recent write.
+  //
+  // THE FIX IS TO STAMP SCHEMA_VERSION HERE AND COMPARE AGAINST IT, so a record
+  // at the current version reads as unchanged and readKey stops writing on read.
+  // Left for its own change: it touches every record on disk and deserves its
+  // own test, and this note is so the next reader does not rediscover it.
   if (version !== 11) {
     flight.schemaVersion = 11;
     changed = true;
