@@ -25,11 +25,15 @@ import Svg, { Path } from 'react-native-svg';
 import { airlineFromFlightNumber } from '../lib/airlines';
 import { makeFlightId } from '../lib/storage';
 import { clock24 } from '../lib/time';
-import { getStatusColor, stripZoneLabel, formatCountdown } from '../lib/flightstatus';
+import { getStatusColor, stripZoneLabel, formatCountdown, CD_LATE } from '../lib/flightstatus';
 import { CARD_FILL, CARD_RADIUS, CARD_GAP, CARD_PAD, SURFACE_EDGE } from '../lib/cards';
 import {
-  useRouteResults, routeDayOf, ROUTE_STATUS_ROUTINE, ROUTE_NO_TIME,
-  type RouteFlight,
+  useRouteResults, routeDayOf, routeStatusWord, ROUTE_NO_TIME, CATCH_RISKY_NOTE,
+  // THE OPTION'S OWN FACTS, from module scope: the row is handed an option and
+  // reads its duration and its leg's origin through the accessors, never off a
+  // field. See the union in lib/routeResults.
+  optDurationMs, legOrigin,
+  type RouteOption,
 } from '../lib/routeResults';
 
 const MONO = 'JetBrainsMono_400Regular';
@@ -46,23 +50,32 @@ const SANS = 'Inter_400Regular';
 const ROUTE_CONNECTOR_MAX = 120;
 
 type Props = {
-  r: RouteFlight;
+  r: RouteOption;
   pinned?: boolean;
-  onPress: (r: RouteFlight) => void;
+  onPress: (r: RouteOption) => void;
 };
 
 export function RouteRow({ r, pinned = false, onPress }: Props) {
   const {
-    savedFlights, routeResult, routeDurationMs, routeRowKey, routeLastKey,
-    routeFastestKeys, routeSavingKey, saveFromRoute,
+    savedFlights, routeResult, routeRowKey, routeLastKey,
+    routeFastestKeys, routeSavingKey, saveFromRoute, routeCatchOf,
   } = useRouteResults();
-  const ms = routeDurationMs(r);
-  const origin = routeResult?.origin ?? '';
+  // A CONNECTION HAS NO ROW YET. Nothing produces one today; when the
+  // connection search does, this is where its two-leg row goes. Rendering
+  // nothing rather than the first leg alone, because a journey drawn as one of
+  // its flights is a wrong row that looks like a right one.
+  if (r.kind === 'via') return null;
+  // THE ROW THIS OPTION WRAPS. Everything below reads the leg, exactly as it
+  // read the row before the union existed; the key and the fastest marker are
+  // the option's, which on a direct option is the same value.
+  const leg = r.leg;
+  const ms = optDurationMs(r);
+  const origin = legOrigin(leg, routeResult?.origin ?? '');
   // The APPLIED date, never routeDate: that can hold a selection the list has
   // not been re-fetched for, which would open a card for a day the row on
   // screen is not from. Null for an undated board, which is today.
   const rowDate = routeResult?.date ?? null;
-  const airline = airlineFromFlightNumber(r.flight_number);
+  const airline = airlineFromFlightNumber(leg.flight_number);
   // Number AND date, so a row shows saved only when THAT instance is saved.
   //
   // The local calendar date a board row DEPARTS on, read from its own ISO.
@@ -71,11 +84,16 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
   // is keyed on the date the backend reports, which is the row's own. Matching
   // the indicator on the board's date instead would leave those rows showing
   // unsaved forever.
-  const rowDay = routeDayOf(r);
-  const saved = savedFlights.some(f => f.id === makeFlightId(r.flight_number, rowDay));
-  const pending = routeSavingKey === r.flight_number;
+  const rowDay = routeDayOf(leg);
+  const saved = savedFlights.some(f => f.id === makeFlightId(leg.flight_number, rowDay));
+  const pending = routeSavingKey === leg.flight_number;
   const busy = routeSavingKey !== null;
-  const showStatus = r.status !== ROUTE_STATUS_ROUTINE;
+  // Null on the ordinary row, which is most of them. See routeStatusWord.
+  const statusWord = routeStatusWord(leg);
+  // WHETHER IT CAN STILL BE CAUGHT, at the provider's clock. Only the risky
+  // band marks the row itself: a catchable row needs no reassurance, and an
+  // uncatchable one is already under the heading that says so. See optCatch.
+  const risky = routeCatchOf(r) === 'risky';
   return (
     <TouchableOpacity
       style={[s.routeFlatRow, routeRowKey(r) === routeLastKey && s.routeFlatRowLast]}
@@ -95,7 +113,7 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
             {airline !== null && (
               <Text style={s.routeFlatAirline} numberOfLines={1}>{airline}</Text>
             )}
-            <Text style={s.routeFlatNumber} numberOfLines={1}>{r.flight_number}</Text>
+            <Text style={s.routeFlatNumber} numberOfLines={1}>{leg.flight_number}</Text>
           </View>
           <View style={s.routeFlatTags}>
             {/* No "Direct" label: it printed identically on every row, and the
@@ -104,9 +122,17 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
             {!pinned && routeFastestKeys.has(routeRowKey(r)) && (
               <Text style={s.routeFastest}>{'fastest'}</Text>
             )}
-            {showStatus && (
-              <Text style={[s.routeFlatStatus, { color: getStatusColor(r.status) }]} numberOfLines={1}>
-                {r.status}
+            {risky && (
+              <Text style={s.routeClosing} numberOfLines={1}>{'closing'}</Text>
+            )}
+            {statusWord !== null && (
+              // "departed" takes the live green the app already uses for a
+              // flight under way; the other two words carry their own colour.
+              <Text
+                style={[s.routeFlatStatus, { color: getStatusColor(statusWord === 'departed' ? 'active' : statusWord) }]}
+                numberOfLines={1}
+              >
+                {statusWord}
               </Text>
             )}
           </View>
@@ -118,7 +144,7 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
             rather than by tuning. */}
         <View style={s.routeFlatTop}>
           <Text style={s.routeFlatTime} numberOfLines={1}>
-            {clock24(r.departure_scheduled_iso, r.departure_scheduled)}
+            {clock24(leg.departure_scheduled_iso, leg.departure_scheduled)}
           </Text>
           <View style={s.routeConn}>
             {ms !== null && (
@@ -135,8 +161,8 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
               row's right edge and the connector's share is unchanged. */}
           <Text style={[s.routeFlatTime, s.routeFlatTimeEnd]} numberOfLines={1}>
             {clock24(
-              r.arrival_scheduled_iso,
-              r.arrival_scheduled === null ? ROUTE_NO_TIME : stripZoneLabel(r.arrival_scheduled),
+              leg.arrival_scheduled_iso,
+              leg.arrival_scheduled === null ? ROUTE_NO_TIME : stripZoneLabel(leg.arrival_scheduled),
             )}
           </Text>
         </View>
@@ -152,9 +178,15 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
             {/* Never null in practice — a recovered row carries the code its
                 name resolved to — but the wire type allows it, and the answer
                 is knowable anyway: every row here is for this destination. */}
-            {r.destination_iata ?? routeResult?.destination ?? ''}
+            {leg.destination_iata ?? routeResult?.destination ?? ''}
           </Text>
         </View>
+
+        {/* THE LINE THAT SAYS WHY, under the codes, in the same amber as the
+            tag. One sentence, so it is read rather than noticed. */}
+        {risky && (
+          <Text style={s.routeClosingNote}>{CATCH_RISKY_NOTE}</Text>
+        )}
       </View>
 
       {/* Nested Touchable: React Native gives the responder to the deepest view
@@ -164,7 +196,7 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
         activeOpacity={0.7}
         disabled={saved || busy}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        onPress={() => saveFromRoute(r.flight_number, rowDay ?? rowDate, origin || null)}
+        onPress={() => saveFromRoute(leg.flight_number, rowDay ?? rowDate, origin || null)}
       >
         <View style={s.routeFlatMarkBox}>
           {pending ? (
@@ -288,4 +320,9 @@ const s = StyleSheet.create({
   // Its own size and family: it sits in the row's flag group, not inside a
   // parent Text it could inherit from.
   routeFastest: { fontSize: 11, color: "#4ade80", fontFamily: MONO },
+  // THE RISKY BAND'S MARK, in the amber the app already uses for late. Same
+  // size and family as the fastest tag it sits beside.
+  routeClosing: { fontSize: 11, color: CD_LATE, fontFamily: MONO },
+  // Its reason, one line under the codes, at the codes' size.
+  routeClosingNote: { fontSize: 11, color: CD_LATE, fontFamily: SANS, marginTop: 8, lineHeight: 15 },
 });

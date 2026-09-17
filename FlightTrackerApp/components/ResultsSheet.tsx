@@ -85,7 +85,7 @@ import {
   g,
 } from '../lib/glass';
 import {
-  CARD_FILL, CARD_GAP, PAGE_BG, PAGE_RGB, SURFACE_EDGE, GLASS_DARK,
+  CARD_FILL, CARD_GAP, PAGE_BG, PAGE_RGB, SURFACE_EDGE, GLASS_DARK, GREEN,
 } from '../lib/cards';
 import { trimAirportName } from './FlightCard';
 import { RouteRow } from './RouteRow';
@@ -95,7 +95,7 @@ import {
   SHEET_GRABBER_CLEARANCE, SHEET_PILL_PAD, SHEET_PILL_LINE, SHEET_HEAD_PAD,
   ROUTE_MAX_DATE_DAYS, ROUTE_SORT_LABELS, ROUTE_SORT_PILLS, ROUTE_SORT_CAPSULE,
   ROUTE_BANDS,
-  type RouteBand, type RouteFlight,
+  type RouteBand, type RouteOption,
 } from '../lib/routeResults';
 
 const MONO = 'JetBrainsMono_400Regular';
@@ -235,7 +235,7 @@ export function ResultsSheet() {
     routeShown,
     routeAirlineOptions, routeAirOn,
     routeDepCounts, routeArrCounts, routeAirCounts,
-    routeSorted,
+    routeSorted, routeClosedSorted,
     routeActiveFilters, routeControlsDirty,
     resetRouteControls,
     setSheetPresented, sheetClosing, setSheetClosing,
@@ -262,7 +262,7 @@ export function ResultsSheet() {
   // the bubble's own tap. Nothing is dismissed: the bubble is in the band above
   // this sheet at the small detent, and at the others the person is reading a
   // list and can bring the sheet down when they are done choosing.
-  const selectRow = (r: RouteFlight) => {
+  const selectRow = (r: RouteOption) => {
     Keyboard.dismiss();
     setRouteSelectedKey(routeRowKey(r));
   };
@@ -619,11 +619,14 @@ export function ResultsSheet() {
   // Built here rather than at the call sites, because the panel that renders
   // them lives in a Modal far from the trigger. One array per control, and one
   // lookup, so the two can still never disagree.
-  type RouteOption = { key: string; label: string; on: boolean; press: () => void };
+  // DropOption, not RouteOption: that name is the provider's union of a direct
+  // flight and a connection, which this sheet also handles. An entry in a
+  // dropdown is a different thing and now says so.
+  type DropOption = { key: string; label: string; on: boolean; press: () => void };
 
   // THE FOUR ORDERINGS, as the pill's own dropdown. Single-choice, so picking
   // one is the end of the interaction: the sort is set and the panel closes.
-  const routeSortOptions: RouteOption[] = ROUTE_SORT_PILLS.map(opt => ({
+  const routeSortOptions: DropOption[] = ROUTE_SORT_PILLS.map(opt => ({
     key: opt,
     label: ROUTE_SORT_LABELS[opt],
     on: routeSort === opt,
@@ -632,21 +635,21 @@ export function ResultsSheet() {
 
   // The three filters are multi-select: the panel deliberately stays open, and
   // the counts beside each option update under the finger.
-  const routeDepOptions: RouteOption[] = ROUTE_BANDS.map(b => ({
+  const routeDepOptions: DropOption[] = ROUTE_BANDS.map(b => ({
     key: b,
     label: `${b} (${routeDepCounts[b] ?? 0})`,
     on: routeDepBands[b],
     press: () => toggleBand(setRouteDepBands, b),
   }));
 
-  const routeArrOptions: RouteOption[] = ROUTE_BANDS.map(b => ({
+  const routeArrOptions: DropOption[] = ROUTE_BANDS.map(b => ({
     key: b,
     label: `${b} (${routeArrCounts[b] ?? 0})`,
     on: routeArrBands[b],
     press: () => toggleBand(setRouteArrBands, b),
   }));
 
-  const routeAirOptions: RouteOption[] = routeAirlineOptions.map(a => ({
+  const routeAirOptions: DropOption[] = routeAirlineOptions.map(a => ({
     key: a,
     label: `${a} (${routeAirCounts[a] ?? 0})`,
     on: !routeAirlinesOff.includes(a),
@@ -658,7 +661,7 @@ export function ResultsSheet() {
   // that end and leaves the other alone; the applied date is carried over, not
   // the date control's current setting, so the picker cannot silently move the
   // results to a different day.
-  const routeEndOptions = (which: 'orig' | 'dest'): RouteOption[] => {
+  const routeEndOptions = (which: 'orig' | 'dest'): DropOption[] => {
     if (routeResult === null || routePick === null) return [];
     const list = which === 'orig' ? routePick.from : routePick.to;
     const current = which === 'orig' ? routeResult.origin : routeResult.destination;
@@ -677,7 +680,7 @@ export function ResultsSheet() {
     }));
   };
 
-  const routeOpenOptions: RouteOption[] =
+  const routeOpenOptions: DropOption[] =
     routeOpenDrop === 'sort' ? routeSortOptions
       : routeOpenDrop === 'dep' ? routeDepOptions
         : routeOpenDrop === 'arr' ? routeArrOptions
@@ -765,7 +768,7 @@ export function ResultsSheet() {
         ? `This route is quiet for the next ${routeResult.window_hours} `
           + `${routeResult.window_hours === 1 ? 'hour' : 'hours'}`
         : `This route is quiet on ${routeDateLabel(routeResult.date)}`)
-      : routeSorted.length === 0
+      : routeSorted.length === 0 && routeClosedSorted.length === 0
         ? `All ${routeShown} ${routeShown === 1 ? 'flight is' : 'flights are'} hidden `
           + `by the ${routeActiveFilters.join(' and ')} `
           + `${routeActiveFilters.length === 1 ? 'filter' : 'filters'}. Relax one, or Reset.`
@@ -1092,6 +1095,14 @@ export function ResultsSheet() {
           to choose between options, and rows are the options. The fastest
           rows still wear their in-row tag; that is the row's, not a section's.
 
+          ONE HEADING, AND ONLY WHEN IT HAS ROWS UNDER IT: the flights nobody
+          can catch any more -- departed, or inside the check-in deadline --
+          drawn below the open list in the same order, under the words that
+          say so. They are still rows, still savable and still tappable, for
+          the person following a flight they are not on. When every flight is
+          gone the heading is the top of the list, with no empty group above
+          it. See optCatch in lib/routeResults for the bands.
+
           IT FILLS WHAT THE HEADER LEAVES of the sheet's large height, and
           scrolls only at that height: SheetScrollView is the shell's own list,
           registered with its pan, so at the other detents a drag on the rows
@@ -1108,9 +1119,19 @@ export function ResultsSheet() {
         {emptyLine !== null ? (
           <Text style={sh.empty}>{emptyLine}</Text>
         ) : (
-          routeSorted.map(r => (
-            <RouteRow key={routeRowKey(r)} r={r} onPress={selectRow} />
-          ))
+          <>
+            {routeSorted.map(r => (
+              <RouteRow key={routeRowKey(r)} r={r} onPress={selectRow} />
+            ))}
+            {routeClosedSorted.length > 0 && (
+              <Text style={[sh.groupHead, routeSorted.length === 0 && sh.groupHeadFirst]}>
+                {'Active flights'}
+              </Text>
+            )}
+            {routeClosedSorted.map(r => (
+              <RouteRow key={routeRowKey(r)} r={r} onPress={selectRow} />
+            ))}
+          </>
         )}
       </SheetScrollView>
     </DetentSheet>
@@ -1193,6 +1214,18 @@ const sh = StyleSheet.create({
     fontSize: 13, color: 'rgba(226,226,226,0.6)', fontFamily: SANS,
     lineHeight: 20, paddingVertical: 8,
   },
+  // THE SECTION HEADING THE ROUTE LIST HAD when it was grouped by part of day:
+  // eleven of mono bold, letter-spaced, with the group's air above it. Brought
+  // back for the one group that still earns a heading, in the accent green
+  // rather than the old half ink: these are the flights under way, and green
+  // is what this app prints beside a flight that is live.
+  groupHead: {
+    fontSize: 11, color: GREEN, fontFamily: MONO_BOLD,
+    letterSpacing: 1, marginTop: 28, marginBottom: 6,
+  },
+  // At the top of the list there is nothing to clear, so the heading sits
+  // where the first row would.
+  groupHeadFirst: { marginTop: 0 },
 });
 
 // THE PICKERS' STYLES, AS THEY WERE IN THE SEARCH SCREEN'S SHEET.

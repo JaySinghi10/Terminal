@@ -166,6 +166,10 @@ import {
 import {
   useRouteResults, routeDayOf, routeDurLabel,
   ROUTE_MAX_DATE_DAYS, ROUTE_SORT_DEFAULT, ROUTE_BANDS, ALL_BANDS_ON, ROUTE_NO_TIME,
+  // THE BUBBLE READS THE SELECTED OPTION THROUGH THESE, never off a field: the
+  // first leg's departure, the last leg's arrival, and the leg's own origin for
+  // the lookup. On a direct option all three are the row's own.
+  optFirst, optLast, legOrigin,
   type RouteSort, type RouteBand,
 } from '../../../lib/routeResults';
 // THE SHEET ITSELF, mounted at the end of this screen's tree while the
@@ -1172,6 +1176,14 @@ export default function Search() {
     sheetDetent, sheetHeights,
   } = useRouteResults();
   const routeRowDay = routeDayOf;
+  // THE SELECTED OPTION'S TWO ENDS, bound once. The bubble reads the first
+  // leg's departure and the last leg's arrival; on a direct option both are
+  // the one row. Bound here rather than called in the JSX so the null checks
+  // on the arrival narrow -- TypeScript does not carry a narrowing across two
+  // calls of the same accessor.
+  const bubbleLegs = routeSelected === null
+    ? null
+    : { first: optFirst(routeSelected), last: optLast(routeSelected) };
 
   // ── THE SHEET, PRESENTED AND DISMISSED FROM HERE ──────────────────────────
   //
@@ -3405,19 +3417,22 @@ export default function Search() {
 
           NO PRICE. No provider in this app carries a fare; a blank where one
           would go is worse than not implying there is one. */}
-      {routeResult && !flight && routeSelected !== null && hasAnchor && (
+      {routeResult && !flight && bubbleLegs !== null && hasAnchor && (
         <Reanimated.View style={[dr.bubbleWrap, bubbleStyle]} pointerEvents="box-none">
         <TouchableOpacity
           activeOpacity={0.85}
           accessibilityRole="button"
-          accessibilityLabel={`open ${routeSelected.flight_number}`}
+          accessibilityLabel={`open ${bubbleLegs.first.flight_number}`}
           onPress={() => {
             Keyboard.dismiss();
             setChatResponse(null);
             dismissSheet();
+            // THE FIRST LEG'S NUMBER AND ITS OWN ORIGIN. On a direct option
+            // that is the row and the board's origin, which is what this has
+            // always sent; a connection's card is the next stage's question.
             runFlightLookup(
-              routeSelected.flight_number, false,
-              routeResult.date ?? null, routeResult.origin || null,
+              bubbleLegs.first.flight_number, false,
+              routeResult.date ?? null, legOrigin(bubbleLegs.first, routeResult.origin) || null,
             );
           }}
         >
@@ -3452,9 +3467,9 @@ export default function Search() {
         >
           <Text style={dr.bubbleMeta} numberOfLines={1}>
             {[
-              airlineFromFlightNumber(routeSelected.flight_number),
-              routeSelected.flight_number,
-              routeDateLabel(routeRowDay(routeSelected)),
+              airlineFromFlightNumber(bubbleLegs.first.flight_number),
+              bubbleLegs.first.flight_number,
+              routeDateLabel(routeRowDay(bubbleLegs.first)),
             ].filter(Boolean).join('  \u00b7  ')}
           </Text>
           {/* THE TIMES AND THE CODES, WHICH IS THE WHOLE OF THE JOURNEY. Both
@@ -3471,8 +3486,8 @@ export default function Search() {
             <View>
               <Text style={dr.bubbleTime}>
                 {clock24(
-                  routeSelected.departure_scheduled_iso,
-                  stripZoneLabel(routeSelected.departure_scheduled),
+                  bubbleLegs.first.departure_scheduled_iso,
+                  stripZoneLabel(bubbleLegs.first.departure_scheduled),
                 )}
               </Text>
               <Text style={dr.bubbleCode}>{routeResult.origin}</Text>
@@ -3481,14 +3496,14 @@ export default function Search() {
             <View style={dr.bubbleEnd}>
               <Text style={dr.bubbleTime}>
                 {clock24(
-                  routeSelected.arrival_scheduled_iso,
-                  routeSelected.arrival_scheduled === null
+                  bubbleLegs.last.arrival_scheduled_iso,
+                  bubbleLegs.last.arrival_scheduled === null
                     ? ROUTE_NO_TIME
-                    : stripZoneLabel(routeSelected.arrival_scheduled),
+                    : stripZoneLabel(bubbleLegs.last.arrival_scheduled),
                 )}
               </Text>
               <Text style={dr.bubbleCode}>
-                {routeSelected.destination_iata ?? routeResult.destination}
+                {bubbleLegs.last.destination_iata ?? routeResult.destination}
               </Text>
             </View>
           </View>
