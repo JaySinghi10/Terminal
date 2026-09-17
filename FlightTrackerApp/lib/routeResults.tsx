@@ -137,7 +137,15 @@ const SHEET_SMALL_HEIGHT = SHEET_HEAD_HEIGHT - SHEET_SMALL_TOLERANCE;
 // itself is sound and deleting it would be deleting working code to tidy a list.
 export const ROUTE_SORT_OPTIONS = ['departure', 'arrival', 'duration', 'latest', 'airline'] as const;
 export type RouteSort = typeof ROUTE_SORT_OPTIONS[number];
-export const ROUTE_SORT_DEFAULT: RouteSort = 'departure';
+// FASTEST, NOT EARLIEST. The bubble has always defaulted to the fastest flight
+// -- see routeSelected -- and the capsule over the list used to read "Earliest
+// flight" beside it, two controls disagreeing about which row the list is
+// about. The default ordering is now the one the default selection was already
+// taken from. Consequences: the pin is never lifted out of a default list (it
+// is already first); a row still waiting on a bought-in arrival sorts last
+// until the fill lands; and choosing Earliest is now a change, so it marks the
+// controls dirty and Reset offers to undo it.
+export const ROUTE_SORT_DEFAULT: RouteSort = 'duration';
 
 // The bare enum values are ambiguous on a pill: "departure" could as easily mean
 // a filter as an ordering. Naming the quantity being sorted on removes the

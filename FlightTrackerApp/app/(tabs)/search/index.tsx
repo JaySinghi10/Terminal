@@ -1332,8 +1332,9 @@ export default function Search() {
     if (lastTapRef.current === tap) return;
     lastTapRef.current = tap;
     const day = /^\d{4}-\d{2}-\d{2}$/.test(linkParams.date ?? '') ? (linkParams.date as string) : null;
-    // Earliest is the screen's own default ('departure'); a notification never
-    // asks for anything else today, and 'cheapest' waits for a fare source.
+    // The screen's own default, which is Fastest ('duration'); a notification
+    // never asks for anything else today, and 'cheapest' waits for a fare
+    // source.
     setRouteSort(ROUTE_SORT_DEFAULT);
     setRouteDate(day);
     void runRouteLookup(from, to, day);
