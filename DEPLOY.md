@@ -91,10 +91,10 @@ PARSE_MODEL=claude-haiku-4-5
 ```
 
 **`--update-env-vars`, never `--set-env-vars`.** `--set-env-vars` replaces the
-service's entire environment, which would silently drop `RAPIDAPI_KEY` and
-`ALERTS_BUCKET` and break flight lookups and alerts along with it. The same
-applies to `--set-secrets`, which would unmount `AERODATABOX_API_KEY` and
-`TOKEN_KEY`.
+service's entire environment, which would silently drop `ALERTS_BUCKET`,
+`POLL_SECRET`, `DISPATCH_SECRET` and the two alert secrets — breaking alerts,
+the poller and the dispatcher together. The same applies to `--set-secrets`,
+which would unmount `AERODATABOX_API_KEY` and `TOKEN_KEY`.
 
 ## Google sign-in: `TOKEN_KEY` and `GOOGLE_IOS_CLIENT_ID`
 
@@ -145,8 +145,7 @@ subscription is the Starter plan: 40,000 units a month at 5 requests a second.
 | Variable | Required | Default | What it is |
 |---|---|---|---|
 | `AERODATABOX_API_KEY` | **yes** | — | The direct subscription's key. Sent as `X-Api-Key` to `https://api.aerodatabox.com`. |
-| `AERODATABOX_GATEWAY` | no | `direct` | `direct` or `rapidapi`. The rollback switch. |
-| `RAPIDAPI_KEY` | no | — | The old marketplace key. Kept as the fallback; see below. |
+| `AERODATABOX_GATEWAY` | no | `direct` | `direct` or `rapidapi`. See the note on the rollback switch below. |
 
 ```bash
 # One-time. The key is read from the file and never printed.
@@ -156,28 +155,31 @@ gcloud run services update "$SERVICE" --region "$REGION" --project "$PROJECT_ID"
 ```
 
 **Secret Manager rather than a plain env var**, which is how `TOKEN_KEY` and
-`GEMINI_API_KEY` are already mounted. `RAPIDAPI_KEY` and `FR24_API_TOKEN` are
-plain values for historical reasons; a new provider key should not add to that.
+`GEMINI_API_KEY` are already mounted. `FR24_API_TOKEN` is a plain value for
+historical reasons; a new provider key should not add to that.
 
-**The fallback is automatic and narrow.** When the gateway is `direct` and the
-direct call comes back **401 or 403** — the key wrong, missing or not entitled
-— the same request is retried once against RapidAPI, and the service logs the
-reason once per process. Nothing else falls back: a **429** is the rate limit
-or a spent allowance, and answering it on the other account would double the
-spend and hide it. With no `AERODATABOX_API_KEY` set at all, every call takes
-the RapidAPI path and says so, once.
+**THERE IS NO FALLBACK ANY MORE, AND `RAPIDAPI_KEY` IS NOT SET.** The direct
+gateway is the only path. The code still carries the fallback — a **401 or
+403** from the direct call retries once against RapidAPI — but with no
+`RAPIDAPI_KEY` on the service that branch cannot run, and the caller sees the
+direct failure, which is the honest outcome. A log search across the whole
+period since the migration found the fallback had never once fired, and the
+RapidAPI subscription is being cancelled; the key was removed from the service
+in September 2026 after it was exposed in a terminal, so that a direct auth
+failure could not quietly start spending on a compromised account.
 
-**So the order of operations is not delicate.** Deploying this before the
-secret exists costs nothing: the service keeps working on RapidAPI. Adding the
-secret switches it over on the next revision.
+**`AERODATABOX_API_KEY` IS THEREFORE REQUIRED.** Deploying without it no longer
+degrades to RapidAPI — it leaves flight lookups unconfigured, which
+`_adb_configured` reports as such.
 
-**Rolling back** is `--update-env-vars AERODATABOX_GATEWAY=rapidapi`, which
-pins the old path whatever the direct key does. Nothing else changes: the two
-gateways serve identical paths, parameters and response bodies.
+**Rolling back to RapidAPI is no longer one flag.** `AERODATABOX_GATEWAY=rapidapi`
+still exists in the code, but it needs `RAPIDAPI_KEY` set alongside it and a
+live RapidAPI subscription, and neither is true now. Treat the switch as dead
+unless both are restored deliberately.
 
-**The two allowances are two accounts.** `/quota` reports `gateway` beside
-`units_remaining` for that reason, and the poller's budget floor refuses a
-figure recorded against the other gateway rather than treating it as its own.
+**The unit allowance is one account.** `/quota` still reports `gateway` beside
+`units_remaining`, and the poller's budget floor still refuses a figure
+recorded against the other gateway — a guard that now only ever sees `direct`.
 
 **The unit counter's header name is RapidAPI's.** The direct OpenAPI document
 declares no response headers, so `mcp_server.py` tries a list of candidates and
