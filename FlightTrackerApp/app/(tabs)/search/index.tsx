@@ -372,18 +372,31 @@ function nlOffset(d: Date): number {
   return Math.round((d.getTime() - today.getTime()) / 86400000);
 }
 
-// A day-and-month with no year: this year, or next year if that has already
-// gone. "3 January" asked in December means the January five weeks away, not
-// the one eleven months back.
+// A day-and-month with no year: WHICHEVER OCCURRENCE IS NEARER. "3 January"
+// asked in December means the January five weeks away, not the one eleven
+// months back; "14 September" asked on the 15th means yesterday, which has
+// gone, not the one a year off. The old rule rolled every past date forward,
+// so yesterday's flight was reported as "180 days ahead at most" when "already
+// gone" was the truth.
+//
+// THE LINE IS HALF A YEAR, and it is not a constant of this app's choosing: it
+// is where the two readings are equally far from today, and it happens to be
+// the flight lookup's own reach (FLIGHT_MAX_DATE_DAYS), so a date that rolls
+// forward is always one the app could look up. A tie stays in the past. The
+// leap day follows the same rule: "29 February" asked after it has passed
+// reads as this year's, gone, rather than as no date at all.
 function nlFromDayMonth(day: number, month: number, year: number | null): Date | null {
   const now = new Date();
   const y = year ?? now.getFullYear();
   const made = new Date(y, month, day);
   // Rejects 31 February, which rolls over into March rather than failing.
   if (made.getMonth() !== month || made.getDate() !== day) return null;
-  if (year === null && nlOffset(new Date(y, month, day)) < 0) {
-    const next = new Date(y + 1, month, day);
-    return next.getMonth() === month ? next : null;
+  if (year === null) {
+    const back = -nlOffset(new Date(y, month, day));
+    if (back > 0) {
+      const next = new Date(y + 1, month, day);
+      if (next.getMonth() === month && nlOffset(new Date(y + 1, month, day)) < back) return next;
+    }
   }
   return made;
 }
