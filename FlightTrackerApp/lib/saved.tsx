@@ -1232,6 +1232,9 @@ type SavedContextValue = {
   // ones that resolve, drops the ones whose date has passed. Returns what it
   // saved and how many it dropped, so the caller can say so.
   retryPending: (how: PendingResolvedEvent['how'], skipIds?: string[]) => Promise<{ resolved: SavedFlight[]; dropped: number; limit: boolean }>;
+  // Marks every pending leg whose booking reference is in this list, and
+  // clears every leg whose is not. The list is the server's whole answer.
+  markCancelledBookings: (pnrs: string[]) => Promise<void>;
 };
 
 const SavedContext = createContext<SavedContextValue | null>(null);
@@ -2163,6 +2166,42 @@ export function SavedProvider({ children }: { children: ReactNode }) {
     setPendingState(next);
   }, [email]);
 
+  // ── THE BOOKINGS AN AIRLINE CALLED OFF WITHOUT NAMING A FLIGHT ────────────
+  //
+  // THE WHOLE SET AT ONCE, SET AND CLEARED TOGETHER. The server recomputes the
+  // references still in doubt on every pull and leaves out any a later
+  // confirmation has answered, so this takes that list as the complete truth:
+  // a leg whose reference is in it is doubted, and every other leg is not.
+  // Anything else -- remembering a doubt the server has stopped sending, or
+  // adding to a set it did not send -- would make this state sticky, which is
+  // the one thing it must not be. See bookingCancelled in pendingRules.
+  //
+  // A NAMED CANCELLATION OUTRANKS IT AND IS LEFT ALONE. A leg the airline
+  // cancelled by number and date is already answered; putting a booking-level
+  // doubt beside that answer would only dilute it.
+  //
+  // CASE AND SPACING ARE THE STORE'S, not the email's: references are matched
+  // the way clean_leg wrote them, upper-cased and unspaced on both sides.
+  const markCancelledBookings = useCallback(async (pnrs: string[]): Promise<void> => {
+    const doubted = new Set(pnrs.map(p => String(p ?? '').toUpperCase().replace(/\s/g, '')).filter(Boolean));
+    const list = await getPending(email);
+    let changed = false;
+    const next = list.map(p => {
+      const want = p.legStatus !== 'cancelled'
+        && p.pnr !== null
+        && doubted.has(p.pnr.toUpperCase().replace(/\s/g, ''));
+      if (want === p.bookingCancelled) return p;
+      changed = true;
+      return { ...p, bookingCancelled: want };
+    });
+    // NOTHING IS WRITTEN WHEN NOTHING MOVED. The ordinary pull returns no
+    // notices at all and every leg already says false, and a write per pull
+    // would be a write per pull for nothing.
+    if (!changed) return;
+    await setPending(email, next);
+    setPendingState(next);
+  }, [email]);
+
   // ONE RETRY AT A TIME, for the reason landingSweep runs one sweep at a time:
   // the daily tick and a pull can land in the same second and would each pay
   // for the same lookups.
@@ -2208,6 +2247,24 @@ export function SavedProvider({ children }: { children: ReactNode }) {
           ? await ownFlight(record, leg.tripId, { remind: false })
           : await ownFlight(record, undefined, { remind: false });
         if (!outcome.ok) { limit = true; break; }
+        // ── A DOUBT THE PROVIDER ANSWERED, AT NO COST ────────────────────
+        //
+        // THE LEG LEAVES THIS STORE AND THE DOUBT LEAVES WITH IT. A booking
+        // cancellation that named no flight put this leg in question; the
+        // provider has now published the flight, so the leg becomes an
+        // ordinary tracked flight and nobody was asked anything.
+        //
+        // THE STRONGEST FORM OF THAT ANSWER IS A FLIGHT THAT HAS ALREADY
+        // FLOWN: active or landed means the aircraft went, which settles this
+        // leg whatever the booking email meant. A flight merely SCHEDULED is
+        // weaker -- it says the airline still intends to fly it, not that this
+        // passenger is still on it -- and the two are told apart here so the
+        // difference is visible in a development build. Both clear the doubt
+        // today, because a SavedFlight has nowhere to carry one.
+        if (leg.bookingCancelled) {
+          const flown = record.status === 'active' || record.status === 'landed';
+          console.warn(`[booking] ${leg.flightNumber} doubt cleared by provider (${flown ? 'flown' : record.status})`);
+        }
         next = next.filter(p => p.id !== leg.id);
         resolved.push(record);
         await recordResolved(email, leg, record, how);
@@ -2323,11 +2380,12 @@ export function SavedProvider({ children }: { children: ReactNode }) {
     addPendingLeg,
     removePendingLeg,
     retryPending,
+    markCancelledBookings,
   }), [
     savedFlights, hydrated, email, setEmail, refreshing,
     saveRecord, handleUnsave, undoUnsave, refreshOne, refreshAll,
     handleRemind, setArchived, ownFlight, disownFlight,
-    pending, addPendingLeg, removePendingLeg, retryPending,
+    pending, addPendingLeg, removePendingLeg, retryPending, markCancelledBookings,
   ]);
 
   return (

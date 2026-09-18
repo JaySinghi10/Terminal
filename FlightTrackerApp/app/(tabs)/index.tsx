@@ -90,6 +90,9 @@ import {
   // WEEKDAYS and MONTHS went with it: formatClock was their only reader here.
   formatClock,
   StatusLine,
+  // THE AMBER THIS APP ALREADY USES FOR LATE, for the one state that is not a
+  // verdict: a booking the airline cancelled without naming its flights.
+  CD_LATE,
 } from '../../lib/flightstatus';
 // THE SWIPE, AND EVERY PIECE IT IS MADE OF. The button, the expanding box, the
 // threshold's haptic, the geometry, the spring, the fills, the glyphs and the
@@ -1051,12 +1054,22 @@ const PendingRow = memo(function PendingRow({
               which is exactly what join(' · ') produced when the other two
               entries survived the filter. */}
           <Text style={gm.legSub} numberOfLines={1}>
-            {leg.legStatus === 'cancelled' && (
+            {/* ── THREE STATES, AND THE MIDDLE ONE IS A DOUBT ──────────────
+                CANCELLED is the airline naming this flight. BOOKING CANCELLED
+                is the airline cancelling the booking and naming no flight at
+                all, so the app can say only that something under this
+                reference is off -- amber rather than red, because amber is
+                what this app already uses for "not right, not confirmed". */}
+            {leg.legStatus === 'cancelled' ? (
               <Text style={[gm.legChip, { color: getStatusColor('cancelled') }]}>{'CANCELLED · '}</Text>
+            ) : leg.bookingCancelled && (
+              <Text style={[gm.legChip, { color: CD_LATE }]}>{'BOOKING CANCELLED · '}</Text>
             )}
             {leg.legStatus === 'cancelled'
               ? 'airline has cancelled this flight'
-              : 'airline has not published it yet'}
+              : leg.bookingCancelled
+                ? 'airline says this booking is cancelled — we cannot tell which legs'
+                : 'airline has not published it yet'}
             {leg.pnr !== null && (
               <Text
                 onPress={() => setBigPnr(true)}

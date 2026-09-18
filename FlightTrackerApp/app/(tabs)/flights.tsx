@@ -1101,6 +1101,10 @@ function UnpublishedLeg({ leg, open, onToggle }: {
     ? 'not checked yet'
     : `${leg.tries} check${leg.tries === 1 ? '' : 's'}, last ${routeDateLabel(localDayKey(leg.lastTriedAt))}`;
   const cancelled = leg.legStatus === 'cancelled';
+  // THE AIRLINE CANCELLED THE BOOKING AND NAMED NO FLIGHT. Weaker than
+  // `cancelled` above and never shown beside it: a named cancellation is an
+  // answer, and this is the absence of one. See bookingCancelled.
+  const bookingOff = !cancelled && leg.bookingCancelled;
   // ── THE REFERENCE, FULL SCREEN ──────────────────────────────────────────
   //
   // THE CARD'S OWN STATE AND NOT THE JOURNEY'S, which is the opposite of `open`
@@ -1124,8 +1128,12 @@ function UnpublishedLeg({ leg, open, onToggle }: {
         <View style={st.legIdent}>
           {dated !== null && <Text style={st.legDate}>{dated}</Text>}
           <Text style={st.legIdentNum} numberOfLines={1}>{meta}</Text>
-          <Text style={[st.unpubChip, cancelled && { color: getStatusColor('cancelled') }]}>
-            {cancelled ? 'CANCELLED' : 'UNPUBLISHED'}
+          <Text style={[
+            st.unpubChip,
+            cancelled && { color: getStatusColor('cancelled') },
+            bookingOff && { color: CD_LATE },
+          ]}>
+            {cancelled ? 'CANCELLED' : bookingOff ? 'BOOKING CANCELLED' : 'UNPUBLISHED'}
           </Text>
         </View>
         <View style={st.legTimes}>
@@ -1177,7 +1185,13 @@ function UnpublishedLeg({ leg, open, onToggle }: {
           <Text style={st.legIdentName}>
             {cancelled
               ? `${tried} · The airline has cancelled this flight. Terminal read that in your booking email; no data provider carries it.`
-              : `${tried} · No data provider carries this flight yet. Terminal keeps checking.`}
+              : bookingOff
+                // WHAT IS KNOWN AND WHAT IS NOT, IN THAT ORDER. The email said
+                // the booking is off and named no flight, so the app says both
+                // halves rather than picking one: it will not claim this leg is
+                // cancelled, and it will not leave the cancellation unsaid.
+                ? `${tried} · Your airline says this booking is cancelled, but the email named no flight, so Terminal cannot tell which legs it covers. Check with the airline. Terminal keeps checking for this flight.`
+                : `${tried} · No data provider carries this flight yet. Terminal keeps checking.`}
           </Text>
         </>
       )}

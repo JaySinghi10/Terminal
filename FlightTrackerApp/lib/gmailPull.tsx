@@ -71,6 +71,23 @@ export type GmailLeg = {
   source: { subject: string | null; received: string | null };
 };
 
+// ── AN AIRLINE CANCELLED A BOOKING AND NAMED NO FLIGHT ──────────────────────
+//
+// THE EMAIL SAS SENDS: a reference, the word cancelled, and no flight number
+// anywhere in it. There is nothing to mark, so the server sends the reference
+// instead and the app marks the legs it already holds under it -- which is a
+// weaker statement than a cancelled leg and is shown as one. See pendingRules.
+//
+// WITHDRAWN RATHER THAN REMEMBERED. The server recomputes this list on every
+// pull and leaves out any reference a later confirmation has answered, so the
+// app never has to decide when a doubt stops applying: it marks exactly what
+// this pull returned and clears everything else.
+export type GmailCancelledBooking = {
+  pnr: string;
+  subject: string | null;
+  received: string | null;
+};
+
 export type GmailPull = {
   status: 'idle' | 'loading' | 'done' | 'error';
   flights: GmailLeg[];
@@ -153,7 +170,10 @@ const GmailPullContext = createContext<GmailPullValue | null>(null);
 export function GmailPullProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GmailPull>(IDLE_PULL);
   const { session, persistSession } = useAccount();
-  const { savedFlights, ownFlight, handleUnsave, addPendingLeg, retryPending } = useSaved();
+  const {
+    savedFlights, ownFlight, handleUnsave, addPendingLeg, retryPending,
+    markCancelledBookings,
+  } = useSaved();
   const { showToast, showUndo } = useToast();
   const { signIn } = useGoogleSignIn();
 
@@ -183,7 +203,7 @@ export function GmailPullProvider({ children }: { children: ReactNode }) {
   // IT RETURNS THE SENTENCE IT REPORTED. Every branch already computed a line
   // for a toast or for the banner; handing it back is what lets a caller with
   // no banner say the same thing in its own surface.
-  const autoAdd = async (legs: GmailLeg[]): Promise<string> => {
+  const autoAdd = async (legs: GmailLeg[], cancelledBookings: GmailCancelledBooking[] = []): Promise<string> => {
     const added: SavedFlight[] = [];
     let queued = 0;
     // Legs a save refused. Counted rather than inferred from the arithmetic,
@@ -280,6 +300,18 @@ export function GmailPullProvider({ children }: { children: ReactNode }) {
         // One leg that will not look up is skipped; the rest still go in.
       }
     }
+    // ── THE BOOKINGS THE AIRLINE CALLED OFF WITHOUT NAMING A FLIGHT ────────
+    //
+    // AFTER THE LOOP, SO THIS PULL'S OWN NEW LEGS ARE MARKED TOO. A booking
+    // whose confirmation and whose cancellation are both read in the same pull
+    // queues its legs above and has them marked here, in one pass over the
+    // whole pending list rather than a test inside the loop.
+    //
+    // THE WHOLE SET, EVERY TIME. What this pull did not return is cleared --
+    // the server leaves out any reference a later confirmation answered, so
+    // "not in this list" is the app's only definition of "no longer in doubt".
+    await markCancelledBookings(cancelledBookings.map(b => b.pnr));
+
     // THE PENDING LEGS THIS PULL DID NOT SEE -- an email older than the window,
     // say -- get their retry now too, and anything that resolves joins the
     // banner as an addition, because to the user that is what it is.
@@ -403,6 +435,10 @@ export function GmailPullProvider({ children }: { children: ReactNode }) {
       });
       const data = await response.json() as {
         error?: string | null; code?: string | null; flights?: GmailLeg[];
+        // OPTIONAL: a server that predates the booking channel sends none, and
+        // absent means no booking was cancelled -- which is what it meant
+        // before the channel existed.
+        cancelled_bookings?: GmailCancelledBooking[];
       };
       if (data.code === 'gmail_expired' || data.code === 'gmail_forbidden') {
         await persistSession(null);
@@ -417,11 +453,12 @@ export function GmailPullProvider({ children }: { children: ReactNode }) {
         return { kind: 'error', message: m };
       }
       const legs = data.flights ?? [];
+      const cancelledBookings = data.cancelled_bookings ?? [];
       setState({ status: 'done', flights: legs, message: '' });
       // THE EMPTY CASE IS autoAdd'S TOO, so the sentence for it is written in
       // one place. It reports "no upcoming flights found in your gmail" and
       // nothing is added, which is exactly what an empty list means.
-      return { kind: 'done', message: await autoAdd(legs) };
+      return { kind: 'done', message: await autoAdd(legs, cancelledBookings) };
     } catch {
       const m = 'could not reach the server';
       setState({ status: 'error', flights: [], message: m });

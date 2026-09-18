@@ -64,6 +64,26 @@ export type PendingLeg = {
   // 'scheduled' IS THE DEFAULT AND IS FILLED IN ON READ, so every reader can
   // test the field rather than testing whether it exists. See getPending.
   legStatus: 'scheduled' | 'cancelled';
+  // ── THE AIRLINE CANCELLED THE BOOKING AND DID NOT SAY WHICH LEGS ────────
+  //
+  // A WEAKER STATEMENT THAN legStatus, AND A SEPARATE FIELD SO IT CANNOT BE
+  // MISTAKEN FOR ONE. A cancellation email that names a flight marks that
+  // flight; one that names only a booking reference -- which is what SAS sent
+  // for SK969 -- can only say that SOMETHING under this reference is off. It
+  // may be this leg, or the other leg of the same booking, or a leg the app
+  // never held.
+  //
+  // SET FROM THE REFERENCE, ON EVERY PULL, AND CLEARED THE SAME WAY. The
+  // server sends the references still in doubt and leaves out any a later
+  // confirmation answered, so this is recomputed rather than remembered: it is
+  // NOT sticky, unlike legStatus, because it names no leg and so costs nothing
+  // to withdraw. See markCancelledBookings and live_notices on the server.
+  //
+  // AND THE PROVIDER CAN ANSWER IT FOR FREE. A doubted leg keeps its place in
+  // the retry rotation -- see retryBatch, which excludes only a cancelled leg
+  // -- so the day the provider publishes the flight the leg resolves, leaves
+  // this store, and the doubt goes with it.
+  bookingCancelled: boolean;
   // ── WHEN THE BOOKING SAID THIS LEG LANDS ────────────────────────────────
   //
   // NOBODY ELSE WILL EVER SAY IT. A provider record carries an arrival three
@@ -163,6 +183,10 @@ export function pendingFromLeg(leg: ExtractedLeg, now: number): PendingLeg {
     // "not known to be cancelled" and "scheduled" are the same statement and
     // the wrong way to be wrong here is to grey out a flight somebody is on.
     legStatus: leg.leg_status === 'cancelled' ? 'cancelled' : 'scheduled',
+    // NEVER FROM THE LEG. A leg arrives from an email that named it; the doubt
+    // arrives from an email that named no leg at all, and is applied across
+    // the whole store after the pull has queued everything. See autoAdd.
+    bookingCancelled: false,
     // CARRIED AS PRINTED AND NOT VALIDATED HERE. The server has already
     // checked the shape of both and dropped either one it could not parse;
     // the screen that reads them checks again before doing arithmetic on
@@ -285,6 +309,14 @@ export function retryBatch(
   // has already told the passenger is off spends a unit a day on an answer
   // nobody needs, and the one answer that could come back -- a schedule entry
   // for the cancelled flight -- would overwrite the cancellation with it.
+  //
+  // A DOUBTED LEG IS STILL ASKED ABOUT, and that is the difference between the
+  // two states rather than an oversight. A cancelled leg has a definite answer
+  // and asking again can only overwrite it; a leg whose BOOKING was cancelled
+  // has no answer yet, and the provider is the one party that can give it one
+  // for nothing -- publish the flight and the leg resolves out of this store,
+  // doubt and all. Stopping the retries would leave the doubt on screen with
+  // nothing able to lift it. bookingCancelled is deliberately not tested here.
   const batch = kept
     .filter(p => p.legStatus !== 'cancelled' && !skipIds.has(p.id) && legDue(p, now))
     .sort((a, b) => (a.lastTriedAt ?? 0) - (b.lastTriedAt ?? 0))

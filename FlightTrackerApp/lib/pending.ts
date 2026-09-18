@@ -66,6 +66,10 @@ export async function getPending(email: string | null): Promise<PendingLeg[]> {
     ...p,
     tripId: p.tripId === undefined ? null : p.tripId,
     legStatus: p.legStatus === 'cancelled' ? 'cancelled' : 'scheduled',
+    // AND bookingCancelled ON THE SAME TERMS as legStatus above: every leg
+    // stored before the booking channel existed has no such field, and false
+    // -- nobody has told us this booking is off -- is what they all were.
+    bookingCancelled: p.bookingCancelled === true,
     arrivalTime: p.arrivalTime ?? null,
     arrivalDate: p.arrivalDate ?? null,
   }));
