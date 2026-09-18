@@ -164,6 +164,14 @@ FLIGHT_IN_TEXT_RE = re.compile(r"\b(?:[A-Z][A-Z0-9]|[0-9][A-Z]) ?\d{1,4}\b")
 # It is what an airline NAME must never be, and the merge below reads it to stop
 # one replacing one.
 CARRIER_CODE_RE = re.compile(r"^(?:[A-Z][A-Z0-9]|[0-9][A-Z])$")
+# ── A BOOKING REFERENCE INSIDE RUNNING TEXT ─────────────────────────────────
+#
+# THE GATE'S COUSIN OF PNR_RE, and looser in the same way FLIGHT_IN_TEXT_RE is
+# looser than FLIGHT_RE: it only has to notice that something reference-shaped
+# is present. FIVE TO EIGHT ALPHANUMERICS WITH AT LEAST ONE OF EACH, because
+# [A-Z0-9]{5,8} alone matches every ordinary capitalised word in a subject
+# line -- BOOKING, CANCELLED, FLIGHT -- and would open the door on all of them.
+PNR_IN_TEXT_RE = re.compile(r"\b(?=[A-Z0-9]{5,8}\b)(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,8}\b")
 PNR_RE = re.compile(r"^[A-Z0-9]{5,8}$")
 IATA_RE = re.compile(r"^[A-Z]{3}$")
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -570,6 +578,24 @@ def worth_a_model_call(m: dict) -> bool:
     # flight-number test, because that is the one the attachment is hiding.
     if m.get("pdfs") and any(w in lower for w in BOOKING_WORDS):
         return True
+    # ── A CANCELLATION NEED NOT NAME A FLIGHT, AND THIS GATE REQUIRED ONE ────
+    #
+    # THE DOOR WAS SHUT ON THE EXACT EMAIL THAT MATTERS MOST. "Your booking
+    # R7K3XQ has been cancelled" contains no flight number anywhere -- that is
+    # the whole shape of it -- so the test below refused it and no model ever
+    # read it. The extractor's booking channel could not have fired: the email
+    # never reached the extractor.
+    #
+    # THREE THINGS TOGETHER, because any one of them alone is a bill. A word
+    # about cancelling, a word about bookings, and something reference-shaped:
+    # a hotel's "free cancellation" advert has the first two and no reference,
+    # and a receipt with an order number has the last two and no cancelling.
+    # What still gets in -- a cancelled hotel or train booking with a reference
+    # -- costs one model call and comes back `other`, which is the answer, and
+    # EXTRACT_MAX bounds how many of those a pull can buy.
+    if "cancel" in lower and any(w in lower for w in BOOKING_WORDS) \
+            and PNR_IN_TEXT_RE.search(text.upper()):
+        return True
     if not FLIGHT_IN_TEXT_RE.search(text.upper()):
         return False
     return any(w in lower for w in BOOKING_WORDS)
@@ -583,6 +609,24 @@ def worth_a_model_call(m: dict) -> bool:
 # a change names come back carrying their status, so a later step can order
 # the emails about one leg and let the newest win.
 EMAIL_KINDS = ("confirmation", "change", "cancellation", "other")
+# ── A CANCELLATION THAT NAMES NO FLIGHT ─────────────────────────────────────
+#
+# THE SHAPE SAS SENT FOR SK969: "your booking has been cancelled", a reference,
+# and not one flight number anywhere in it. Every field the merge keys on is
+# absent, so clean_leg drops it and the extraction yields nothing at all -- the
+# one email that says a trip is off was the one email that changed nothing, and
+# the leg stayed live on the device.
+#
+# SO A BOOKING-LEVEL NOTICE TRAVELS BESIDE THE LEGS, carrying the reference and
+# the instant it arrived and nothing else. It says what the airline said: this
+# BOOKING is cancelled. It does not say which legs, because the email does not,
+# and inventing that mapping is the whole reason this is a separate thing
+# rather than a leg_status on a guess.
+#
+# A CAP, because this list is unbounded otherwise: a mailbox with a hundred
+# cancelled bookings would send a hundred of these, and the app shows them
+# against pending legs, of which there are at most a handful.
+MAX_NOTICES = 20
 # The kinds that still count as a booking for everything downstream that reads
 # is_booking. A cancellation is not a booking; its legs come back regardless.
 BOOKING_KINDS = ("confirmation", "change")
@@ -616,6 +660,17 @@ EXTRACT_TOOL = {
                     "True for a confirmation or a change, false for every "
                     "other kind. Derived from email_kind; kept for readers "
                     "that still expect it."
+                ),
+            },
+            "booking_reference": {
+                "type": "string",
+                "description": (
+                    "The booking reference, PNR or record locator this whole "
+                    "email is about, when it prints one: 5 to 8 letters and "
+                    "digits, never the 13-digit ticket number. Give it "
+                    "whether or not you could record any legs -- a "
+                    "cancellation that names only a reference still has one. "
+                    "Omit it when the email prints no reference."
                 ),
             },
             "bookings": {
@@ -789,6 +844,14 @@ def _system_prompt(today) -> str:
         "when it does not restate the full itinerary -- airlines often send a "
         "notice naming one flight only. Mark every leg named in a cancellation "
         "leg_status cancelled; every other leg is scheduled.\n"
+        "A CANCELLATION THAT NAMES NO FLIGHT STILL HAS A REFERENCE. Some "
+        "airlines write only 'your booking ABC123 has been cancelled', with no "
+        "flight number and no date. That is a cancellation with NO bookings, "
+        "and the reference goes in booking_reference. Do not invent a flight "
+        "number, a date or a route to fill the gap, and do not carry one over "
+        "from another email: an email that names only a reference names only a "
+        "reference. Put the reference in booking_reference on every email that "
+        "prints one, whatever its kind.\n"
         "A CHANGE THAT NAMES THE FLIGHT IT REPLACES SAYS SO IN replaces. A "
         "schedule-change notice usually prints both flights: the old one on a "
         "line labelled previously, originally, was or old, and the new one "
@@ -874,8 +937,16 @@ def _messages_for_model(m: dict) -> list[dict]:
     return out
 
 
-def extract_with_model(m: dict, today) -> list[dict]:
-    """The model's raw legs for one email. Empty on refusal or any failure."""
+def extract_with_model(m: dict, today) -> dict:
+    """What one email yielded: {"legs": [...], "notice": {...} | None}.
+
+    A DICT RATHER THAN A LIST, because an email can now yield something that is
+    not a leg. A cancellation naming only a booking reference has no flight
+    number and no date, so it produces no legs at all and used to produce
+    nothing -- see MAX_NOTICES. The notice is that email's answer.
+
+    Both empty on refusal or any failure.
+    """
     try:
         turn = llm.generate(
             model=llm.PARSE_MODEL,
@@ -892,10 +963,10 @@ def extract_with_model(m: dict, today) -> list[dict]:
         # provider's message and never anything from the email.
         kind, reason = llm.failure_kind(exc)
         logger.warning("gmail extract call failed: %s", reason)
-        return []
+        return {"legs": [], "notice": None}
     call = next((c for c in turn.tool_calls if c.name == "flight_bookings"), None)
     if call is None:
-        return []
+        return {"legs": [], "notice": None}
     args = call.args or {}
     # THE KIND IS RE-CHECKED LIKE EVERYTHING ELSE. A value off the list is a
     # guess, and a guess is `other`. is_booking is DERIVED from it rather than
@@ -915,11 +986,22 @@ def extract_with_model(m: dict, today) -> list[dict]:
             leg["email_kind"] = kind
             if kind == "cancellation":
                 leg["leg_status"] = "cancelled"
+    # ── THE BOOKING-LEVEL NOTICE, ON A CANCELLATION AND NOTHING ELSE ─────────
+    #
+    # ONLY WHERE THE LEGS COULD NOT CARRY IT. An email that names its flights
+    # marks them by number and date, which is precise and already works; the
+    # notice is the fallback for the email that names none, and raising it
+    # beside a perfectly good set of legs would put a whole booking in doubt
+    # over flights the airline actually listed. So it rides only on a
+    # cancellation that produced no legs.
+    notice = _notice(args.get("booking_reference"), m) if kind == "cancellation" and not legs else None
     # ONE LINE PER EMAIL THE MODEL SAW. Id, kind, instant and a count: nothing
-    # printed in the email reaches the log.
-    logger.info("gmail email %s kind=%s received_at=%s legs=%d",
-                m.get("id") or "?", kind, m.get("received_at") or "?", len(legs))
-    return legs
+    # printed in the email reaches the log. The reference is not logged either
+    # -- it is the one string in this notice that identifies a person's trip.
+    logger.info("gmail email %s kind=%s received_at=%s legs=%d notice=%s",
+                m.get("id") or "?", kind, m.get("received_at") or "?", len(legs),
+                "yes" if notice else "no")
+    return {"legs": legs, "notice": notice}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -929,6 +1011,41 @@ def extract_with_model(m: dict, today) -> list[dict]:
 def _s(v, cap=60):
     v = str(v).strip() if isinstance(v, (str, int, float)) else ""
     return v[:cap] or None
+
+
+def _clean_pnr(v):
+    """A booking reference, upper-cased and checked, or None.
+
+    ONE DEFINITION FOR BOTH CALLERS. clean_leg reads the per-leg field and the
+    booking notice reads the email-level one, and a reference the app would
+    refuse on a leg must not slip in on a notice -- the app matches the two
+    against each other.
+    """
+    pnr = _s(v, 12)
+    pnr = pnr.upper().replace(" ", "") if pnr else None
+    return pnr if pnr and PNR_RE.match(pnr) else None
+
+
+def _notice(pnr, source) -> dict | None:
+    """A booking-level cancellation, or None when there is no usable reference.
+
+    THE REFERENCE, THE INSTANT AND THE AIRLINE'S NAME FOR ITSELF -- the subject
+    line, which is what the app already shows a person as the provenance of a
+    leg. Never the body, never a flight number: this notice exists precisely
+    because the email named none.
+    """
+    pnr = _clean_pnr(pnr)
+    if pnr is None:
+        return None
+    src = source or {}
+    return {
+        "pnr": pnr,
+        "subject": src.get("subject"),
+        "received": src.get("received"),
+        # The ordering key, exactly as a leg's source carries it: whether a
+        # later email withdrew this notice is decided on it. See live_notices.
+        "received_at": src.get("received_at"),
+    }
 
 
 def _place(v):
@@ -983,10 +1100,7 @@ def clean_leg(raw: dict, today, source: dict | None = None) -> dict | None:
         conf = 0.0
     if conf < MIN_CONFIDENCE:
         return None
-    pnr = _s(raw.get("pnr"), 12)
-    pnr = pnr.upper().replace(" ", "") if pnr else None
-    if pnr and not PNR_RE.match(pnr):
-        pnr = None
+    pnr = _clean_pnr(raw.get("pnr"))
     dep_time = _s(raw.get("departure_time"), 5)
     if dep_time and not re.match(r"^\d{2}:\d{2}$", dep_time):
         dep_time = None
@@ -1110,6 +1224,55 @@ def clean_leg(raw: dict, today, source: dict | None = None) -> dict | None:
             "received_at": (source or {}).get("received_at"),
         },
     }
+
+
+def live_notices(notices: list[dict], flights: list[dict]) -> list[dict]:
+    """The booking cancellations no later email has withdrawn.
+
+    ── WHY THIS ONE IS NOT STICKY, WHEN leg_status CANCELLED IS ─────────────
+    A cancelled LEG names a flight and a date. Marking it costs a person one
+    flight and the mark is precise, so it must survive a re-sent itinerary
+    that still lists it -- see merge.
+
+    A NOTICE NAMES NO LEG. It is the app saying "your airline says this
+    booking is off, and we cannot tell you which flights that means", which is
+    a question rather than a verdict. A later confirmation or change under the
+    same reference answers it: the booking is live again, or was never the one
+    cancelled. Holding the doubt after that would leave a warning on a trip
+    the airline has since re-confirmed, and nothing in the app could take it
+    off.
+
+    ── WHAT COUNTS AS AN ANSWER ────────────────────────────────────────────
+    A SURVIVING LEG under the same reference, still scheduled, from an email
+    that arrived AFTER the notice. Each half matters:
+      - surviving, because a leg the merge has since marked cancelled agrees
+        with the notice rather than withdrawing it;
+      - after, because the confirmation that came BEFORE the cancellation is
+        what the cancellation was about;
+      - and both instants must be real. A fixture or a test carries no
+        received_at, and "cannot be ordered" is not "later" -- an unplaceable
+        leg leaves the notice standing, which is the reading that keeps the
+        warning rather than the one that drops it.
+
+    DEDUPLICATED BY REFERENCE, newest kept: an airline that sends the same
+    cancellation twice is one cancelled booking, not two.
+    """
+    answered = set()
+    for leg in flights:
+        pnr = leg.get("pnr")
+        at = (leg.get("source") or {}).get("received_at")
+        if pnr and at and leg.get("leg_status") != "cancelled":
+            answered.add((pnr, at))
+
+    live: dict[str, dict] = {}
+    for n in notices:
+        at = n.get("received_at")
+        if any(pnr == n["pnr"] and at and leg_at > at for pnr, leg_at in answered):
+            continue
+        prev = live.get(n["pnr"])
+        if prev is None or (at or "") > (prev.get("received_at") or ""):
+            live[n["pnr"]] = n
+    return sorted(live.values(), key=lambda n: (n.get("received_at") or "", n["pnr"]))[:MAX_NOTICES]
 
 
 def _received_order(leg: dict):
@@ -1315,20 +1478,27 @@ def upcoming_flights(token: str, today=None, *, fetch=fetch_message, extract=ext
                      lister=list_messages) -> dict:
     """Every upcoming flight leg in the user's Gmail, or why not.
 
-    {ok, code, flights, scanned, extracted}. `code` is one of the outcome codes
-    above and is what the endpoint turns into a sentence.
+    {ok, code, flights, cancelled_bookings, scanned, extracted}. `code` is one
+    of the outcome codes above and is what the endpoint turns into a sentence.
+
+    cancelled_bookings carries the emails that cancelled a BOOKING without
+    naming a flight -- see MAX_NOTICES and live_notices. They are not legs and
+    never become legs; the app marks the legs it already holds under that
+    reference.
 
     fetch / extract / lister are injectable so the tests run with no network
     and no model.
     """
     today = today or datetime.now(timezone.utc).date()
     if not token:
-        return {"ok": False, "code": EXPIRED, "flights": [], "scanned": 0, "extracted": 0}
+        return {"ok": False, "code": EXPIRED, "flights": [], "cancelled_bookings": [],
+                "scanned": 0, "extracted": 0}
 
     ids, code = lister(token, today)
     if code is not OK:
         logger.warning("gmail list failed: %s", code)
-        return {"ok": False, "code": code, "flights": [], "scanned": 0, "extracted": 0}
+        return {"ok": False, "code": code, "flights": [], "cancelled_bookings": [],
+                "scanned": 0, "extracted": 0}
     ids = ids[:FETCH_MAX]
 
     with ThreadPoolExecutor(max_workers=FETCH_POOL) as pool:
@@ -1337,6 +1507,7 @@ def upcoming_flights(token: str, today=None, *, fetch=fetch_message, extract=ext
     # STRUCTURED FIRST, AT NO TOKEN COST. An email that states its legs in
     # JSON-LD is read and done; only the rest are gated and sent to the model.
     legs = []
+    notices = []
     structured_n = 0
     rest = []
     for m in fetched:
@@ -1347,28 +1518,57 @@ def upcoming_flights(token: str, today=None, *, fetch=fetch_message, extract=ext
             # this email, so nothing classified it.
             logger.info("gmail email %s kind=%s received_at=%s legs=%d",
                         m.get("id") or "?", "jsonld", m.get("received_at") or "?", len(m["jsonld"]))
+            kept = 0
             for raw in m["jsonld"]:
                 leg = clean_leg(raw, today, source=m)
                 if leg is not None:
                     leg["method"] = "jsonld"
                     legs.append(leg)
+                    kept += 1
+            # A STRUCTURED CANCELLATION WHOSE LEGS ALL FELL AWAY. schema.org
+            # hangs the reference on the reservation and the flight underneath
+            # it, so a cancelled reservation naming no usable flight -- no
+            # number, a date that has passed, a flight the re-check refused --
+            # reaches here with a perfectly good reference and nothing to put
+            # it on. Same rule as the model path: only where no leg survived.
+            if kept == 0:
+                for raw in m["jsonld"]:
+                    if raw.get("leg_status") == "cancelled":
+                        n = _notice(raw.get("pnr"), m)
+                        if n is not None:
+                            notices.append(n)
+                            break
         else:
             rest.append(m)
     candidates = [m for m in rest if worth_a_model_call(m)][:EXTRACT_MAX]
 
     with ThreadPoolExecutor(max_workers=MODEL_POOL) as pool:
-        for m, raw_legs in zip(candidates, pool.map(lambda m: extract(m, today), candidates)):
-            for raw in raw_legs:
+        for m, out in zip(candidates, pool.map(lambda m: extract(m, today), candidates)):
+            # A LIST IS STILL ACCEPTED. extract is injectable -- the fixtures
+            # and the tests pass their own -- and one written before the notice
+            # existed returns the legs alone. Reading both shapes is what stops
+            # that being a crash instead of an older answer.
+            raw_legs = out.get("legs", []) if isinstance(out, dict) else out
+            notice = out.get("notice") if isinstance(out, dict) else None
+            for raw in raw_legs or []:
                 leg = clean_leg(raw, today, source=m)
                 if leg is not None:
                     leg["method"] = "model"
                     legs.append(leg)
+            if notice is not None:
+                notices.append(notice)
 
     flights = merge(legs)
-    # COUNTS ONLY. Nothing from any email reaches the log.
-    logger.info("gmail flights: listed %d fetched %d structured %d sent %d legs %d upcoming %d",
-                len(ids), len(fetched), structured_n, len(candidates), len(legs), len(flights))
+    cancelled_bookings = live_notices(notices, flights)
+    # COUNTS ONLY. Nothing from any email reaches the log -- a booking
+    # reference least of all, which is why these are counted and not named.
+    logger.info(
+        "gmail flights: listed %d fetched %d structured %d sent %d legs %d upcoming %d "
+        "notices %d live %d",
+        len(ids), len(fetched), structured_n, len(candidates), len(legs), len(flights),
+        len(notices), len(cancelled_bookings))
     return {"ok": True, "code": OK, "flights": flights,
+            "cancelled_bookings": cancelled_bookings,
             "scanned": len(fetched), "structured": structured_n, "extracted": len(candidates)}
 
 

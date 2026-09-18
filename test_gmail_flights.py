@@ -481,5 +481,135 @@ check("fetches are capped at FETCH_MAX", r["scanned"] == g.FETCH_MAX, r["scanned
 check("model calls are capped at EXTRACT_MAX", len(calls["model"]) == g.EXTRACT_MAX, len(calls["model"]))
 
 print()
+print("-- a cancellation that names a booking and no flight --")
+
+# THE SHAPE SAS SENT FOR SK969. Every field the merge keys on is missing, so
+# there is no leg to mark and there never was one: before the booking channel
+# this email produced nothing at all and the leg stayed live on the device.
+check("a reference is cleaned like a leg's", g._clean_pnr(" r7k3xq ") == "R7K3XQ")
+check("and refused when it is not one", g._clean_pnr("12") is None and g._clean_pnr("0981234567890") is None)
+check("no reference, no notice", g._notice(None, {"subject": "x"}) is None)
+
+# THE GATE HAD TO OPEN FIRST. This email names no flight number anywhere, so
+# the flight-shaped test refused it and no model ever read it -- the extractor
+# could not have produced a notice for an email it never saw.
+def gate(subject, body, pdfs=None):
+    return g.worth_a_model_call({"subject": subject, "body": body, "pdfs": pdfs})
+
+
+check("a cancellation naming only a reference gets in",
+      gate("Your booking has been cancelled", "Booking R7K3XQ has been cancelled."))
+check("without a reference it does not -- there is nothing to mark",
+      not gate("Your booking has been cancelled", "Your booking has been cancelled."))
+check("a cancellation word alone does not",
+      not gate("Free cancellation on every stay", "Cancel any time, no fee."))
+check("and a reference alone does not",
+      not gate("Your order", "Order ABC123 shipped."))
+check("ordinary capitalised words are not references",
+      not gate("BOOKING CANCELLED", "YOUR BOOKING WAS CANCELLED"))
+check("the flight-shaped door still works as it did",
+      gate("Booking confirmed", "Flight 6E 5071 confirmed"))
+
+SRC = {"subject": "Your booking has been cancelled", "received": "Tue, 8 Sep 2026 09:00:00 +0000",
+       "received_at": "2026-09-08T09:00:00Z"}
+n = g._notice("r7k3xq", SRC)
+check("a notice carries the reference upper-cased", n["pnr"] == "R7K3XQ", n)
+check("and the subject and the instant, and nothing else",
+      set(n) == {"pnr", "subject", "received", "received_at"}, n)
+
+
+def leg_at(pnr, at, status="scheduled"):
+    return {"flight_number": "SK969", "date": "2026-09-20", "pnr": pnr, "leg_status": status,
+            "source": {"received_at": at}}
+
+
+# THE WITHDRAWAL RULE, which is the whole difference between this state and a
+# cancelled leg: a later confirmation under the same reference answers it.
+check("a notice with nothing against it stands",
+      [x["pnr"] for x in g.live_notices([n], [])] == ["R7K3XQ"])
+check("a later confirmation under the same reference withdraws it",
+      g.live_notices([n], [leg_at("R7K3XQ", "2026-09-08T11:00:00Z")]) == [])
+check("an EARLIER one does not -- that is what was cancelled",
+      [x["pnr"] for x in g.live_notices([n], [leg_at("R7K3XQ", "2026-09-08T08:00:00Z")])] == ["R7K3XQ"])
+check("a later leg under a DIFFERENT reference does not",
+      [x["pnr"] for x in g.live_notices([n], [leg_at("ZZZ999", "2026-09-08T11:00:00Z")])] == ["R7K3XQ"])
+check("a later leg the merge has marked cancelled agrees rather than withdraws",
+      [x["pnr"] for x in g.live_notices([n], [leg_at("R7K3XQ", "2026-09-08T11:00:00Z", "cancelled")])] == ["R7K3XQ"])
+check("a leg with no instant cannot be later, so the notice stands",
+      [x["pnr"] for x in g.live_notices([n], [leg_at("R7K3XQ", None)])] == ["R7K3XQ"])
+check("the same cancellation twice is one booking",
+      len(g.live_notices([n, dict(n, received_at="2026-09-08T10:00:00Z")], [])) == 1)
+check("and the newest copy is the one kept",
+      g.live_notices([n, dict(n, received_at="2026-09-08T10:00:00Z")], [])[0]["received_at"]
+      == "2026-09-08T10:00:00Z")
+
+# END TO END: one mailbox, one cancellation naming only a reference, and the
+# leg it cannot name still on the device.
+CANCEL_BOX = {
+    "c1": simple("Booking confirmed", plain="Flight SK 969 on 20 September 2026, booking R7K3XQ",
+                 when="Mon, 7 Sep 2026 09:00:00 +0000"),
+    "c2": simple("Your booking has been cancelled", plain="Booking R7K3XQ has been cancelled.",
+                 when="Tue, 8 Sep 2026 09:00:00 +0000"),
+}
+
+
+def cancel_model(m, today):
+    if "cancelled" in m["subject"].lower():
+        # NO LEGS AT ALL. The email names no flight, and the extractor is told
+        # never to invent one.
+        return {"legs": [], "notice": g._notice("R7K3XQ", m)}
+    return {"legs": [{"flight_number": "SK969", "date": "2026-09-20", "origin": "CPH",
+                      "destination": "ARN", "pnr": "R7K3XQ", "confidence": 0.95}], "notice": None}
+
+
+r = g.upcoming_flights("tok", TODAY,
+                       fetch=lambda t, mid: g.decode_body(raw(CANCEL_BOX[mid])),
+                       extract=cancel_model,
+                       lister=lambda t, d: (list(CANCEL_BOX.keys()), g.OK))
+check("the leg survives -- nothing named it, so nothing may mark it",
+      [f["flight_number"] for f in r["flights"]] == ["SK969"], r["flights"])
+check("and it is still scheduled", r["flights"][0]["leg_status"] == "scheduled")
+check("the cancelled booking travels beside it",
+      [b["pnr"] for b in r["cancelled_bookings"]] == ["R7K3XQ"], r["cancelled_bookings"])
+check("no body reaches the result", "has been cancelled." not in str(r["cancelled_bookings"]))
+
+# AND THE SAME MAILBOX WITH THE CONFIRMATION ARRIVING LAST: the airline
+# re-confirmed the booking, so the doubt is not sent at all.
+LATER_BOX = dict(CANCEL_BOX)
+LATER_BOX["c1"] = simple("Booking confirmed", plain="Flight SK 969 on 20 September 2026, booking R7K3XQ",
+                         when="Wed, 9 Sep 2026 09:00:00 +0000")
+r2 = g.upcoming_flights("tok", TODAY,
+                        fetch=lambda t, mid: g.decode_body(raw(LATER_BOX[mid])),
+                        extract=cancel_model,
+                        lister=lambda t, d: (list(LATER_BOX.keys()), g.OK))
+check("a re-confirmation after the cancellation withdraws the doubt",
+      r2["cancelled_bookings"] == [], r2["cancelled_bookings"])
+
+# A CANCELLATION THAT DOES NAME ITS FLIGHTS RAISES NO BOOKING DOUBT: the legs
+# carry it precisely, which is better than a whole booking in question.
+def named_model(m, today):
+    if "cancelled" in m["subject"].lower():
+        return {"legs": [{"flight_number": "SK969", "date": "2026-09-20", "origin": "CPH",
+                          "destination": "ARN", "pnr": "R7K3XQ", "confidence": 0.95,
+                          "leg_status": "cancelled", "email_kind": "cancellation"}],
+                "notice": None}
+    return cancel_model(m, today)
+
+
+r3 = g.upcoming_flights("tok", TODAY,
+                        fetch=lambda t, mid: g.decode_body(raw(CANCEL_BOX[mid])),
+                        extract=named_model,
+                        lister=lambda t, d: (list(CANCEL_BOX.keys()), g.OK))
+check("a named cancellation marks the leg", r3["flights"][0]["leg_status"] == "cancelled")
+check("and raises no booking-level doubt", r3["cancelled_bookings"] == [], r3["cancelled_bookings"])
+
+# BACKWARD COMPATIBILITY: an injected extract written before the notice existed
+# returns a bare list, and that is still an answer rather than a crash.
+r4 = g.upcoming_flights("tok", TODAY, fetch=fake_fetch, extract=fake_model, lister=fake_list)
+check("an extract that returns a list still works",
+      [f["flight_number"] for f in r4["flights"]] == ["6E5071", "6E5072"], r4["flights"])
+check("and reports no cancelled bookings", r4["cancelled_bookings"] == [])
+
+print()
 print("PASSED: %d   FAILURES: %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

@@ -441,7 +441,12 @@ def gmail_flights_endpoint(req: GmailFlightsRequest, request: Request):
         return {"error": GMAIL_ERROR_GENERIC, "code": gmail_flights.ERROR, "flights": []}
     if not r["ok"]:
         return {"error": GMAIL_ERRORS.get(r["code"], GMAIL_ERROR_GENERIC), "code": r["code"], "flights": []}
+    # cancelled_bookings RIDES BESIDE THE LEGS AND IS NOT ONE. Every error
+    # return above carries flights only; a client that finds the key missing
+    # reads it as "no booking was cancelled", which is what an error means
+    # here -- nothing was learned either way.
     return {"error": None, "code": None, "flights": r["flights"],
+            "cancelled_bookings": r.get("cancelled_bookings", []),
             "scanned": r["scanned"], "extracted": r["extracted"]}
 
 
