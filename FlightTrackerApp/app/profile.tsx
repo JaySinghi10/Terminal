@@ -45,6 +45,10 @@ import {
 } from '@expo/ui/swift-ui/modifiers';
 import { useAccount } from '../lib/account';
 import { useSaved, API_BASE } from '../lib/saved';
+// THE FAKE DISRUPTIONS, for the dev-only section at the foot of this sheet.
+// Imported at the top like everything else: the Section that uses it is inside
+// a __DEV__ branch, so the bundler drops both together in a release build.
+import { DEV_SCENARIOS } from '../lib/devFixtures';
 import { useGoogleSignIn } from '../lib/googleAuth';
 // THE PERMISSION REQUEST, FROM reminders RATHER THAN watch. ensurePushToken is
 // guarded by a once-per-install flag and would return without a dialog; this
@@ -203,7 +207,7 @@ export default function Profile() {
     session, persistSession, username, displayName, persistUsername, persistDisplayName,
   } = useAccount();
   // THE SAVED LIST, FOR THE BACKFILL; the email, for the card and for logout.
-  const { email, setEmail, savedFlights } = useSaved();
+  const { email, setEmail, savedFlights, devSetFixtures } = useSaved();
   const { signIn } = useGoogleSignIn();
   const effectiveName = displayName ?? username;
   // The first-run ask: signed in, no display name yet. Skipping fills it with
@@ -507,6 +511,51 @@ export default function Profile() {
               </HStack>
             </Button>
           </Section>
+
+          {/* ── DEV ONLY · FAKE DISRUPTIONS ──────────────────────────────────
+              WHY IT IS HERE AND NOT ON MY FLIGHTS. The screens these fixtures
+              exist to verify are Home and My Flights, and a control sitting on
+              one of them would change the layout of the thing being looked at.
+              The profile sheet is reachable from everywhere, is already a list
+              of settings rows, and renders none of the disruption states.
+
+              __DEV__ IS FALSE IN ANY RELEASE BUNDLE, so this whole Section is
+              dead code the bundler drops -- as is the module it imports from.
+              See lib/devFixtures for what each scenario builds and for the
+              three network paths a fixture is kept out of.
+
+              EACH BUTTON REPLACES THE LAST. Installing a scenario clears the
+              fixtures already there, so this is a menu rather than a pile, and
+              real saved flights are never touched by either half. */}
+          {__DEV__ && (
+            <Section
+              title="Dev only · fake disruptions"
+              footer={<Text>{'Writes fake records into the real store. No server call, no provider units. Clear when done.'}</Text>}
+            >
+              {DEV_SCENARIOS.map(s => (
+                <Button
+                  key={s.key}
+                  onPress={() => {
+                    const { flights, pending } = s.build();
+                    void devSetFixtures(flights, pending);
+                  }}
+                  modifiers={[buttonStyle('plain')]}
+                >
+                  <HStack>
+                    <Text modifiers={[foregroundColor(WHITE)]}>{s.label}</Text>
+                    <Spacer />
+                  </HStack>
+                </Button>
+              ))}
+              <Button role="destructive" onPress={() => { void devSetFixtures([], []); }}>
+                <HStack>
+                  <Spacer />
+                  <Text>Clear fixtures</Text>
+                  <Spacer />
+                </HStack>
+              </Button>
+            </Section>
+          )}
 
           {/* ── LOG OUT ── A lone row in a group of its own, centred and red.
               THE ROLE COLOURS IT, which is why this is the one Button with no

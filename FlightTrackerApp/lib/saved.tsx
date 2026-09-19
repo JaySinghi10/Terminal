@@ -80,6 +80,19 @@ import {
   landingDue,
   landingWindowClosed,
 } from './landing';
+// ── FAKE FLIGHTS, AND THE ONE THING THE STORE HAS TO KNOW ABOUT THEM ────────
+//
+// isDevFixture IS A STRING TEST ON A FLIGHT NUMBER and nothing more. It is
+// imported unconditionally because the three guards below must be correct in
+// any build: a fixture that somehow reached a production store would otherwise
+// be looked up, swept and watched like a real flight. The module that MAKES
+// them is only ever called from a __DEV__ branch, so nothing can create one.
+//
+// THE THREE GUARDS ARE ALL NETWORK. A fake number asked of the provider spends
+// a unit to be told it does not exist, on every refresh, for as long as the
+// fixture sits there -- and a watch registered for one would outlive the
+// fixture on the server. See lib/devFixtures.
+import { isDevFixture } from './devFixtures';
 
 export const API_BASE = 'https://flight-tracker-970706733452.asia-south1.run.app';
 
@@ -1328,6 +1341,14 @@ type SavedContextValue = {
   // Marks every pending leg whose booking reference is in this list, and
   // clears every leg whose is not. The list is the server's whole answer.
   markCancelledBookings: (pnrs: string[]) => Promise<void>;
+  // ── DEVELOPMENT ONLY ──
+  //
+  // Replaces every fixture in the store with these, leaving real records
+  // alone. Passing two empty lists clears the fixtures and nothing else. The
+  // implementation returns immediately in a release build, so this is a
+  // no-op that cannot be made to do anything by a caller that survived the
+  // dead-code elimination. See lib/devFixtures.
+  devSetFixtures: (flights: SavedFlight[], pending: PendingLeg[]) => Promise<void>;
 };
 
 const SavedContext = createContext<SavedContextValue | null>(null);
@@ -1678,7 +1699,9 @@ export function SavedProvider({ children }: { children: ReactNode }) {
       const list = await getSavedFlights(email);
       const now = Date.now();
       const due = list
-        .filter(f => landingDue(f, arrivalTs(f), now))
+        // A FIXTURE IS NEVER ASKED ABOUT. FR24 has never heard of ZZ907 and
+        // the question costs a call to find that out. See isDevFixture.
+        .filter(f => !isDevFixture(f) && landingDue(f, arrivalTs(f), now))
         .slice(0, LANDING_SWEEP_MAX);
       if (due.length === 0) return;
 
@@ -2069,7 +2092,10 @@ export function SavedProvider({ children }: { children: ReactNode }) {
       //
       // refreshable IS THE SAME SHAPE AT TWENTY-FOUR HOURS, and it still refuses
       // anything filed away by hand. See its note.
-      const activeSaved = savedFlights.filter(f => refreshable(f, at));
+      // AND A FIXTURE IS NOT REFRESHABLE, for the reason it is not sweepable:
+      // the provider would be asked about a flight number that does not exist,
+      // once per fixture, on every pull. See isDevFixture.
+      const activeSaved = savedFlights.filter(f => !isDevFixture(f) && refreshable(f, at));
       if (activeSaved.length === 0) return { ...nothing, ran: true };   // spinner alone acknowledges; message can't render here
 
       const since = Date.now() - lastRefreshRef.current;
@@ -2295,6 +2321,35 @@ export function SavedProvider({ children }: { children: ReactNode }) {
     setPendingState(next);
   }, [email]);
 
+  // ── DEVELOPMENT ONLY: FAKE FLIGHTS IN THE REAL STORE ─────────────────────
+  //
+  // THROUGH THE ORDINARY WRITE PATH, deliberately. saveFlight and setPending
+  // are what a real save uses, so a fixture is normalised, keyed and persisted
+  // exactly as a real record is -- which is the only way the screens that read
+  // them are actually being tested.
+  //
+  // REPLACES THE FIXTURES AND NOTHING ELSE. Every existing fixture is removed
+  // first, so the scenarios are a menu rather than a pile, and a real saved
+  // flight is never touched by either half.
+  //
+  // THE GUARD IS THE FIRST LINE. __DEV__ is false in any release bundle, so
+  // this returns before it can write; the caller is compiled out too, and the
+  // two together are why a fixture cannot exist in a shipped app.
+  const devSetFixtures = useCallback(async (
+    flights: SavedFlight[], pend: PendingLeg[],
+  ): Promise<void> => {
+    if (!__DEV__) return;
+    let list = await getSavedFlights(email);
+    for (const f of list.filter(isDevFixture)) list = await unsaveFlight(email, f.id);
+    for (const f of flights) await saveFlight(email, f);
+    setSavedFlights(await getSavedFlights(email));
+
+    const kept = (await getPending(email)).filter(p => !isDevFixture(p));
+    const nextPending = [...kept, ...pend];
+    await setPending(email, nextPending);
+    setPendingState(nextPending);
+  }, [email]);
+
   // ONE RETRY AT A TIME, for the reason landingSweep runs one sweep at a time:
   // the daily tick and a pull can land in the same second and would each pay
   // for the same lookups.
@@ -2451,7 +2506,10 @@ export function SavedProvider({ children }: { children: ReactNode }) {
   // signs back in. See forgetBackfill.
   useEffect(() => {
     if (!hydrated) return;
-    void backfillWatches(API_BASE, watchScope(email), savedFlights);
+    // FIXTURES ARE NOT WATCHED. A watch registered for a fake number would sit
+    // in the server's store being polled after the fixture was cleared from
+    // this device, and nothing here would ever unregister it.
+    void backfillWatches(API_BASE, watchScope(email), savedFlights.filter(f => !isDevFixture(f)));
   }, [hydrated, email, savedFlights]);
 
   const value = useMemo(() => ({
@@ -2474,11 +2532,13 @@ export function SavedProvider({ children }: { children: ReactNode }) {
     removePendingLeg,
     retryPending,
     markCancelledBookings,
+    devSetFixtures,
   }), [
     savedFlights, hydrated, email, setEmail, refreshing,
     saveRecord, handleUnsave, undoUnsave, refreshOne, refreshAll,
     handleRemind, setArchived, ownFlight, disownFlight,
     pending, addPendingLeg, removePendingLeg, retryPending, markCancelledBookings,
+    devSetFixtures,
   ]);
 
   return (
