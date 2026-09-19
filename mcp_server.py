@@ -569,6 +569,22 @@ def _build_movement(movement, movement_name: str, raw_status, include_baggage: b
         # name="Mumbai Chhatrapati Shivaji", shortName="Chhatrapati Shivaji".
         "short_name": airport.get("shortName"),
         "iata": airport.get("iata"),
+        # ── WHICH COUNTRY, AND IT IS HERE FOR ONE READER ────────────────────
+        #
+        # THE MINIMUM CONNECTION TIME DEPENDS ON WHETHER A LEG CROSSES A
+        # BORDER, and notify.py could not tell: this DTO carried the airport's
+        # name, city, short name and code and not its country, so every
+        # connection looked domestic. The provider has always sent it --
+        # `countryCode` on every airport object, lower case, two letters -- and
+        # this dropped it.
+        #
+        # UPPER-CASED, because the app's own airport dataset stores country
+        # NAMES and the two are compared only against each other, never mixed:
+        # what matters is that two of these agree or differ, not what they say.
+        # A missing value stays None, and notify.py reads that as a border
+        # crossing -- the stricter minimum, and the reading that cannot call a
+        # tight connection comfortable because a field was absent.
+        "country": (airport.get("countryCode") or "").strip().upper() or None,
         "terminal": m.get("terminal"),
         "gate": m.get("gate"),
         "checkin_desk": m.get("checkInDesk"),

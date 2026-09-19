@@ -1033,5 +1033,69 @@ check("an orphan still owing messages is deleted, and the count says how many",
       (gone, out.get("orphans_swept"), out.get("orphans_undelivered")))
 
 print()
+print("-- two legs of one journey, inferred from the watch list --")
+
+
+def watched(number, day, *devices):
+    """One watched_flights entry. devices are (device_id, owned) pairs."""
+    return {"flight_number": number, "flight_date": day,
+            "devices": [{"device_id": d, "push_token": "tok", "platform": "ios", "owned": o}
+                        for d, o in devices]}
+
+
+# THE WATCH ROW CARRIES NO TRIP ID. What it does carry is which device owns
+# which flight, and two flights owned by one device are the candidates.
+cand = poller.connection_candidates([
+    watched("6E6188", "2026-09-07", ("phone", True)),
+    watched("6E777", "2026-09-08", ("phone", True)),
+    watched("AI999", "2026-09-07", ("other", True)),
+])
+check("one device's two flights are candidates for each other",
+      cand.get(("6E6188", "2026-09-07")) == [("6E777", "2026-09-08")], cand)
+check("and the pairing is symmetric",
+      cand.get(("6E777", "2026-09-08")) == [("6E6188", "2026-09-07")], cand)
+check("another device's flight is not a candidate",
+      ("AI999", "2026-09-07") not in cand.get(("6E6188", "2026-09-07"), []), cand)
+check("a flight alone on its device has no candidates",
+      ("AI999", "2026-09-07") not in cand, cand)
+
+# OWNED ONLY, ON BOTH SIDES: a flight somebody is MEETING has no connection.
+watching = poller.connection_candidates([
+    watched("6E6188", "2026-09-07", ("phone", True)),
+    watched("6E777", "2026-09-08", ("phone", False)),
+])
+check("a watched-not-owned flight is never a candidate", watching == {}, watching)
+
+# ── AND THE AIRPORT AND THE CLOCK DECIDE WHICH ACTUALLY CONNECT ──
+pollstate.forget_local()
+
+
+def leg(number, day, dep_iata, dep_iso, arr_iata):
+    # THE WHOLE STATE DOCUMENT, not the DTO: _next_leg reads doc["dto"], and a
+    # doc written as a bare DTO has no such key and is silently skipped.
+    d = pollstate.blank_state(number, day)
+    d["dto"] = {"flight_number": number, "flight_date": day,
+                "departure": {"iata": dep_iata, "scheduled_iso": dep_iso},
+                "arrival": {"iata": arr_iata, "scheduled_iso": dep_iso}}
+    pollstate.write_state(number, day, d, None)
+    return d["dto"]
+
+
+here = {"arrival": {"iata": "BLR"}}
+leg("6E777", "2026-09-08", "BLR", "2026-09-08T02:00+05:30", "DEL")
+leg("6E999", "2026-09-08", "BLR", "2026-09-08T06:00+05:30", "MAA")
+leg("AI111", "2026-09-08", "MAA", "2026-09-08T03:00+05:30", "DEL")
+
+got = poller._next_leg(here, [("6E777", "2026-09-08"), ("6E999", "2026-09-08")])
+check("the earliest departure from the hub wins",
+      (got or {}).get("flight_number") == "6E777", got)
+check("a candidate leaving from somewhere else is not the connection",
+      poller._next_leg(here, [("AI111", "2026-09-08")]) is None)
+check("no candidates, no connection", poller._next_leg(here, []) is None)
+check("no arrival airport, no connection",
+      poller._next_leg({"arrival": {}}, [("6E777", "2026-09-08")]) is None)
+pollstate.forget_local()
+
+print()
 print("PASSED: %d   FAILURES: %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

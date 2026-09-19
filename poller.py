@@ -423,6 +423,91 @@ def _has_departed(dto, now, landing=None):
     return False
 
 
+def connection_candidates(flights):
+    """(flight_number, date) -> the other flights the same device owns.
+
+    ── THE WATCH STORE DOES NOT KNOW A JOURNEY ─────────────────────────────
+    A watch row is device, token, platform, number, date and owned. There is no
+    trip id on it and no booking reference, and watched_flights groups by
+    FLIGHT -- listing the devices watching each one -- which is the inverse of
+    what a connection needs. Adding a trip id to the row would be the cleaner
+    signal, and it would also mean no warning could fire until an app carrying
+    it had shipped and been installed.
+
+    SO THE PAIRING IS INFERRED, and the evidence is already here. Two flights
+    OWNED BY ONE DEVICE are candidates for being two legs of one journey; the
+    airport and the clock decide which of them actually connect, in
+    notify.connection_band, on exactly the rule lib/saved.tsx's connectionGap
+    has always used. This costs no provider call and no wire change.
+
+    OWNED ONLY, ON BOTH SIDES. A watch on a flight somebody is MEETING has no
+    connection to miss, and neither end of a pair may be one.
+
+    THE COINCIDENCE RISK IS THE APP'S OWN AND IS ACCEPTED THERE. Two unrelated
+    flights on one device that happen to share an airport inside a day will
+    pair, exactly as they can inside a trip on the device. A wrong warning is
+    visible and dismissible; a missed connection is neither.
+    """
+    by_device = {}
+    for f in flights or []:
+        key = (f.get("flight_number"), f.get("flight_date"))
+        for d in (f.get("devices") or []):
+            if not d.get("owned"):
+                continue
+            by_device.setdefault(d.get("device_id"), set()).add(key)
+
+    out = {}
+    for f in flights or []:
+        key = (f.get("flight_number"), f.get("flight_date"))
+        cand = set()
+        for d in (f.get("devices") or []):
+            if not d.get("owned"):
+                continue
+            cand |= by_device.get(d.get("device_id"), set())
+        cand.discard(key)
+        if cand:
+            out[key] = sorted(cand)
+    return out
+
+
+def _next_leg(dto, candidates):
+    """The DTO of the leg this one connects INTO, or None.
+
+    ONE STATE READ PER CANDIDATE, AND ONLY FOR A FLIGHT THAT HAS ONE. Most
+    watched flights have no candidate at all and reach this with an empty list,
+    so the ordinary pass does no extra reads. A device holding a three-leg trip
+    reads two objects for the middle leg, which is the worst case and is a
+    bucket read rather than a provider call.
+
+    THE EARLIEST DEPARTURE AFTER THIS LEG LANDS WINS, so a device watching the
+    same route twice pairs with the nearer one. connection_band makes the final
+    decision -- this only finds the plausible partner.
+    """
+    if not candidates or not dto:
+        return None
+    hub = ((dto.get("arrival") or {}).get("iata") or "").strip().upper()
+    if not hub:
+        return None
+    best, best_at = None, None
+    for number, day in candidates:
+        try:
+            doc, _gen = pollstate.read_state(number, day)
+        except Exception:  # noqa: BLE001
+            continue
+        other = (doc or {}).get("dto")
+        if not other:
+            continue
+        dep = (other.get("departure") or {})
+        if (dep.get("iata") or "").strip().upper() != hub:
+            continue
+        at = _parse(dep.get("scheduled_iso"))
+        if at is None:
+            continue
+        if best_at is None or at < best_at:
+            best, best_at = other, at
+    return best
+
+
 def _tier_without_data(day, now):
     """The tier for a flight we hold no usable DTO for, decided on its date.
 
@@ -524,11 +609,15 @@ def diff(before, after):
 
 # ── ONE FLIGHT ──────────────────────────────────────────────────────────────
 
-def poll_one(number, day, now=None, budget_ok=True, spend=None):
+def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
     """Fetch, diff and store one flight. Returns a small record of what happened.
 
     spend is a mutable dict of counters the caller uses to enforce the per-run
     caps; None means uncapped, which is what the tests use.
+
+    candidates are the other flights the same device owns, from
+    connection_candidates. Empty for almost every flight, and empty is the
+    behaviour this function had before connections existed.
     """
     now = now or _now()
     spend = spend if spend is not None else {}
@@ -701,9 +790,13 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None):
             spend["adb"] = spend.get("adb", 0) + notify.NEXT_CALLS_PER_DAY
             from mcp_server import fetch_route
             return (fetch_route(origin, dest, hours=12, date=day) or {}).get("flights") or []
+        # THE LEG THIS ONE FEEDS, resolved from state we already hold. None for
+        # a flight with no candidate, which is the ordinary case and the one
+        # that does no extra work at all. See _next_leg.
+        onward = _next_leg(current_dto, candidates)
         try:
             new_ns, messages = notify.decide(prior_ns, current_dto, current_landing, now,
-                                             lookup_next=lookup_next)
+                                             lookup_next=lookup_next, connection=onward)
         except Exception as exc:  # noqa: BLE001
             logger.exception("poll: notify decision failed for %s/%s", number, day)
             record["notify_error"] = str(exc)[:200]
@@ -883,11 +976,16 @@ def run_once(now=None):
     budget_ok = budget.get("ok", True)
 
     spend = {"adb": 0, "fr24": 0}
+    # WHO MIGHT CONNECT TO WHOM, from the watch list already in memory. No
+    # bucket read and no provider call: this is pure bookkeeping over what
+    # watched_flights just returned. See connection_candidates.
+    candidates = connection_candidates(flights)
     records, changed = [], 0
     for f in flights:
         try:
             r = poll_one(f["flight_number"], f["flight_date"],
-                         now=now, budget_ok=budget_ok, spend=spend)
+                         now=now, budget_ok=budget_ok, spend=spend,
+                         candidates=candidates.get((f["flight_number"], f["flight_date"]), ()))
         except Exception as exc:  # noqa: BLE001
             logger.exception("poll: %s/%s blew up",
                              f["flight_number"], f["flight_date"])

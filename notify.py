@@ -63,6 +63,9 @@ ARRIVAL_TERMINAL = "arrival_terminal"
 LANDED = "landed"
 BELT = "belt"
 DIVERTED = "diverted"
+# A DELAY THAT THREATENS THE NEXT LEG. See CONNECT_MIN_DOMESTIC below for the
+# arithmetic and for what it does not know.
+CONNECTION = "connection"
 
 # ── THE WINDOWS ─────────────────────────────────────────────────────────────
 # A gate change three days out is not the same as one while she is walking to
@@ -94,7 +97,41 @@ BELT_CAP_COUNT = 2
 FLIGHT_FLOOR = timedelta(minutes=20)
 # Belt is exempt too: it follows a landing by minutes, is capped at two, and
 # is the one thing the person at arrivals is waiting to hear.
-FLOOR_EXEMPT = {CANCELLED, CANCEL_WITHDRAWN, LANDED, DIVERTED, NEXT_FLIGHT, BELT}
+FLOOR_EXEMPT = {CANCELLED, CANCEL_WITHDRAWN, LANDED, DIVERTED, NEXT_FLIGHT, BELT, CONNECTION}
+
+# ── WHETHER THE CONNECTION CAN STILL BE MADE ────────────────────────────────
+#
+# THE REMAINING LAYOVER IS THE LATER LEG'S DEPARTURE MINUS THIS ONE'S REVISED
+# ARRIVAL, where revised is actual, then estimated, then scheduled -- the same
+# precedence poller._movement_time already uses to tier a flight, and the same
+# one the app's arrivalTs uses to draw it.
+#
+# THE LATER LEG IS TAKEN AT ITS TIMETABLE, DELIBERATELY. A delay on the
+# connecting flight would lengthen the layover and could silence this warning,
+# and it is the one input here that can be recovered at any moment. Telling
+# somebody their connection is fine because the flight they need to catch is
+# also running late is the one way this could be actively harmful.
+#
+# THE MINIMUM IS AN ESTIMATE AND THIS COMMENT IS WHERE IT SAYS SO. No provider
+# in this app carries real minimum connection times: every airport publishes its
+# own, they differ per terminal pair, and none of them is in any feed we read.
+# Sixty minutes domestic and a hundred and twenty international are the common
+# industry shape and nothing more. THEY DO NOT ACCOUNT FOR A TERMINAL CHANGE,
+# which is the thing most likely to make a real connection tighter than this
+# arithmetic says, nor for the walk between two gates, nor for bags to reclaim.
+#
+# SHARED WITH THE APP, WHICH HAS ITS OWN COPY. lib/saved.tsx's connectionRisk
+# computes the same three bands from the same four numbers so a push and a
+# screen cannot disagree. There is no shared runtime between Python and
+# TypeScript, so the two are restated rather than imported -- the arrangement
+# MAX_LAYOVER_MS already has with MAX_CONNECTION_MS. Change one, change both.
+CONNECT_MIN_DOMESTIC = timedelta(minutes=60)
+CONNECT_MIN_INTERNATIONAL = timedelta(minutes=120)
+CONNECT_CUSHION = timedelta(minutes=30)
+# Worse is later in this tuple, which is the whole of "the band worsened".
+CONNECT_BANDS = ("comfortable", "at_risk", "will_miss")
+# A connection at all, on the same window the app's MAX_CONNECTION_MS uses.
+CONNECT_MAX = timedelta(hours=24)
 
 # A cancellation of a flight more than a day away that lands in the night at
 # the departure airport is DEFERRED to seven in the morning there, not dropped.
@@ -224,10 +261,15 @@ def _settled(ns, field, value):
 
 
 # ── THE DECISION ────────────────────────────────────────────────────────────
-def decide(ns, dto, landing, now, lookup_next=None):
+def decide(ns, dto, landing, now, lookup_next=None, connection=None):
     """(new_state, messages). dto is the CURRENT record; landing the current
     landing answer or None; lookup_next(origin, dest, day) -> rows, or None
     when the caller has no budget for it this poll.
+
+    connection is the DTO of the leg this one connects INTO, or None when there
+    is no next leg or the caller could not resolve one. It is read-only and
+    costs nothing: the caller has already loaded it from state. See
+    connection_band.
 
     Pure over its inputs apart from lookup_next, which is the one call that
     leaves the process, and it is only made on a cancellation."""
@@ -323,6 +365,41 @@ def decide(ns, dto, landing, now, lookup_next=None):
     if status == STATUS_DIVERTED and ns["notified"].get("status") != STATUS_DIVERTED:
         ns["notified"]["status"] = STATUS_DIVERTED
         emit(DIVERTED, {})
+
+    # ── THE CONNECTION THIS LEG FEEDS ──────────────────────────────────────
+    #
+    # BEFORE EVERY RETURN BELOW, because a delay eats a layover in all three
+    # phases: before departure, in the air running late, and at the moment of
+    # landing -- which is when the worst version of this news arrives and is
+    # exactly the poll that would otherwise return early on LANDED.
+    #
+    # ONLY WHEN THE BAND WORSENS, and once per band. Keyed on the band itself,
+    # so comfortable -> at_risk sends one message and at_risk -> will_miss
+    # sends a second, while twenty polls inside one band send nothing. An
+    # improving connection says nothing at all: this warns and never reassures,
+    # the same rule the app's layover row follows.
+    #
+    # NOT FOR A CANCELLED OR DIVERTED LEG. Cancelled has already returned above;
+    # diverted is guarded here. Both have their own message, and a connection
+    # off a flight that is not going there is not the news.
+    if connection is not None and status not in (STATUS_CANCELLED, STATUS_DIVERTED):
+        judged = connection_band(dto, connection, now)
+        if judged is not None:
+            band, remaining, minimum = judged
+            told = ns["notified"].get("connection_band") or "comfortable"
+            if CONNECT_BANDS.index(band) > CONNECT_BANDS.index(told):
+                ns["notified"]["connection_band"] = band
+                nxt_dep = (connection.get("departure") or {})
+                emit(CONNECTION, {
+                    "band": band,
+                    "remaining_min": _minutes(remaining),
+                    "minimum_min": _minutes(minimum),
+                    "hub": nxt_dep.get("city") or nxt_dep.get("airport") or nxt_dep.get("iata"),
+                    "next": {
+                        "flight_number": connection.get("flight_number"),
+                        "date": connection.get("flight_date"),
+                    },
+                }, key_value=band)
 
     # ── LANDED ── once, from the landing feed only
     if landed and "landed" not in ns["notified"]:
@@ -458,6 +535,64 @@ def _quiet_deferral(now, sched_dep, tz_name):
     else:
         return None
     return target.astimezone(timezone.utc)
+
+
+def _country(dto, movement):
+    """The country of one end of a leg, or None when the DTO predates the field.
+
+    None IS NOT 'DOMESTIC'. A record stored before _build_movement carried the
+    country has none, and every one of them would otherwise look like a
+    domestic connection and be given the shorter minimum. connection_band reads
+    a None as a border crossing for exactly that reason; it corrects itself the
+    first time the flight is re-polled.
+    """
+    return ((dto or {}).get(movement) or {}).get("country") or None
+
+
+def connection_band(dto, nxt, now=None):
+    """(band, remaining, minimum) for this leg into the next, or None.
+
+    None when the two do not connect, when either instant is unreadable, or
+    when the gap is wider than a day -- which is a stay between two journeys
+    rather than a layover. See CONNECT_MIN_DOMESTIC for what the minimum is
+    and for what it does not account for.
+    """
+    dep = (dto or {}).get("departure") or {}
+    arr = (dto or {}).get("arrival") or {}
+    nxt_dep = (nxt or {}).get("departure") or {}
+    nxt_arr = (nxt or {}).get("arrival") or {}
+
+    hub = (arr.get("iata") or "").strip().upper()
+    if not hub or hub != (nxt_dep.get("iata") or "").strip().upper():
+        return None
+
+    # REVISED, in the one precedence this whole system uses for a movement.
+    landed_at = _parse(arr.get("actual_iso")) or _parse(arr.get("estimated_iso")) \
+        or _parse(arr.get("scheduled_iso"))
+    # AND THE TIMETABLE ON THE OTHER SIDE. See the note above CONNECT_MIN_DOMESTIC.
+    leaves_at = _parse(nxt_dep.get("scheduled_iso"))
+    if landed_at is None or leaves_at is None:
+        return None
+
+    remaining = leaves_at - landed_at
+    if remaining >= CONNECT_MAX:
+        return None
+
+    # EITHER LEG CROSSING A BORDER RAISES THE MINIMUM, which is three countries:
+    # where this leg started, where it connects, where the next one ends.
+    origin = _country(dto, "departure")
+    at_hub = _country(dto, "arrival") or nxt_dep.get("country") or None
+    end = nxt_arr.get("country") or None
+    crosses = None in (origin, at_hub, end) or origin != at_hub or at_hub != end
+    minimum = CONNECT_MIN_INTERNATIONAL if crosses else CONNECT_MIN_DOMESTIC
+
+    if remaining < minimum:
+        band = "will_miss"
+    elif remaining <= minimum + CONNECT_CUSHION:
+        band = "at_risk"
+    else:
+        band = "comfortable"
+    return band, remaining, minimum
 
 
 def _search_next(facts, dto, now, search, lookup_next, days):
@@ -600,6 +735,33 @@ def render(msg, owned=True, same_city=1, same_time=1):
         return "%s: bags on belt %s." % (s, v.get("belt"))
     if k == DIVERTED:
         return "%s has been diverted. Terminal does not yet know where it landed, and will say when it does." % s
+    if k == CONNECTION:
+        nxt = v.get("next") or {}
+        onward = nxt.get("flight_number") or "your next flight"
+        left = _duration(timedelta(minutes=v.get("remaining_min") or 0))
+        usual = _duration(timedelta(minutes=v.get("minimum_min") or 0))
+        # ── THE HUB IS THIS LEG'S DESTINATION, AND THE SUBJECT MAY ALREADY
+        # ── HAVE SAID IT ───────────────────────────────────────────────────
+        #
+        # subject() names the city a flight is going TO -- "your flight to
+        # Bangalore" -- and on a connection that city IS the hub, which gave
+        # "your flight to Bangalore ... in Bangalore". So the clause is dropped
+        # whenever the subject has already placed the reader, which for an
+        # owned flight with a known destination city is every time.
+        #
+        # IT IS KEPT WHEN THE SUBJECT COULD NOT NAME THE PLACE. A DTO whose
+        # arrival city is absent gives a subject with no city in it, and then
+        # this is the only thing in the sentence that says where the reader
+        # will be standing. Comparing the two strings rather than assuming
+        # either case is what covers both.
+        where = v.get("hub") or ""
+        at = (" in %s" % where) if where and where.lower() not in s.lower() else ""
+        if v.get("band") == "will_miss":
+            return ("%s is running late enough to miss %s%s -- about %s between them, "
+                    "where %s is the usual minimum. Check with the airline."
+                    % (s, onward, at, left, usual))
+        return ("%s is running late enough to put %s%s at risk -- about %s between them, "
+                "where %s is the usual minimum." % (s, onward, at, left, usual))
     return "%s has an update." % s
 
 
@@ -611,4 +773,13 @@ def deep_link(msg):
         return {"screen": "search", "from": (msg.get("origin") or {}).get("iata"),
                 "to": (msg.get("destination") or {}).get("iata"),
                 "date": nxt.get("date") or msg.get("flight_date"), "sort": "earliest"}
+    # A CONNECTION WARNING OPENS THE FLIGHT AT RISK, which is the NEXT leg and
+    # not the delayed one. The delayed leg is the cause and the person can
+    # already see it; the onward flight is the one they may have to do
+    # something about. Falls back to this leg if the next carries no number.
+    if msg.get("kind") == CONNECTION:
+        nxt = (msg.get("values") or {}).get("next") or {}
+        if nxt.get("flight_number"):
+            return {"screen": "flight", "flight_number": nxt.get("flight_number"),
+                    "date": nxt.get("date") or msg.get("flight_date")}
     return {"screen": "flight", "flight_number": msg.get("flight_number"), "date": msg.get("flight_date")}

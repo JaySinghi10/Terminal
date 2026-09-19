@@ -298,5 +298,143 @@ check("the outbox holds the message with its key, and the key is remembered",
       len(ns["outbox"]) == 1 and ns["outbox"][0]["key"] in ns["keys"])
 check("the outbox is bounded", N.OUTBOX_MAX == 40)
 
+print()
+print("-- a delay that threatens the connection --")
+
+
+def onward(dep=T(0, 40, day=8), origin="BLR", dep_country="IN", arr_country="IN",
+           number="6E777", city="Bangalore"):
+    """The leg the 6E6188 dto above connects INTO: BLR onward."""
+    return {
+        "flight_number": number, "flight_date": "2026-09-08", "airline": "IndiGo",
+        "status": "scheduled",
+        "departure": {"airport": "Bangalore Bengaluru", "city": city, "iata": origin,
+                      "country": dep_country, "timezone": "Asia/Kolkata",
+                      "scheduled": clock(dep), "scheduled_iso": iso(dep)},
+        "arrival": {"airport": "Delhi", "city": "Delhi", "iata": "DEL",
+                    "country": arr_country, "timezone": "Asia/Kolkata",
+                    "scheduled": clock(T(3, 30, day=8)), "scheduled_iso": iso(T(3, 30, day=8))},
+    }
+
+
+def home(dep_country="IN", arr_country="IN", **kw):
+    """The 6E6188 dto with countries on both ends."""
+    d = dto(**kw)
+    d["departure"]["country"] = dep_country
+    d["arrival"]["country"] = arr_country
+    return d
+
+
+# THE ARITHMETIC, AT EACH BOUNDARY. Arrival 23:25, so a 00:40 departure is
+# 75 minutes: inside the domestic minimum plus the cushion, and not below it.
+band = lambda d, n: (N.connection_band(d, n) or (None,))[0]
+check("comfortable well clear of the minimum",
+      band(home(), onward(dep=T(2, 0, day=8))) == "comfortable")
+check("at risk inside the cushion",
+      band(home(), onward(dep=T(0, 40, day=8))) == "at_risk")
+check("at risk exactly at the minimum",
+      band(home(), onward(dep=T(0, 25, day=8))) == "at_risk")
+check("at risk exactly at the top of the cushion",
+      band(home(), onward(dep=T(0, 55, day=8))) == "at_risk")
+check("comfortable one minute above it",
+      band(home(), onward(dep=T(0, 56, day=8))) == "comfortable")
+check("will miss below the minimum",
+      band(home(), onward(dep=T(0, 20, day=8))) == "will_miss")
+
+# THE DELAY IS WHAT MOVES IT. One timetable -- a 23:25 arrival into a 02:00
+# departure, two and a half hours clear -- read at three different arrivals.
+check("the timetable alone is comfortable",
+      band(home(), onward(dep=T(2, 0, day=8))) == "comfortable")
+check("a delayed arrival turns that comfortable connection tight",
+      band(home(arr_est=T(0, 45, day=8)), onward(dep=T(2, 0, day=8))) == "at_risk")
+check("and a worse one turns it into a miss",
+      band(home(arr_est=T(1, 30, day=8)), onward(dep=T(2, 0, day=8))) == "will_miss")
+check("an ACTUAL arrival outranks the estimate",
+      band(home(arr_est=T(1, 30, day=8), arr_act=T(23, 30)),
+           onward(dep=T(2, 0, day=8))) == "comfortable")
+
+# THE BORDER RAISES THE MINIMUM, and an unknown country counts as one.
+check("the same 75 minutes is a miss when a leg crosses a border",
+      band(home(), onward(dep=T(0, 40, day=8), arr_country="AE")) == "will_miss")
+# A DTO STORED BEFORE _build_movement CARRIED THE COUNTRY HAS NONE, and the
+# shorter minimum must not be what it falls back to.
+check("a country nobody recorded is treated as a crossing",
+      band(home(dep_country=None), onward(dep=T(0, 40, day=8))) == "will_miss")
+# THE HUB IS NAMED BY BOTH LEGS, so one side recording it is enough.
+check("the hub's country is taken from whichever leg has it",
+      band(home(arr_country=None), onward(dep=T(0, 40, day=8))) == "at_risk")
+
+check("no connection when the airports do not meet",
+      N.connection_band(home(), onward(origin="MAA")) is None)
+check("no connection when the gap is wider than a day",
+      N.connection_band(home(), onward(dep=T(23, 40, day=8))) is None)
+
+# ── THE MESSAGES ──
+NOW = T(20, 0)
+
+
+def run(d, n, prior=None, now=NOW):
+    return N.decide(prior or seeded(d), d, None, now, connection=n)
+
+
+def seeded(d):
+    ns, _ = N.decide(N.blank_notify_state(), d, None, T(19, 0))
+    return ns
+
+
+ns, out = run(home(arr_est=T(0, 45, day=8)), onward(dep=T(2, 0, day=8)))
+check("one message when the band worsens", [m["kind"] for m in out] == [N.CONNECTION], out)
+check("it names the onward flight and what is left",
+      "6E777" in N.render(out[0]) and "1 h 15 min" in N.render(out[0]), N.render(out[0]))
+# THE SUBJECT ALREADY PLACED THE READER. "your flight to Bangalore ... in
+# Bangalore" is what this wording exists to avoid; see render.
+check("connection text, with the hub said once",
+      N.render(out[0]) == "Your flight to Bangalore is running late enough to put 6E777"
+                          " at risk -- about 1 h 15 min between them,"
+                          " where 1 h is the usual minimum.",
+      N.render(out[0]))
+# AND IT IS KEPT WHERE THE SUBJECT COULD NOT SAY IT. A leg whose arrival city
+# never reached the DTO gets a subject with no place in it, and then this
+# clause is the only thing telling the reader where they will be.
+placeless = copy.deepcopy(out[0])
+placeless["destination"] = {"iata": "BLR", "city": None}
+check("and the hub IS named when the subject could not name it",
+      " in Bangalore" in N.render(placeless), N.render(placeless))
+check("a tap opens the flight at risk, not the delayed one",
+      N.deep_link(out[0]) == {"screen": "flight", "flight_number": "6E777", "date": "2026-09-08"},
+      N.deep_link(out[0]))
+
+ns2, out2 = run(home(arr_est=T(0, 45, day=8)), onward(dep=T(2, 0, day=8)), prior=ns)
+check("the same band again says nothing", out2 == [], out2)
+
+ns3, out3 = run(home(arr_est=T(1, 30, day=8)), onward(dep=T(2, 0, day=8)), prior=ns)
+check("a worse band speaks once more", [m["kind"] for m in out3] == [N.CONNECTION], out3)
+check("miss text",
+      N.render(out3[0]).startswith("Your flight to Bangalore is running late enough to miss 6E777"),
+      N.render(out3[0]))
+check("and it ends by sending them to the airline",
+      N.render(out3[0]).endswith("Check with the airline."), N.render(out3[0]))
+
+_, out4 = run(home(), onward(dep=T(2, 0, day=8)), prior=ns3)
+check("an IMPROVING connection is never reported", out4 == [], out4)
+
+# SEEDED ON A HEALTHY LEG, then handed the disrupted one: seeding on the
+# cancelled dto itself would record the status as already known and emit
+# nothing at all, which tests only the seeder.
+healthy = seeded(home())
+_, out5 = run(home(status="cancelled", arr_est=T(1, 30, day=8)), onward(dep=T(2, 0, day=8)),
+              prior=healthy)
+check("a cancelled leg says cancelled and not connection",
+      [m["kind"] for m in out5] == [N.CANCELLED], out5)
+
+_, out6 = run(home(status="diverted", arr_est=T(1, 30, day=8)), onward(dep=T(2, 0, day=8)),
+              prior=healthy)
+check("a diverted leg says diverted and not connection",
+      [m["kind"] for m in out6] == [N.DIVERTED], out6)
+
+_, out7 = run(home(arr_est=T(1, 30, day=8)), None)
+check("no next leg, no connection message",
+      not any(m["kind"] == N.CONNECTION for m in out7), out7)
+
 print("\nPASSED: %d   FAILURES: %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

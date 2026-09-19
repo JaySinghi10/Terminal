@@ -115,6 +115,13 @@ STALE_AFTER = {
     notify.CANCEL_WITHDRAWN: timedelta(hours=2),
     notify.NEXT_FLIGHT: timedelta(hours=2),
     notify.DIVERTED: timedelta(hours=2),
+    # A THREATENED CONNECTION KEEPS ITS VALUE LONGER THAN THE DELAY THAT CAUSED
+    # IT. The delay message answers "when does it leave", which an hour-old copy
+    # answers wrongly; this answers "will you still make the next one", and the
+    # thing the reader does about it -- ask the airline to rebook, decide
+    # whether to run -- is worth doing two hours later. It is the same shape of
+    # news as a cancellation and takes the same life.
+    notify.CONNECTION: timedelta(hours=2),
 }
 
 # A kind this table has never heard of. An hour is the shortest life any kind
