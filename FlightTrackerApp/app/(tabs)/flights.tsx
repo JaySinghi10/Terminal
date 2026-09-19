@@ -62,8 +62,11 @@ import {
   // connectionGap in the store, which is where connections are modelled, and
   // the server keeps its own copy of the same three bands -- see the note at
   // connectionRisk. This row is the only thing that draws them.
+  //
+  // THE BAND AND NOTHING ELSE. The minimum came with it while the warning
+  // quoted the number back -- "an hour is the usual minimum" -- and that
+  // sentence is gone; see the note where the words are chosen.
   connectionRisk,
-  CONNECT_MIN_INTERNATIONAL_MS,
   // HOW LONG A BELT IS WORTH SHOWING, and it is imported rather than declared
   // because the flight card reads the same number for the same reason. See its
   // note: it was sixty minutes here and is forty-five there now.
@@ -939,7 +942,7 @@ function pendingArrivalTs(leg: PendingLeg | null): number | null {
 // BOTH ENDS ARE INSTANTS, NEVER CLOCKS, which is the only way the answer is
 // right when the two legs are in different zones -- and a connection through
 // Copenhagen always is.
-function Layover({ prev, next }: { prev: LayoverEnd; next: LayoverEnd }) {
+function Layover({ prev, next, now }: { prev: LayoverEnd; next: LayoverEnd; now: number }) {
   // THE PLACES, ONCE, BEFORE THEY ARE DRESSED FOR READING. The connection test
   // needs the codes and the sentence needs the city names, and both come from
   // one chain so the row cannot test one airport and name another.
@@ -1039,19 +1042,63 @@ function Layover({ prev, next }: { prev: LayoverEnd; next: LayoverEnd }) {
     hubIata: prevToPlace ?? nextFromPlace,
     destinationIata: nextToPlace,
   });
-  const warn = risk !== null && risk.band !== 'comfortable' ? risk : null;
-  // "an hour" and "two hours" rather than "60m" and "120m": this is the
-  // airline's rule of thumb being quoted, not a measurement.
-  const minimumWords = warn === null
-    ? ''
-    : warn.minimumMs >= CONNECT_MIN_INTERNATIONAL_MS ? 'two hours' : 'an hour';
+  // ── A CONNECTION THAT IS NO LONGER TO BE MADE IS NOT AT RISK ─────────────
+  //
+  // IT WARNED OVER A LANDED LEG. Once the SECOND leg has gone -- departed,
+  // landed, or been called off -- the connection is settled and there is
+  // nothing left to warn about: the person either made it or did not, and a
+  // row telling them it is tight is telling them about their own past.
+  //
+  // THE TEST IS ON THE LATER LEG AND ONLY ON IT. The earlier leg landing is
+  // exactly when this warning matters most -- that is the moment somebody is
+  // running through a terminal -- so its state is deliberately not consulted.
+  //
+  // 'scheduled' RATHER THAN A LIST OF THE OTHERS. Active, landed, cancelled
+  // and diverted all settle or moot it; scheduled is the one state where the
+  // flight is still ahead of the traveller. A PENDING leg has no status at all
+  // and is by definition unflown, so it keeps its warning.
+  const nextGone = next.saved !== null && effectiveStatus(next.saved, now) !== 'scheduled';
+  const warn = risk !== null && risk.band !== 'comfortable' && !nextGone ? risk : null;
+  // ── WHAT IS WRONG, NOT WHY ───────────────────────────────────────────────
+  //
+  // THESE WERE TWO FULL LINES EACH and they explained themselves: the minimum
+  // for a connection like this, that it is an estimate, that it does not allow
+  // for a terminal change. All true, and all of it read as a paragraph wedged
+  // between two cards -- on a row whose whole job is to be scanned in the
+  // second it takes to pass it.
+  //
+  // THE HEDGE IS NOW IN THE WORDS RATHER THAN IN A CAVEAT. "Tight" and
+  // "Likely" are already claims somebody weighs rather than obeys, where
+  // "45m left, an hour is the minimum" reads as a measurement and invites
+  // being checked against a clock. The shorter line is the more honest one.
+  //
+  // AND THE CAVEAT IS NOT MOVED, IT IS DROPPED. Its only other home on this
+  // screen was a footnote under the trip, which is read once and then never
+  // again -- the same as not saying it, with more words. The reasoning it was
+  // carrying lives at connectionRisk in lib/saved, where the next person to
+  // change sixty and a hundred and twenty will be standing.
+  //
+  // THE TIME LEFT, AND THAT IS THE WHOLE OF THE SECOND HALF. "Tight connection"
+  // alone is a verdict with nothing behind it; the figure is what a person
+  // actually acts on, and it is the one number this row is entitled to state.
+  //
+  // IT IS THE SAME NUMBER AS THE LINE ABOVE, deliberately restated. The label
+  // reads "Layover in Bengaluru · 1h 15m", which is the gap; this reads "1h 15m
+  // left", which is what the gap MEANS once it is short. A warning that has to
+  // be read together with the line above it to be understood is a warning that
+  // will be half-read.
+  //
+  // AND THE MINIMUM IS NOT SAID BESIDE IT. "2h 15m left, 2h usual" reads as a
+  // contradiction -- the figure is ABOVE the number it is being warned
+  // against -- because the amber band is the thirty minutes above the minimum
+  // rather than below it. Both numbers are right and printing them together
+  // makes the row argue with itself. The band is the judgement; the figure is
+  // the fact; the standard behind them belongs at connectionRisk, where it is
+  // written down, and not in four words on a row.
   const why = warn === null
     ? null
-    : warn.band === 'will-miss'
-      // NOT "you will miss it". The arithmetic says the gap is under the usual
-      // minimum; it does not know the terminals, and the airline does.
-      ? `Likely too short — ${minimumWords} is the usual minimum for a connection like this. Check with the airline.`
-      : `Tight — ${minimumWords} is the usual minimum for a connection like this. An estimate: it does not allow for a terminal change.`;
+    : `${warn.band === 'will-miss' ? 'Likely too short' : 'Tight connection'}`
+      + ` · ${gapLabel(warn.remainingMs)} left`;
 
   // TWO ROWS RATHER THAN TWO TEXTS IN ONE. st.layover is a ROW, and its whole
   // trick is the PAGE_BG behind the words punching a hole in the thread drawn
@@ -2517,6 +2564,10 @@ export default function Flights() {
         <Layover
           prev={{ saved: row.leg, pend: row.pend }}
           next={{ saved: rows[ri + 1].leg, pend: rows[ri + 1].pend }}
+          // THE SCREEN'S OWN CLOCK, so the layover and the cards either side of
+          // it settle on the same instant. See nextGone, which is the one thing
+          // in this row that asks what time it is.
+          now={now}
         />
       ) : null;
       // IN A SLOT, LIKE EVERY PUBLISHED LEG BELOW. It was returned bare, so it
