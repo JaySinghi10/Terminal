@@ -213,7 +213,24 @@ function tripLegs(tripId: string, opts: {
     }),
     leg({
       number: 'ZZ902', tripId,
-      from: { place: DEL, scheduledMs: l2Dep, terminal: '3', gate: 'B12' },
+      from: {
+        place: DEL, scheduledMs: l2Dep, terminal: '3', gate: 'B12',
+        // ── A LATE ARRIVAL CAME FROM A LATE DEPARTURE ─────────────────────
+        //
+        // THE DELAY WAS ONLY EVER ON THE ARRIVAL, which is what the connection
+        // arithmetic reads and is why it was put there -- and it left the leg
+        // with a delayed arrival, an on-time departure, and no departure delay
+        // at all. That is not a shape a real record takes, and it is the one
+        // field the collapsed row's DELAYED chip reads: displayStatus asks for
+        // the DEPARTURE delay, so a fixture with none could never show the
+        // chip however late it landed.
+        //
+        // SO THE DEPARTURE SLIPS BY THE SAME AMOUNT. The aircraft leaves late
+        // and lands late by the same margin, which is the ordinary case and
+        // makes the whole leg consistent: the chip, the countdown and the
+        // connection warning are now all reading one delay.
+        estimatedMs: opts.leg2ArrivesAt == null ? null : l2Dep + (opts.leg2ArrivesAt - l2Arr),
+      },
       to: {
         place: BLR, scheduledMs: l2Arr, terminal: '1',
         // THE DELAY LIVES ON THE ESTIMATE, which is where a real one lives:

@@ -163,6 +163,11 @@ import {
   // they are one treatment at two sizes. Cancelled is red and diverted is
   // amber; see DISRUPT_FILL for why they are not one colour.
   DISRUPT_FILL, DISRUPT_EDGE, disruptToneOf,
+  // AND THE RULE THE OPEN CARD USES TO CALL A FLIGHT LATE. Imported rather
+  // than restated: a scheduled flight with a positive departure delay reads
+  // DELAYED on the card, and a row underneath it deciding that question its
+  // own way is how the two come to disagree about one flight.
+  displayStatus,
 } from '../../components/FlightCard';
 // THE BOOKING REFERENCE, HELD UP TO BE READ. Shared with Home rather than
 // written twice: Home shows the same leg when nothing ties it to a journey, and
@@ -1529,6 +1534,42 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   const effState = effectiveStatus(leg, now);
   const off = disruptToneOf(effState);
 
+  // ── AND LATE IS A STATE TOO, WHICH THIS ROW ALSO READ NOWHERE ────────────
+  //
+  // A DELAYED LEG LOOKED EXACTLY LIKE AN ON-TIME ONE. The countdown moved --
+  // departureTs resolves the revised time -- so the row was already counting
+  // down to the new departure without ever saying the time had changed. The
+  // number was right and the reason for it was invisible, which is the same
+  // shape of fault the cancelled chip fixed.
+  //
+  // displayStatus IS THE OPEN CARD'S OWN RULE and is imported rather than
+  // restated: scheduled plus a positive departure delay is 'delayed', and so
+  // is a raw status of Delayed with no figure yet. A row that decided this for
+  // itself would eventually disagree with the card it sits under.
+  //
+  // ONLY BEFORE IT LEAVES. effState 'scheduled' is the gate, so an airborne or
+  // landed leg says nothing here -- those have states of their own on this
+  // row, and a flight that is already down is not late, it is over. It is also
+  // exactly when the answer is worth having: the delay matters while there is
+  // still a decision about when to leave for the airport.
+  //
+  // AND IT OUTRANKS NOTHING. A cancelled or diverted leg never shows this;
+  // `off` is tested first and a flight that is not going cannot be late.
+  const delayMin = leg.from.delay;
+  const delayed = off === null && effState === 'scheduled'
+    && displayStatus(effState, delayMin, leg.rawStatus) === 'delayed';
+  // THE FIGURE WITH THE WORD, WHICH IS WHAT MAKES THE CHIP HONEST AT THIS
+  // SIZE. Cancelled is binary and DELAYED is not: at seventeen points the word
+  // alone shouts as loudly for four minutes as for four hours. The number is
+  // what lets the reader size it without opening the card. Absent when the
+  // provider said Delayed and gave no minutes, which is the one case where
+  // the word has to stand on its own.
+  const delayWords = !delayed || typeof delayMin !== 'number' || delayMin <= 0
+    ? ''
+    : delayMin >= 60
+      ? ` ${Math.floor(delayMin / 60)}H ${delayMin % 60}M`
+      : ` ${delayMin}M`;
+
   // ── NO COLLAPSED LEG PRINTS A CLOCK, AND 'next' NOW EARNS NOTHING VISIBLE ──
   //
   // THE NEXT LEG SHOWED ITS DEPARTURE AND NO OTHER LEG DID, which made exactly
@@ -1586,6 +1627,18 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
           {off !== null && (
             <Text style={[st.legDisrupt, { color: getStatusColor(off) }]} numberOfLines={1}>
               {off.toUpperCase()}
+            </Text>
+          )}
+          {/* THE SAME SLOT AND THE SAME SIZE AS A CANCELLATION, in the amber
+              getStatusColor gives 'delayed'. The two can never both render --
+              see `delayed`, which is false whenever `off` is set -- so the
+              head of the column holds at most one state word. */}
+          {delayed && (
+            <Text
+              style={[st.legDisrupt, { color: getStatusColor('delayed') }]}
+              numberOfLines={1}
+            >
+              {`DELAYED${delayWords}`}
             </Text>
           )}
           {dated !== null && <Text style={st.legDate}>{dated}</Text>}
