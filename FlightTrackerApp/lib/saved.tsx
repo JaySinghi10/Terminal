@@ -30,6 +30,11 @@ import {
 } from 'react';
 import { AppState, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+// THE AIRPORT'S COUNTRY, AND ONLY THAT. connectionRisk raises the minimum
+// connection time when a leg crosses a border, which is a fact about two
+// airports rather than about a flight. airports.ts imports nothing, so this
+// cannot become a cycle.
+import { airportByCode } from './airports';
 import {
   SavedFlight,
   getSavedFlights,
@@ -1040,6 +1045,94 @@ function connectionGap(earlier: SavedFlight, later: SavedFlight): number | null 
   if (arr === null || dep === null) return null;
   const gap = dep - arr;
   return gap > 0 && gap < MAX_CONNECTION_MS ? gap : null;
+}
+
+// ── IS THERE STILL TIME TO MAKE THE CONNECTION ──────────────────────────────
+//
+// THE STORE HAS MODELLED CONNECTIONS SINCE connectionGap ABOVE, and nothing has
+// ever read a delay against one. A leg that lands ninety minutes late does not
+// change its own card much -- the arrival moves, the countdown moves -- and it
+// can quietly turn the next leg into a flight nobody can board.
+//
+// THE REMAINING LAYOVER IS THE WHOLE COMPUTATION: the later leg's departure
+// minus the earlier leg's REVISED arrival, where revised is actual, then
+// estimated, then scheduled. arrivalTs and departureTs already resolve exactly
+// that precedence against each airport's own zone, so this reads them rather
+// than rebuilding it -- the same reason the layover row imports them.
+//
+// THE LATER LEG'S DEPARTURE IS ITS SCHEDULED ONE, DELIBERATELY. A delay on the
+// connecting flight would lengthen the layover and could silence this warning,
+// and it is the one input here that can be recovered at any moment: an airline
+// that is an hour late at 09:00 can be on time by 11:00. Relying on it would
+// mean telling somebody their connection is fine because the flight they need
+// to catch is also running late. So the second leg is taken at its timetable.
+//
+// ── THE MINIMUM IS AN ESTIMATE AND THE CODE SAYS SO ─────────────────────────
+//
+// NO PROVIDER IN THIS APP CARRIES REAL MINIMUM CONNECTION TIMES. Every airport
+// publishes its own, they differ per terminal pair, and none of them is in any
+// feed this app reads. Sixty minutes domestic and a hundred and twenty
+// international are the common industry shape and nothing more.
+//
+// THEY DO NOT ACCOUNT FOR A TERMINAL CHANGE, which is the single thing most
+// likely to make a real connection tighter than this arithmetic says, nor for
+// the walk between two specific gates, nor for whether there are bags to
+// reclaim and re-drop. A connection this calls comfortable can still be missed.
+//
+// SHARED WITH THE SERVER, WHICH HAS ITS OWN COPY. notify.py computes the same
+// three bands from the same four numbers so a push and a screen cannot
+// disagree. There is no shared runtime between TypeScript and Python, so the
+// two are restated rather than imported -- the same arrangement MAX_LAYOVER_MS
+// already has with MAX_CONNECTION_MS. Change one, change both.
+export type ConnectionBand = 'comfortable' | 'at-risk' | 'will-miss';
+export const CONNECT_MIN_DOMESTIC_MS = 60 * 60 * 1000;
+export const CONNECT_MIN_INTERNATIONAL_MS = 120 * 60 * 1000;
+// The width of the amber band above the minimum. Inside this, the connection is
+// legal and is not comfortable.
+export const CONNECT_CUSHION_MS = 30 * 60 * 1000;
+
+export type ConnectionRisk = {
+  remainingMs: number;
+  minimumMs: number;
+  band: ConnectionBand;
+  international: boolean;
+};
+
+// EITHER LEG CROSSING A BORDER RAISES THE MINIMUM, which needs three countries:
+// where the journey starts, where it connects, and where it ends. An airport
+// the shipped dataset does not know is treated as a border crossing -- the
+// stricter reading, and the one that cannot tell somebody a tight connection is
+// fine because a code was missing.
+function crossesBorder(originIata: string | null, hubIata: string | null, destinationIata: string | null): boolean {
+  const country = (code: string | null): string | null => {
+    if (code === null) return null;
+    return airportByCode(code)?.country ?? null;
+  };
+  const from = country(originIata);
+  const hub = country(hubIata);
+  const to = country(destinationIata);
+  if (from === null || hub === null || to === null) return true;
+  return from !== hub || hub !== to;
+}
+
+// Null when either instant is missing: a layover that cannot be measured is not
+// a layover that is tight, and a row with nothing to say says nothing.
+export function connectionRisk(args: {
+  arrivalMs: number | null;
+  departureMs: number | null;
+  originIata: string | null;
+  hubIata: string | null;
+  destinationIata: string | null;
+}): ConnectionRisk | null {
+  const { arrivalMs, departureMs } = args;
+  if (arrivalMs === null || departureMs === null) return null;
+  const international = crossesBorder(args.originIata, args.hubIata, args.destinationIata);
+  const minimumMs = international ? CONNECT_MIN_INTERNATIONAL_MS : CONNECT_MIN_DOMESTIC_MS;
+  const remainingMs = departureMs - arrivalMs;
+  const band: ConnectionBand = remainingMs < minimumMs
+    ? 'will-miss'
+    : remainingMs <= minimumMs + CONNECT_CUSHION_MS ? 'at-risk' : 'comfortable';
+  return { remainingMs, minimumMs, band, international };
 }
 
 // WHEN A TRIP BEGAN, for deciding which id survives a merge. NO_TIME for a trip

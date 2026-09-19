@@ -58,6 +58,12 @@ import {
   // against the airport's own zone, and a second copy of that precedence here
   // would be a layover that disagrees with the cards either side of it.
   arrivalTs,
+  // WHETHER THE GAP BETWEEN THEM IS STILL ENOUGH. The rule lives beside
+  // connectionGap in the store, which is where connections are modelled, and
+  // the server keeps its own copy of the same three bands -- see the note at
+  // connectionRisk. This row is the only thing that draws them.
+  connectionRisk,
+  CONNECT_MIN_INTERNATIONAL_MS,
   // HOW LONG A BELT IS WORTH SHOWING, and it is imported rather than declared
   // because the flight card reads the same number for the same reason. See its
   // note: it was sixty minutes here and is forty-five there now.
@@ -690,18 +696,39 @@ function showsBelt(legs: SavedFlight[], i: number, now: number): boolean {
 // SO IT IS THE ONE FACT THAT IS NOWHERE ELSE: the gap between two flights,
 // which neither card can state because neither card knows about the other.
 //
-// STILL NOT ONE WORD OF ADVICE. It does not say whether the gap is enough, and
-// nothing here may ever start to. Deciding a layover is tight needs the
-// airport's minimum connection time, the gate close time, and how long it takes
-// to walk between two specific gates -- and this app has none of the three. A
-// verdict built from what IS here would be a guess wearing the authority of the
-// screen it is printed on, and a traveller who reads "you have time" and misses
-// the flight was told so by us.
+// IT WARNS, AND IT NEVER REASSURES, AND THE DIFFERENCE IS THE WHOLE RULE.
 //
-// SO THERE IS NO COLOUR, NO ICON AND NO ADJECTIVE. 55 minutes and 5 hours are
-// rendered identically. The reader does the arithmetic, because the reader knows
-// things this app does not: whether they have bags, whether they have flown
-// through here before, whether they walk quickly.
+// THIS ROW USED TO SAY NOTHING AT ALL about whether a gap was enough, and the
+// reasoning was sound: deciding a layover is comfortable needs the airport's
+// minimum connection time, the gate close time, and the walk between two
+// specific gates, and this app has none of the three. A verdict built from what
+// IS here would be a guess wearing the authority of the screen it is printed
+// on, and a traveller who reads "you have time" and misses the flight was told
+// so by us.
+//
+// EVERY WORD OF THAT STILL HOLDS FOR REASSURANCE. What it does not hold for is
+// a WARNING, because the two claims are not the same size:
+//
+//   "You have time"      needs all three facts, and we have none of them.
+//   "This may be short"  needs one arithmetic sentence -- the next leg leaves
+//                        before the usual minimum after this one lands -- and
+//                        is true whatever the gate walk turns out to be.
+//
+// The first can only be wrong in the direction that strands somebody. The
+// second can only be wrong in the direction that makes them check, which is
+// what they would want to do anyway.
+//
+// SO A COMFORTABLE LAYOVER RENDERS EXACTLY AS IT ALWAYS DID: no colour, no
+// icon, no adjective, no second line. 55 minutes and 5 hours are still
+// rendered identically ONCE both are comfortable. Nothing on this screen ever
+// tells anyone a connection is fine. It speaks only when the arithmetic says it
+// may not be, and then it says whose arithmetic it is -- see connectionRisk,
+// which states in its own comment that the minimum is an estimate and that it
+// does not allow for a terminal change.
+//
+// THE READER STILL KNOWS THINGS THIS APP DOES NOT: whether they have bags,
+// whether they have flown through here before, whether they walk quickly. The
+// warning is written to be checked against that, not to replace it.
 
 // ── HOW LONG, IN UNITS A PERSON CAN HOLD ───────────────────────────────────
 //
@@ -897,10 +924,16 @@ function Layover({ prev, next }: { prev: LayoverEnd; next: LayoverEnd }) {
   // one chain so the row cannot test one airport and name another.
   const prevToPlace = codeOf(prev.saved?.to.iata) ?? codeOf(prev.pend?.destination) ?? codeOf(prev.pend?.destinationName);
   const nextFromPlace = codeOf(next.saved?.from.iata) ?? codeOf(next.pend?.origin) ?? codeOf(next.pend?.originName);
-  const prevFrom = cityOf(codeOf(prev.saved?.from.iata) ?? codeOf(prev.pend?.origin) ?? codeOf(prev.pend?.originName)) ?? '?';
+  // THE OUTER TWO ENDS, kept as CODES rather than resolved straight to cities:
+  // connectionRisk needs them to decide whether either leg crosses a border,
+  // and the sentence below needs their city names. One chain each, read twice,
+  // so the row cannot test one airport and name another.
+  const prevFromPlace = codeOf(prev.saved?.from.iata) ?? codeOf(prev.pend?.origin) ?? codeOf(prev.pend?.originName);
+  const nextToPlace = codeOf(next.saved?.to.iata) ?? codeOf(next.pend?.destination) ?? codeOf(next.pend?.destinationName);
+  const prevFrom = cityOf(prevFromPlace) ?? '?';
   const prevTo = cityOf(prevToPlace) ?? '?';
   const nextFrom = cityOf(nextFromPlace) ?? '?';
-  const nextTo = cityOf(codeOf(next.saved?.to.iata) ?? codeOf(next.pend?.destination) ?? codeOf(next.pend?.destinationName)) ?? '?';
+  const nextTo = cityOf(nextToPlace) ?? '?';
   // WHERE THE WAIT HAPPENS. The two are the same airport by the time this is
   // read -- the test below has already refused the pair otherwise -- so the
   // earlier leg's destination is taken and the later leg's origin is only the
@@ -972,10 +1005,60 @@ function Layover({ prev, next }: { prev: LayoverEnd; next: LayoverEnd }) {
     return `Layover${at} · ${gapLabel(wait)}`;
   })();
 
+  // ── AND WHETHER THAT GAP IS STILL ENOUGH ─────────────────────────────────
+  //
+  // COMPUTED FOR EVERY ROW AND SPOKEN FOR ALMOST NONE. See the note at the top
+  // of this component: comfortable renders exactly as it always did, so the
+  // only branches below that change anything are the two that warn. Null
+  // whenever an instant is missing, which is the same silence.
+  const risk = connectionRisk({
+    arrivalMs: arr,
+    departureMs: dep,
+    originIata: prevFromPlace,
+    hubIata: prevToPlace ?? nextFromPlace,
+    destinationIata: nextToPlace,
+  });
+  const warn = risk !== null && risk.band !== 'comfortable' ? risk : null;
+  // "an hour" and "two hours" rather than "60m" and "120m": this is the
+  // airline's rule of thumb being quoted, not a measurement.
+  const minimumWords = warn === null
+    ? ''
+    : warn.minimumMs >= CONNECT_MIN_INTERNATIONAL_MS ? 'two hours' : 'an hour';
+  const why = warn === null
+    ? null
+    : warn.band === 'will-miss'
+      // NOT "you will miss it". The arithmetic says the gap is under the usual
+      // minimum; it does not know the terminals, and the airline does.
+      ? `Likely too short — ${minimumWords} is the usual minimum for a connection like this. Check with the airline.`
+      : `Tight — ${minimumWords} is the usual minimum for a connection like this. An estimate: it does not allow for a terminal change.`;
+
+  // TWO ROWS RATHER THAN TWO TEXTS IN ONE. st.layover is a ROW, and its whole
+  // trick is the PAGE_BG behind the words punching a hole in the thread drawn
+  // under it -- a second Text inside it would sit BESIDE the duration and be
+  // crossed by the line. The reason gets its own row, so the thread is punched
+  // for it too and the two read as one block on the rail.
   return (
-    <View style={st.layover}>
-      <Text style={st.layoverTime}>{label}</Text>
-    </View>
+    <>
+      <View style={st.layover}>
+        <Text style={[
+          st.layoverTime,
+          warn?.band === 'at-risk' && { color: CD_LATE },
+          warn?.band === 'will-miss' && { color: getStatusColor('cancelled') },
+        ]}>
+          {label}
+        </Text>
+      </View>
+      {why !== null && (
+        <View style={st.layover}>
+          <Text style={[
+            st.layoverWhy,
+            { color: warn?.band === 'will-miss' ? getStatusColor('cancelled') : CD_LATE },
+          ]}>
+            {why}
+          </Text>
+        </View>
+      )}
+    </>
   );
 }
 
@@ -3338,6 +3421,19 @@ const st = StyleSheet.create({
     fontFamily: MONO_BOLD, fontSize: 13, color: DIM,
     backgroundColor: PAGE_BG,
     paddingLeft: RAIL_INSET, paddingRight: 8, paddingVertical: 2,
+    flexShrink: 1,
+  },
+  // THE WARNING'S SECOND LINE. Sans rather than mono and 11 rather than 13:
+  // the duration above it is a figure and this is a sentence, and the size
+  // difference is what keeps the figure the thing being read first. The colour
+  // is set inline from the band -- amber or the cancelled red -- so there is no
+  // third colour token for a row that is usually not drawn at all. The same
+  // PAGE_BG and RAIL_INSET as the line above, so both punch the thread and
+  // both start on the cards' own left edge.
+  layoverWhy: {
+    fontFamily: SANS, fontSize: 11, lineHeight: 15,
+    backgroundColor: PAGE_BG,
+    paddingLeft: RAIL_INSET, paddingRight: 8, paddingBottom: 4,
     flexShrink: 1,
   },
   legHead: { flexDirection: 'row', alignItems: 'center' },
