@@ -756,9 +756,25 @@ def render(msg, owned=True, same_city=1, same_time=1):
         # either case is what covers both.
         where = v.get("hub") or ""
         at = (" in %s" % where) if where and where.lower() not in s.lower() else ""
+        # ── NO SENTENCE SENDS ANYBODY TO THE AIRLINE ────────────────────────
+        #
+        # THIS ONE DID, AND IT SHOULD NOT HAVE. "Check with the airline" was on
+        # the end of the missed-connection line, and it is the one instruction
+        # this app has a standing rule against: the person is already holding
+        # the only device that knows, and telling them to go and ask somebody
+        # else is an admission dressed as advice. test_notify has asserted the
+        # rule since the ledger tests were written -- see "no sentence sends
+        # anyone to the airline" -- and that check was scoped to one message
+        # set, so this slipped past it. It is not scoped any more.
+        #
+        # WHAT REPLACES IT IS NOTHING. The sentence already says the flight is
+        # late enough to miss the next one and how little is between them,
+        # which is the whole of what is known. The help that belongs here is
+        # the rebooking work that has not been built; until it is, the honest
+        # end of this sentence is a full stop.
         if v.get("band") == "will_miss":
             return ("%s is running late enough to miss %s%s -- about %s between them, "
-                    "where %s is the usual minimum. Check with the airline."
+                    "where %s is the usual minimum."
                     % (s, onward, at, left, usual))
         return ("%s is running late enough to put %s%s at risk -- about %s between them, "
                 "where %s is the usual minimum." % (s, onward, at, left, usual))

@@ -412,8 +412,8 @@ check("a worse band speaks once more", [m["kind"] for m in out3] == [N.CONNECTIO
 check("miss text",
       N.render(out3[0]).startswith("Your flight to Bangalore is running late enough to miss 6E777"),
       N.render(out3[0]))
-check("and it ends by sending them to the airline",
-      N.render(out3[0]).endswith("Check with the airline."), N.render(out3[0]))
+check("and it does not send them to the airline",
+      "check with" not in N.render(out3[0]).lower(), N.render(out3[0]))
 
 _, out4 = run(home(), onward(dep=T(2, 0, day=8)), prior=ns3)
 check("an IMPROVING connection is never reported", out4 == [], out4)
@@ -435,6 +435,25 @@ check("a diverted leg says diverted and not connection",
 _, out7 = run(home(arr_est=T(1, 30, day=8)), None)
 check("no next leg, no connection message",
       not any(m["kind"] == N.CONNECTION for m in out7), out7)
+
+# ── THE RULE, OVER EVERY KIND THIS FILE PRODUCES ────────────────────────────
+#
+# THERE WAS ALREADY A CHECK FOR THIS and it was scoped to the 6E6188 replay --
+# which is exactly how "Check with the airline" reached the connection message
+# and survived a review: the guard was real, and it was not looking here.
+# Scoped to every message any test in this file has built instead.
+print()
+print("-- and nothing anywhere sends the reader to the airline --")
+everything = [m for _, m in got] + out + out2 + out3 + out4 + out5 + out6 + out7
+sent = [N.render(m) for m in everything
+        if "check with" in N.render(m).lower() or "contact the airline" in N.render(m).lower()]
+check("NO message of any kind sends anyone to the airline", sent == [], sent)
+# AND THE SET IS NOT EMPTY OF THE ONE THAT BROKE IT. A guard over a list that
+# happens to hold nothing passes for the wrong reason; naming the kind is what
+# makes this a test of the connection message rather than of the loop.
+kinds_seen = {m["kind"] for m in everything}
+check("and the set includes the kind that broke the rule",
+      N.CONNECTION in kinds_seen and len(kinds_seen) >= 4, sorted(kinds_seen))
 
 print("\nPASSED: %d   FAILURES: %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)
