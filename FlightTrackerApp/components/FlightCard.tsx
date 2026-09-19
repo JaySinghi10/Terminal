@@ -291,6 +291,46 @@ export type FlightData = {
   date: string;
 };
 
+// ── WHAT A DISRUPTED SURFACE IS COLOURED WITH ───────────────────────────────
+//
+// TWO TONES, NOT ONE. Cancelled and diverted are both "this journey has
+// changed", and the card treats them alike in structure -- see tripPhase's
+// 'off' -- but they are not the same news and must not be the same colour.
+// Cancelled is RED: the flight is not happening at all. Diverted is AMBER: it
+// happened, and it happened somewhere else. Amber is already this app's word
+// for "not right, not a disaster", which is exactly where a diversion sits.
+//
+// THE FILLS ARE STRONGER THAN getStatusBg's 12-ALPHA PAIR, and deliberately.
+// Those were written to tint a flat CARD_FILL; the trip card is GLASS, and the
+// same value over a blur reads as a smudge rather than as a colour. These are
+// the values that make the two surfaces look like one treatment. The collapsed
+// row takes them too, so a leg does not change colour when it is opened.
+//
+// EXPORTED BECAUSE TWO FILES DRAW THIS. The trip screen's collapsed row and
+// unpublished card read the same three maps; a second set of literals there is
+// how the open card and the row beneath it come to disagree by a hex digit.
+export type DisruptTone = 'cancelled' | 'diverted';
+
+export const DISRUPT_FILL: Record<DisruptTone, string> = {
+  cancelled: 'rgba(248,113,113,0.13)',
+  diverted: 'rgba(251,191,36,0.13)',
+};
+export const DISRUPT_EDGE: Record<DisruptTone, string> = {
+  cancelled: 'rgba(248,113,113,0.45)',
+  diverted: 'rgba(251,191,36,0.45)',
+};
+// The pill behind the word, at the softer alpha a small filled box wants.
+export const DISRUPT_PILL: Record<DisruptTone, string> = {
+  cancelled: 'rgba(248,113,113,0.18)',
+  diverted: 'rgba(251,191,36,0.18)',
+};
+
+// THE ONE PLACE THE TWO WORDS BECOME A TONE. Everything else asks this rather
+// than testing the status twice and getting it half right the second time.
+export function disruptToneOf(status: string | null | undefined): DisruptTone | null {
+  return status === 'cancelled' || status === 'diverted' ? status : null;
+}
+
 export function getStatusBg(status: string) {
   switch (status) {
     case "landed": return "#8e8e9312";
@@ -2905,6 +2945,11 @@ export function FlightCard({
   const tripEffective = flightRecord !== null
     ? effectiveStatus(flightRecord, now)
     : 'scheduled';
+  // WHICH OF THE TWO DISRUPTIONS, OR NEITHER. tripPhase collapses cancelled and
+  // diverted into 'off' because they render the same STRUCTURE -- scheduled
+  // departure alone, no progress, no gate. They do not take the same COLOUR, so
+  // everything that paints reads this instead. See DISRUPT_FILL.
+  const disruptTone = disruptToneOf(tripEffective);
   // 'stale' IS ITS OWN PHASE AND MUST NEVER BE 'air'. 'air' is what draws the
   // pulse dot and the green; 'before' would be worse than wrong -- it would draw
   // a flight that has already gone as one still to come.
@@ -3819,6 +3864,37 @@ export function FlightCard({
                 collapsable={false}
                 style={[
                   g.sheetShell, s.airportCard,
+                  // ── A DISRUPTED CARD LOOKS DISRUPTED ────────────────────
+                  //
+                  // IT USED TO BE ELEVEN POINTS OF RED TEXT AND NOTHING ELSE.
+                  // A cancelled flight dropped its progress bar, its countdown,
+                  // its gate and its belt -- so the card said LESS, and saying
+                  // less is quiet rather than alarming. It read as a card with
+                  // missing data, which is exactly the wrong reading for the
+                  // one state where the person has to do something.
+                  //
+                  // getStatusBg's OWN RED, at 12 alpha, which was already in the
+                  // palette and used by nothing. No colour is invented here: the
+                  // pill below takes the same value, and the live-green rule it
+                  // already follows is the pattern this copies.
+                  //
+                  // DIVERTED TAKES IT TOO, AND TAKES IT IN AMBER. A diverted
+                  // passenger is at the wrong airport with their onward travel
+                  // broken, which is at least as disruptive as a cancellation --
+                  // but it is not the same news, and the two must not be one
+                  // colour. Cancelled is red: the flight is not happening.
+                  // Diverted is amber: it happened, somewhere else. See
+                  // DISRUPT_FILL.
+                  //
+                  // A backgroundColor HERE IS NOT WHAT PAINTS IT. sheetShell
+                  // carries no fill of its own -- the blur samples what is behind
+                  // it, so the fill is a SIBLING drawn after the blur, see
+                  // GlassLayers -- and a colour set here lands behind that
+                  // sibling and is washed out by it. That is why the card read
+                  // weaker than the flat collapsed row at the same alpha. The
+                  // tint that actually shows is the overlay below, beside the
+                  // edge. This one stays because it is what the card is when the
+                  // glass cannot draw.
                   // THE TOP EDGE IS THE SCREEN'S, so there must not be a corner
                   // on it. Squaring the two upper corners and paying the safe
                   // area back as padding is what lets the surface run up behind
@@ -4044,6 +4120,15 @@ export function FlightCard({
                 <View
                   style={[
                     g.sheetEdge, s.airportCardEdge,
+                    // AND THE EDGE CARRIES IT, which is what turns a tint into a
+                    // shape. sheetEdge's own note makes this argument already:
+                    // at 4.5% white a fill alone barely registers, and one pixel
+                    // of border is what says "this is an object" rather than "a
+                    // slightly different patch of page". A soft fill needs the
+                    // same help. Not the status colour at full strength: an
+                    // outlined red box is an alert dialog, and this is a card
+                    // that has bad news on it.
+                    disruptTone !== null && { borderColor: DISRUPT_EDGE[disruptTone] },
                     // AND IT STARTS BELOW THE CAP. Squaring the corners killed
                     // the arcs, but the LEFT AND RIGHT borders still ran from
                     // y=0 down -- two 1px verticals at rgba(255,255,255,0.08),
@@ -4062,6 +4147,32 @@ export function FlightCard({
                   ]}
                   pointerEvents="none"
                 />
+                {/* ── THE TINT THAT ACTUALLY SHOWS ──────────────────────────
+                    A SIBLING AFTER THE GLASS, for the reason spelled out at the
+                    shell above: the blur's fill is itself a sibling drawn after
+                    the blur, so anything set as the shell's own background is
+                    underneath it. This is drawn after both and over neither the
+                    edge nor the content -- it sits in the same absolute layer
+                    the edge does, which is where a wash belongs.
+
+                    IT TINTS THE TEXT TOO, by a tenth of nothing. At these alphas
+                    a word on top shifts imperceptibly, and the alternative --
+                    threading a fill into GlassLayers -- would change every glass
+                    surface in the app to colour one card. */}
+                {disruptTone !== null && (
+                  <View
+                    style={[
+                      g.sheetEdge, s.airportCardEdge,
+                      { borderWidth: 0, backgroundColor: DISRUPT_FILL[disruptTone] },
+                      mapVariant && {
+                        top: insets.top,
+                        borderTopLeftRadius: 0,
+                        borderTopRightRadius: 0,
+                      },
+                    ]}
+                    pointerEvents="none"
+                  />
+                )}
                 {/* THE STATUS WORD, ALONE IN ITS ROW NOW.
                     THE "FLIGHT CARD" HEADING IS GONE. It labelled the surface
                     rather than saying anything about the flight -- a card that
@@ -4211,6 +4322,22 @@ export function FlightCard({
                       <View style={[
                         s.airportHeadPill,
                         flight.statusColor === CD_GREEN && s.airportHeadPillLive,
+                        // THE SAME RULE THE GREEN ONE FOLLOWS, in the other
+                        // direction. The pill is neutral by default and tinted
+                        // for exactly one state; there are two now, and the
+                        // second is the one that matters more.
+                        //
+                        // AND IT GROWS. CANCELLED was eleven points of mono in a
+                        // small box at the top of a card that had otherwise gone
+                        // quiet -- the most important word on the screen, set
+                        // smaller than the flight number. The pill is already
+                        // where the eye starts; this makes what is in it match
+                        // what it is worth.
+                        disruptTone !== null && {
+                          backgroundColor: DISRUPT_PILL[disruptTone],
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                        },
                       ]}>
                         {/* ── THE CARD'S OWN WORD, NOT effectiveStatus's ──
                             IT RENDERED StatusWord AND THREW AWAY THE BETTER WORD.
@@ -4240,7 +4367,15 @@ export function FlightCard({
                             StatusWord with no callers anywhere, worth deleting on a
                             pass that is allowed to touch that file. */}
                         <Text
-                          style={[s.airportHeadStatus, { color: flight.statusColor }]}
+                          style={[
+                            s.airportHeadStatus,
+                            { color: flight.statusColor },
+                            // 20 AGAINST 11, which is the card's own headline
+                            // size -- airportDate and the movement times are
+                            // both 20. The word is not decoration on a disrupted
+                            // card; it is the card's subject.
+                            disruptTone !== null && s.airportHeadStatusOff,
+                          ]}
                           numberOfLines={1}
                         >
                           {flight.status}
@@ -5361,6 +5496,12 @@ const s = StyleSheet.create({
     paddingVertical: 3,
   },
   airportHeadPillLive: { backgroundColor: "#4ade8012" },
+  // THE DISRUPTED WORD'S OWN SIZE. 20 is this card's headline -- airportDate and
+  // the movement times both sit there -- and lineHeight is stated so the pill's
+  // height is a sum rather than a font's opinion, the same argument the sheet's
+  // own pill makes. The tracking comes down from airportHeadStatus's 1: letter
+  // spacing that reads as deliberate at 11 reads as a gap at 20.
+  airportHeadStatusOff: { fontSize: 20, lineHeight: 24, letterSpacing: 0.5 },
   // THE HEAD ROW'S ONE CHILD IN FLOW: the pill, its dot, and the spacer that
   // balances the dot. See the call site -- this being the only thing the row lays
   // out is what centres the pill and what holds the row open.

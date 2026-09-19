@@ -152,7 +152,15 @@ import { EXPAND_HAPTIC } from '../../components/swipe';
 // THREE NAMES CAME OFF THIS IMPORT AND lib/time's. hasTime, movementTimeCell and
 // clock24 served the collapsed leg's departure clock and nothing else here; the
 // row has gone and so have they. See CollapsedLeg.
-import { FlightCard, flightDataFromSaved } from '../../components/FlightCard';
+import {
+  FlightCard, flightDataFromSaved,
+  // THE DISRUPTED SURFACE'S TWO COLOURS AND THE FUNCTION THAT PICKS BETWEEN
+  // THEM. Declared beside the card that draws the big version, so the row
+  // beneath it and the card above cannot come to disagree by a hex digit --
+  // they are one treatment at two sizes. Cancelled is red and diverted is
+  // amber; see DISRUPT_FILL for why they are not one colour.
+  DISRUPT_FILL, DISRUPT_EDGE, disruptToneOf,
+} from '../../components/FlightCard';
 // THE BOOKING REFERENCE, HELD UP TO BE READ. Shared with Home rather than
 // written twice: Home shows the same leg when nothing ties it to a journey, and
 // a screen may never be the place another screen imports from.
@@ -614,7 +622,20 @@ function legState(leg: SavedFlight, i: number, openIdx: number, nextIdx: number,
 // screen is how "2h 14m" and "2 hr 14 min" come to sit six points apart.
 function countdown(leg: SavedFlight, now: number): { label: string; value: string } | null {
   if (leg.landedAt !== null) return null;
-  const airborne = effectiveStatus(leg, now) === 'active';
+  const state = effectiveStatus(leg, now);
+  // ── A FLIGHT THAT IS NOT GOING HAS NOTHING TO COUNT DOWN TO ──────────────
+  //
+  // THIS PRINTED "Departs in 2h 14m" ON A CANCELLED LEG, which is not a missing
+  // fact but a false one: the timetable it counts against is still on the
+  // record, the clock still runs towards it, and nothing here asked whether the
+  // flight was still operating. A diverted leg counted down to an arrival at an
+  // airport it was no longer going to.
+  //
+  // THE STATUS WAS ALREADY READ AND ONLY HALF USED. It decided which END to
+  // count to; it never decided WHETHER to. See the status chip in CollapsedLeg,
+  // which is the thing that should be in this space instead.
+  if (state === 'cancelled' || state === 'diverted') return null;
+  const airborne = state === 'active';
   const target = airborne ? arrivalTs(leg) : departureTs(leg);
   if (target === null || target <= now) return null;
   return { label: airborne ? 'Lands in' : 'Departs in', value: gapLabel(target - now) };
@@ -1201,23 +1222,51 @@ function UnpublishedLeg({ leg, open, onToggle }: {
   return (
     <>
     <TouchableOpacity
-      style={[st.compactLeg, st.unpubLeg]}
+      style={[
+        st.compactLeg, st.unpubLeg,
+        // ── A CANCELLED BOOKING IS A CANCELLATION ──────────────────────────
+        //
+        // IT WAS AMBER, WHICH IS THIS APP'S WORD FOR LATE. Nothing here is
+        // running late: an airline has called the booking off, and the only
+        // thing the app cannot say is WHICH flights that covers. That
+        // uncertainty is in the words -- BOOKING CANCELLED against CANCELLED --
+        // and it does not belong in the colour, where it read as the milder
+        // news it is not.
+        //
+        // SO THE SURFACE IS THE CANCELLED ONE IN BOTH CASES, and the word is
+        // what tells them apart.
+        (cancelled || bookingOff) && { backgroundColor: DISRUPT_FILL.cancelled },
+      ]}
       activeOpacity={0.7}
       onPress={onToggle}
       accessibilityRole="button"
     >
-      <View style={st.cardEdge} pointerEvents="none" />
+      <View
+        style={[
+          st.cardEdge,
+          (cancelled || bookingOff) && { borderColor: DISRUPT_EDGE.cancelled },
+        ]}
+        pointerEvents="none"
+      />
       <View style={st.legSplit}>
         <View style={st.legIdent}>
+          {/* THE WORD FIRST AND AT THE DATE'S SIZE, exactly as on a published
+              leg -- see CollapsedLeg. UNPUBLISHED keeps the small chip at the
+              foot of the column: it is a wait rather than news, and the date
+              is still the thing somebody wants off that row. */}
+          {(cancelled || bookingOff) && (
+            <Text
+              style={[st.legDisrupt, { color: getStatusColor('cancelled') }]}
+              numberOfLines={1}
+            >
+              {cancelled ? 'CANCELLED' : 'BOOKING CANCELLED'}
+            </Text>
+          )}
           {dated !== null && <Text style={st.legDate}>{dated}</Text>}
           <Text style={st.legIdentNum} numberOfLines={1}>{meta}</Text>
-          <Text style={[
-            st.unpubChip,
-            cancelled && { color: getStatusColor('cancelled') },
-            bookingOff && { color: CD_LATE },
-          ]}>
-            {cancelled ? 'CANCELLED' : bookingOff ? 'BOOKING CANCELLED' : 'UNPUBLISHED'}
-          </Text>
+          {!cancelled && !bookingOff && (
+            <Text style={st.unpubChip}>{'UNPUBLISHED'}</Text>
+          )}
         </View>
         <View style={st.legTimes}>
           <Text style={st.legTimeValue} numberOfLines={1}>
@@ -1265,15 +1314,39 @@ function UnpublishedLeg({ leg, open, onToggle }: {
           {/* THE STATE AND THE SENTENCE, at legIdentName's Inter 13 at DIM --
               the airline line's own treatment, human language at the row's
               size. No numberOfLines: it wraps to whatever height it needs. */}
+          {/* ── ONE LINE ON A DISRUPTED LEG, AND NO RETRY COUNT ──────────────
+              THE BOOKING-CANCELLED CARD RAN TO FOUR SENTENCES: how many times
+              it had been checked, what the airline said, what the app could not
+              tell, what to do, and that it was still looking. All true, and
+              together they read as an apology rather than as news.
+
+              THE RETRY COUNT GOES WITH THEM ON BOTH DISRUPTED CARDS. "3 checks,
+              last Tuesday" is the whole story of an UNPUBLISHED leg -- it is
+              why the row exists and what it is waiting for -- and it is noise
+              beside a cancellation, where how often we asked changes nothing
+              about what the answer was. It stays on the unpublished branch and
+              only there. */}
           <Text style={st.legIdentName}>
             {cancelled
-              ? `${tried} · The airline has cancelled this flight. Terminal read that in your booking email; no data provider carries it.`
+              ? 'The airline has cancelled this flight.'
+              // WHAT IS KNOWN AND WHAT IS NOT, IN ONE SENTENCE. The app will not
+              // claim this leg is cancelled, and it will not leave the
+              // cancellation unsaid; the two halves are what make it one line
+              // rather than a word.
+              // ── THE FACT, AND NOT A THING TO GO AND DO ──────────────────
+              //
+              // IT ENDED "Check with them", which is the one instruction this
+              // app has a standing rule against -- see the same correction in
+              // notify.py's connection message, and the test that has asserted
+              // it since the ledger tests were written. The person is holding
+              // the only device that knows; sending them to a phone queue is an
+              // admission dressed as advice.
+              //
+              // AND NOTHING REPLACES IT. The help that belongs here is the
+              // rebooking work that comes next; until that exists, the honest
+              // end of this line is a full stop.
               : bookingOff
-                // WHAT IS KNOWN AND WHAT IS NOT, IN THAT ORDER. The email said
-                // the booking is off and named no flight, so the app says both
-                // halves rather than picking one: it will not claim this leg is
-                // cancelled, and it will not leave the cancellation unsaid.
-                ? `${tried} · Your airline says this booking is cancelled, but the email named no flight, so Terminal cannot tell which legs it covers. Check with the airline. Terminal keeps checking for this flight.`
+                ? 'Your airline cancelled this booking but did not say which flights.'
                 : `${tried} · No data provider carries this flight yet. Terminal keeps checking.`}
           </Text>
         </>
@@ -1327,6 +1400,36 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   // somebody actually uses them in.
   const cd = landed ? null : countdown(leg, now);
 
+  // ── WHAT HAPPENED TO THIS LEG, WHEN SOMETHING DID ────────────────────────
+  //
+  // THIS ROW READ NO STATUS AT ALL, and that is the whole of the bug. It drew a
+  // date, a number, an airline, a route and a countdown -- for every leg, in
+  // every state -- so a cancelled or diverted leg was indistinguishable from a
+  // healthy one for as long as it was not the leg the trip happened to have
+  // open. The record was right the whole time and nothing rendered it.
+  //
+  // IT IS NOT ABOUT THE OPEN LEG, WHICH IS WHY IT WENT UNNOTICED. Open the
+  // trip on the cancelled leg and the card says so correctly; select any other
+  // leg and the cancelled one silently becomes an ordinary row. A trip is
+  // exactly where that matters, because a trip is the screen with more than one
+  // leg on it.
+  //
+  // THE UNPUBLISHED LEG'S OWN CHIP, deliberately: this file already had a
+  // treatment for "a leg in the journey that is not going to happen normally",
+  // in the identity column at 11 mono with a letter-spaced word, and a second
+  // one would be two visual languages for one idea. The colour is the status's
+  // own -- see getStatusColor -- rather than the chip's grey default, because
+  // cancelled and diverted are not the same news as unpublished.
+  //
+  // LANDED AND ACTIVE SAY NOTHING HERE. 'landed' already has a state of its own
+  // on this row and 'active' is the ordinary case for a leg in the air; this
+  // exists for the two words that mean the journey has changed.
+  // effState, NOT state: this component already has a `state` prop, which is
+  // the leg's place in the journey -- landed, next, distant -- and is a
+  // different question from what the airline is doing with the flight.
+  const effState = effectiveStatus(leg, now);
+  const off = disruptToneOf(effState);
+
   // ── NO COLLAPSED LEG PRINTS A CLOCK, AND 'next' NOW EARNS NOTHING VISIBLE ──
   //
   // THE NEXT LEG SHOWED ITS DEPARTURE AND NO OTHER LEG DID, which made exactly
@@ -1354,11 +1457,38 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   // notes arguing for them went too. components/FlightCard still exports all
   // three; this file simply has no reader for them.
 
+  // THE SAME TREATMENT THE OPEN CARD TAKES, so a disrupted leg is visible while
+  // scrolling a trip rather than only once it is opened. Both are applied at the
+  // CALL SITE rather than by editing st.compactLeg and st.cardEdge: those two
+  // are shared with every other row in this file -- the unpublished leg among
+  // them -- and a disrupted fill baked into the style would reach rows that are
+  // not disrupted.
   return (
-    <TouchableOpacity style={st.compactLeg} activeOpacity={0.7} onPress={onPress} accessibilityRole="button">
-      <View style={st.cardEdge} pointerEvents="none" />
+    <TouchableOpacity
+      style={[st.compactLeg, off !== null && { backgroundColor: DISRUPT_FILL[off] }]}
+      activeOpacity={0.7}
+      onPress={onPress}
+      accessibilityRole="button"
+    >
+      <View
+        style={[st.cardEdge, off !== null && { borderColor: DISRUPT_EDGE[off] }]}
+        pointerEvents="none"
+      />
       <View style={st.legSplit}>
         <View style={st.legIdent}>
+          {/* ── THE WORD FIRST, AND AT THE DATE'S OWN SIZE ─────────────────
+              IT WAS ELEVEN POINTS AT THE BOTTOM OF THIS COLUMN, under the
+              number and the airline -- the least prominent thing on a row whose
+              entire news it was. A cancelled leg's date is not what anybody
+              needs off this row.
+
+              SO IT TAKES THE DATE'S PLACE AND THE DATE'S SIZE, which is this
+              column's headline. See legDisrupt. */}
+          {off !== null && (
+            <Text style={[st.legDisrupt, { color: getStatusColor(off) }]} numberOfLines={1}>
+              {off.toUpperCase()}
+            </Text>
+          )}
           {dated !== null && <Text style={st.legDate}>{dated}</Text>}
           <Text style={st.legIdentNum} numberOfLines={1}>{leg.flightNumber}</Text>
           {leg.airline !== '' && (
@@ -3490,6 +3620,19 @@ const st = StyleSheet.create({
   // third line of the airline.
   unpubChip: {
     fontFamily: MONO, fontSize: 11, color: LANDED_GREY, letterSpacing: 1, marginTop: 3,
+  },
+  // ── THE DISRUPTED WORD, AT THE HEAD OF THE IDENTITY COLUMN ────────────────
+  //
+  // legDate's OWN SLOT AND ALMOST ITS SIZE: 17 against 20, mono bold, with the
+  // same 7 points under it that frame the date from the number below. It is a
+  // word rather than four digits, so it is set one step down -- CANCELLED at 20
+  // is wider than the column on a small screen, and BOOKING CANCELLED is wider
+  // still, which is what numberOfLines guards at both call sites.
+  //
+  // THE TRACKING IS THE CHIP'S, kept because it is what makes an upper-case
+  // word read as a label rather than as a headline that happens to shout.
+  legDisrupt: {
+    fontFamily: MONO_BOLD, fontSize: 17, letterSpacing: 1, marginBottom: 7,
   },
   // ── THE ROW'S INTERIOR, WHICH IS THE CARD'S GRID ──
   //
