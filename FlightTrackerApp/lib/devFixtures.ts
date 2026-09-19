@@ -238,7 +238,7 @@ export type DevScenario = {
 // installing a second scenario replaces the first rather than joining it.
 const tripId = () => `dev-${Date.now()}`;
 
-function doubtLeg(): PendingLeg {
+function doubtLeg(trip: string | null): PendingLeg {
   const t = Date.now();
   const date = dayOf(t + 30 * HOUR, DEL.offset);
   return {
@@ -257,7 +257,9 @@ function doubtLeg(): PendingLeg {
     addedAt: t,
     lastTriedAt: t - 2 * HOUR,
     tries: 3,
-    tripId: null,
+    // SEE THE SCENARIO: a pending leg reaches the trip screen -- and so becomes
+    // openable -- only by sharing a journey with a saved one.
+    tripId: trip,
     legStatus: 'scheduled',
     // THE WHOLE POINT OF THIS ONE: the airline cancelled the booking and named
     // no flight, so the leg is in doubt rather than cancelled. See
@@ -278,10 +280,20 @@ export const DEV_SCENARIOS: DevScenario[] = [
   {
     key: 'trip-risk',
     label: 'Trip · connection at risk',
-    note: 'Leg 2 lands late enough to leave about 2h15m for an international connection.',
-    // Leg 3 departs at T+14h; an arrival at T+11h45m leaves 135 minutes, which
-    // is inside the international minimum plus its cushion.
-    build: () => ({ flights: tripLegs(tripId(), { leg2ArrivesAt: Date.now() + 11.75 * HOUR }), pending: [] }),
+    note: 'Leg 2 lands late enough to leave just over the two-hour international minimum.',
+    // ── NEAR THE FLOOR, NOT MID-BAND ──────────────────────────────────────
+    //
+    // IT LEFT 135 MINUTES, which is correctly at risk -- the amber band is the
+    // thirty minutes ABOVE the minimum -- and read as nonsense on screen next
+    // to the figure: "2h 15m left" does not look tight against a two-hour
+    // rule. Nothing was wrong with the arithmetic or with this number; it was
+    // simply the least convincing example the band can produce.
+    //
+    // 125 MINUTES SITS FIVE ABOVE THE FLOOR, so the demonstration matches what
+    // the word means. The band is unchanged and a real 135-minute connection
+    // still warns, which is the behaviour and is worth seeing deliberately
+    // rather than by accident.
+    build: () => ({ flights: tripLegs(tripId(), { leg2ArrivesAt: Date.now() + (14 * 60 - 125) * MIN }), pending: [] }),
   },
   {
     key: 'trip-miss',
@@ -304,18 +316,45 @@ export const DEV_SCENARIOS: DevScenario[] = [
   {
     key: 'booking-doubt',
     label: 'Booking cancelled, legs unknown',
-    note: 'A pending leg whose booking the airline cancelled without naming a flight.',
-    build: () => ({ flights: [], pending: [doubtLeg()] }),
+    note: 'An unpublished leg in a trip whose booking the airline cancelled without naming a flight.',
+    // ── IT NEEDS A TRIP TO BE OPENABLE ───────────────────────────────────
+    //
+    // A PENDING LEG WITH NO TRIP RENDERS ON HOME, where the row is a summary
+    // line and cannot be expanded at all -- which is what made this fixture
+    // untappable. unpublishedOf matches pending legs to a journey by tripId,
+    // so the doubt only reaches the trip screen's UnpublishedLeg -- the card
+    // with the reference, the sentence and the open/close toggle -- when it
+    // shares one with a saved leg.
+    //
+    // SO IT SHIPS WITH A FLOWN-FROM LEG BESIDE IT, which is also the honest
+    // shape: a booking whose reference the airline cancelled is a booking, and
+    // a booking has more than one flight in it more often than not.
+    build: () => {
+      const id = tripId();
+      const t = Date.now();
+      return {
+        flights: [leg({
+          number: 'ZZ905', tripId: id,
+          from: { place: BOM, scheduledMs: t + 26 * HOUR, terminal: '2', gate: 'A4' },
+          to: { place: DEL, scheduledMs: t + 28 * HOUR, terminal: '3' },
+        })],
+        pending: [doubtLeg(id)],
+      };
+    },
   },
   {
     key: 'in-air',
     label: 'In the air',
-    note: 'Departed an hour ago, an hour to run. Draws the progress bar.',
+    note: 'Departed an hour ago, an hour to run. Draws the progress bar and the arc.',
+    // OWNED, NOT WATCHED. tripId null is a flight somebody is following rather
+    // than flying, and Home draws those with the watchlist card -- so this
+    // fixture exercised the wrong surface entirely. A trip of one leg is still
+    // a trip; see the tripId note on SavedFlight.
     build: () => {
       const t = Date.now();
       return {
         flights: [leg({
-          number: 'ZZ907',
+          number: 'ZZ907', tripId: tripId(),
           from: { place: BOM, scheduledMs: t - 65 * MIN, actualMs: t - 60 * MIN, terminal: '2', gate: 'A7' },
           to: { place: DEL, scheduledMs: t + 55 * MIN, estimatedMs: t + 60 * MIN, terminal: '3' },
           status: 'active',
@@ -328,21 +367,44 @@ export const DEV_SCENARIOS: DevScenario[] = [
   {
     key: 'landed-belt',
     label: 'Landed, bags on a belt',
-    note: 'Touched down twenty minutes ago with a belt number.',
+    note: 'Two legs, both down. The second landed twenty minutes ago with a belt.',
+    // ── TWO LEGS, AND THE BELT IS ON THE SECOND ──────────────────────────
+    //
+    // OWNED, for the reason the in-air one is. And TWO legs rather than one,
+    // because a belt on a COLLAPSED row can only ever appear on the last leg
+    // of a journey: bagEligible refuses an intermediate one, since a
+    // through-checked bag is not on any belt at a connection. A one-leg
+    // fixture could only ever show the belt on the open card.
+    //
+    // SO BOTH PATHS ARE REACHABLE HERE. The trip opens on the second leg and
+    // its belt is on the card; tap the first leg and the second collapses,
+    // and the belt is on the row. Tapping is the only way to see the second,
+    // which is the behaviour rather than a shortcoming of the fixture.
     build: () => {
       const t = Date.now();
+      const id = tripId();
       return {
-        flights: [leg({
-          number: 'ZZ908',
-          from: { place: DEL, scheduledMs: t - 3 * HOUR, actualMs: t - 3 * HOUR, terminal: '3' },
-          to: {
-            place: BOM, scheduledMs: t - 25 * MIN, actualMs: t - 18 * MIN,
-            terminal: '2', baggage: '5',
-          },
-          status: 'landed',
-          rawStatus: 'Arrived',
-          landedMs: t - 20 * MIN,
-        })],
+        flights: [
+          leg({
+            number: 'ZZ909', tripId: id,
+            from: { place: BOM, scheduledMs: t - 6 * HOUR, actualMs: t - 6 * HOUR, terminal: '2' },
+            to: { place: DEL, scheduledMs: t - 4 * HOUR, actualMs: t - 4 * HOUR, terminal: '3' },
+            status: 'landed',
+            rawStatus: 'Arrived',
+            landedMs: t - 4 * HOUR,
+          }),
+          leg({
+            number: 'ZZ908', tripId: id,
+            from: { place: DEL, scheduledMs: t - 3 * HOUR, actualMs: t - 3 * HOUR, terminal: '3' },
+            to: {
+              place: BLR, scheduledMs: t - 25 * MIN, actualMs: t - 18 * MIN,
+              terminal: '1', baggage: '5',
+            },
+            status: 'landed',
+            rawStatus: 'Arrived',
+            landedMs: t - 20 * MIN,
+          }),
+        ],
         pending: [],
       };
     },
