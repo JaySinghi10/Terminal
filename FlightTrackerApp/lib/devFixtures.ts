@@ -191,7 +191,14 @@ const HOUR = 60 * MIN;
 // ANCHORED TO NOW rather than to fixed dates, so a fixture installed today is
 // still ahead of the clock tomorrow. A fixed date would archive itself six
 // hours after its arrival and vanish from the screen it exists to fill.
-function tripLegs(tripId: string, opts: { leg2ArrivesAt?: number | null; leg1Status?: string; leg2Status?: string } = {}): SavedFlight[] {
+function tripLegs(tripId: string, opts: {
+  leg2ArrivesAt?: number | null; leg1Status?: string; leg2Status?: string;
+  // WHICH TERMINAL THE LAST LEG LEAVES FROM, so one scenario can show a
+  // connection that changes buildings and another can show one that does not.
+  // Leg 2 lands at BLR terminal 1; leaving this alone is the same-terminal
+  // case, and anything else is the change. See the two connection scenarios.
+  leg3Terminal?: string;
+} = {}): SavedFlight[] {
   const t = Date.now();
   const l1Dep = t + 2 * HOUR, l1Arr = t + 4 * HOUR;
   const l2Dep = t + 7 * HOUR, l2Arr = t + 9.5 * HOUR;
@@ -220,7 +227,7 @@ function tripLegs(tripId: string, opts: { leg2ArrivesAt?: number | null; leg1Sta
     }),
     leg({
       number: 'ZZ903', tripId,
-      from: { place: BLR, scheduledMs: l3Dep, terminal: '1', gate: 'C3' },
+      from: { place: BLR, scheduledMs: l3Dep, terminal: opts.leg3Terminal ?? '1', gate: 'C3' },
       to: { place: DXB, scheduledMs: l3Arr, terminal: '3' },
     }),
   ];
@@ -280,7 +287,7 @@ export const DEV_SCENARIOS: DevScenario[] = [
   {
     key: 'trip-risk',
     label: 'Trip · connection at risk',
-    note: 'Leg 2 lands late enough to leave just over the two-hour international minimum.',
+    note: 'Just over the two-hour international minimum, and no terminal change.',
     // ── NEAR THE FLOOR, NOT MID-BAND ──────────────────────────────────────
     //
     // IT LEFT 135 MINUTES, which is correctly at risk -- the amber band is the
@@ -298,8 +305,17 @@ export const DEV_SCENARIOS: DevScenario[] = [
   {
     key: 'trip-miss',
     label: 'Trip · connection missed',
-    note: 'Leg 2 lands late enough to leave an hour, under the international minimum.',
-    build: () => ({ flights: tripLegs(tripId(), { leg2ArrivesAt: Date.now() + 13 * HOUR }), pending: [] }),
+    note: 'An hour left, under the international minimum, and a terminal change on top.',
+    // THE TERMINAL CHANGE RIDES ON THIS ONE so both halves of the terminal
+    // rule are reachable from the menu: the at-risk scenario above keeps leg 3
+    // at BLR terminal 1 and reads "same terminal", and this one moves it to 2
+    // and reads "T1 to T2". The two scenarios differ in more than the delay
+    // for that reason, which is the point of a fixture menu rather than a
+    // defect in it.
+    build: () => ({
+      flights: tripLegs(tripId(), { leg2ArrivesAt: Date.now() + 13 * HOUR, leg3Terminal: '2' }),
+      pending: [],
+    }),
   },
   {
     key: 'leg1-cancelled',

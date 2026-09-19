@@ -942,6 +942,12 @@ function pendingArrivalTs(leg: PendingLeg | null): number | null {
 // BOTH ENDS ARE INSTANTS, NEVER CLOCKS, which is the only way the answer is
 // right when the two legs are in different zones -- and a connection through
 // Copenhagen always is.
+// ONE HOUR, for the one sum this row does on a minimum. gapLabel would print
+// "1h 00m" where the floor wants "1h"; a connection minimum is a round number
+// of hours by construction -- see CONNECT_MIN_DOMESTIC_MS -- so it is said as
+// one.
+const HOUR_MS = 60 * 60 * 1000;
+
 function Layover({ prev, next, now }: { prev: LayoverEnd; next: LayoverEnd; now: number }) {
   // THE PLACES, ONCE, BEFORE THEY ARE DRESSED FOR READING. The connection test
   // needs the codes and the sentence needs the city names, and both come from
@@ -1061,52 +1067,98 @@ function Layover({ prev, next, now }: { prev: LayoverEnd; next: LayoverEnd; now:
   const warn = risk !== null && risk.band !== 'comfortable' && !nextGone ? risk : null;
   // ── WHAT IS WRONG, NOT WHY ───────────────────────────────────────────────
   //
-  // THESE WERE TWO FULL LINES EACH and they explained themselves: the minimum
-  // for a connection like this, that it is an estimate, that it does not allow
-  // for a terminal change. All true, and all of it read as a paragraph wedged
-  // between two cards -- on a row whose whole job is to be scanned in the
-  // second it takes to pass it.
+  // THE VERDICT, THE STANDARD BEHIND IT, AND WHAT MAKES IT SLOW. Three things
+  // and no fourth, arrived at by cutting three earlier versions of this line:
   //
-  // THE HEDGE IS NOW IN THE WORDS RATHER THAN IN A CAVEAT. "Tight" and
-  // "Likely" are already claims somebody weighs rather than obeys, where
-  // "45m left, an hour is the minimum" reads as a measurement and invites
-  // being checked against a clock. The shorter line is the more honest one.
+  //   Connection at risk (ideally 2h+) — immigration and security might take time
+  //   This connection won't hold (ideally 1h+) · T1 to T2
   //
-  // AND THE CAVEAT IS NOT MOVED, IT IS DROPPED. Its only other home on this
-  // screen was a footnote under the trip, which is read once and then never
-  // again -- the same as not saying it, with more words. The reasoning it was
-  // carrying lives at connectionRisk in lib/saved, where the next person to
-  // change sixty and a hundred and twenty will be standing.
+  // NO REMAINING-TIME FIGURE, and that is the correction this round. The line
+  // directly above reads "Layover in Bengaluru · 1h 15m", which IS the time
+  // left -- the same subtraction, off the same two instants -- so printing it
+  // again put the identical number twice in two lines and left the warning
+  // arguing with its own caption. It was defended here as making the warning
+  // self-contained; the row is two lines read as one, and it is not.
   //
-  // THE TIME LEFT, AND THAT IS THE WHOLE OF THE SECOND HALF. "Tight connection"
-  // alone is a verdict with nothing behind it; the figure is what a person
-  // actually acts on, and it is the one number this row is entitled to state.
+  // THE STANDARD IS IN PARENTHESES RATHER THAN BESIDE THE FIGURE. "2h 15m
+  // left, 2h usual" was a contradiction -- the amber band is the thirty
+  // minutes ABOVE the minimum, so the number warned about was larger than the
+  // number quoted at it. "(ideally 2h+)" makes the same point as a floor,
+  // which is what it is, and cannot be read as a comparison that fails.
   //
-  // IT IS THE SAME NUMBER AS THE LINE ABOVE, deliberately restated. The label
-  // reads "Layover in Bengaluru · 1h 15m", which is the gap; this reads "1h 15m
-  // left", which is what the gap MEANS once it is short. A warning that has to
-  // be read together with the line above it to be understood is a warning that
-  // will be half-read.
+  // AND THE IMMIGRATION CLAUSE IS THE INTERNATIONAL HALF ONLY. It is the
+  // answer to "why two hours rather than one" and it is only true across a
+  // border; on a domestic connection there is no immigration to queue for and
+  // the sentence would be borrowed alarm. The two bands take different verbs
+  // -- MIGHT take time against WILL take longer -- because one connection is
+  // tight and the other is already short, and the hedge belongs in the verb.
   //
-  // AND THE MINIMUM IS NOT SAID BESIDE IT. "2h 15m left, 2h usual" reads as a
-  // contradiction -- the figure is ABOVE the number it is being warned
-  // against -- because the amber band is the thirty minutes above the minimum
-  // rather than below it. Both numbers are right and printing them together
-  // makes the row argue with itself. The band is the judgement; the figure is
-  // the fact; the standard behind them belongs at connectionRisk, where it is
-  // written down, and not in four words on a row.
+  // ── AND THE TERMINALS, WHICH ARE THE THING THE MINIMUM DOES NOT KNOW ─────
+  //
+  // connectionRisk SAYS IN ITS OWN COMMENT THAT IT DOES NOT ACCOUNT FOR A
+  // TERMINAL CHANGE, and that is the single largest thing between the figure
+  // and the truth: the same seventy-five minutes is a walk down a pier or a
+  // bus between buildings, and only one of those is a connection somebody
+  // makes. The app holds both halves already -- the first leg's ARRIVAL
+  // terminal and the second leg's DEPARTURE terminal -- and has never put them
+  // together.
+  //
+  // SAME TERMINAL IS SAID, AND IT IS THE ONE PLACE THIS ROW REASSURES. The
+  // rule everywhere else on this screen is that it warns and never reassures,
+  // because "you have time" needs facts the app does not hold. This is
+  // different in kind: it is not a verdict about whether the connection can be
+  // made, it is a fact about the building, and it is the fact that makes a
+  // tight gap survivable. Withholding it would be withholding the good half of
+  // a warning we are already giving.
+  //
+  // DIFFERENT TERMINALS ARE NAMED RATHER THAN COUNTED. "Terminal change" is a
+  // label; "T3 to T1" is what somebody navigates by, and it costs the same
+  // number of characters.
+  //
+  // EITHER ONE UNKNOWN AND NOTHING IS SAID. A pending leg carries no terminal
+  // at all -- see PendingLeg, which has never had the field -- and a published
+  // one can arrive without it. Guessing that an absent terminal is the same
+  // terminal is exactly the reassurance this screen must not invent.
+  const termOf = (t: string | null | undefined): string | null => {
+    const v = (t ?? '').trim().toUpperCase();
+    return v === '' ? null : v;
+  };
+  // deck.tsx's own spelling: the bare value with a T in front, unless the
+  // provider already put one there.
+  const termLabel = (v: string): string => (v.startsWith('T') ? v : `T${v}`);
+  const prevTerm = termOf(prev.saved?.to.terminal);
+  const nextTerm = termOf(next.saved?.from.terminal);
+  const terminals = warn === null || prevTerm === null || nextTerm === null
+    ? null
+    : prevTerm === nextTerm
+      ? 'same terminal'
+      : `${termLabel(prevTerm)} to ${termLabel(nextTerm)}`;
+  // THE FLOOR AS A ROUND NUMBER OF HOURS, read off the minimum rather than off
+  // `international` so the words cannot drift from the arithmetic: change
+  // CONNECT_MIN_INTERNATIONAL_MS and this says the new number.
+  const floorWords = warn === null ? '' : `ideally ${Math.round(warn.minimumMs / HOUR_MS)}h+`;
+  const queueWords = warn === null || !warn.international
+    ? ''
+    : warn.band === 'will-miss'
+      ? ' — immigration and security will take longer'
+      : ' — immigration and security might take time';
   const why = warn === null
     ? null
-    : `${warn.band === 'will-miss' ? 'Likely too short' : 'Tight connection'}`
-      + ` · ${gapLabel(warn.remainingMs)} left`;
+    : `${warn.band === 'will-miss' ? "This connection won't hold" : 'Connection at risk'}`
+      + ` (${floorWords})${queueWords}`
+      + (terminals === null ? '' : ` · ${terminals}`);
 
   // TWO ROWS RATHER THAN TWO TEXTS IN ONE. st.layover is a ROW, and its whole
   // trick is the PAGE_BG behind the words punching a hole in the thread drawn
   // under it -- a second Text inside it would sit BESIDE the duration and be
   // crossed by the line. The reason gets its own row, so the thread is punched
   // for it too and the two read as one block on the rail.
+  // ONE BLOCK, TWO ROWS. The wrapper carries the space that separates the wait
+  // from the cards either side of it -- see layoverBlock -- and adds no
+  // geometry of its own, so both rows still begin at the column's left edge
+  // where the thread is drawn.
   return (
-    <>
+    <View style={st.layoverBlock}>
       <View style={st.layover}>
         <Text style={[
           st.layoverTime,
@@ -1126,7 +1178,7 @@ function Layover({ prev, next, now }: { prev: LayoverEnd; next: LayoverEnd; now:
           </Text>
         </View>
       )}
-    </>
+    </View>
   );
 }
 
@@ -3584,6 +3636,36 @@ const st = StyleSheet.create({
   // NO SURFACE AND NO INSET OF ITS OWN: the row starts at the column's left
   // edge, which is where the line is, and the label's own padding is what
   // carries its text across to the cards' margin.
+  // ── AND IT IS GIVEN ROOM ON BOTH SIDES ────────────────────────────────────
+  //
+  // THE WAIT WAS WEDGED BETWEEN TWO CARDS at the same eight points that
+  // separate any two cards in this app, so a row that marks a BREAK in the
+  // journey sat at the spacing of two things that are merely adjacent -- and
+  // once it grew a second line of warning underneath it, the two cards closed
+  // in on a paragraph.
+  //
+  // TEN EACH SIDE, ON TOP OF THE TRIP'S OWN CARD_GAP, which makes eighteen
+  // above and eighteen below. That is a little over twice the card spacing:
+  // enough that the eye reads a division rather than a gap, and not so much
+  // that a three-leg journey stops fitting on a screen.
+  //
+  // ON THE ROW RATHER THAN ON THE CONTAINER'S gap. Raising trip's gap would
+  // push apart every pair of cards including the ones with no layover between
+  // them -- a return booked a week apart draws no row at all, and its two
+  // cards should stay at the ordinary distance.
+  //
+  // THE THREAD RUNS THROUGH IT UNCHANGED. rail is absolutely positioned from
+  // the top of the column to the bottom, so the added space is line rather
+  // than emptiness, which is what makes this read as a break ON the journey
+  // instead of a hole in it.
+  //
+  // AND IT IS ON THE BLOCK, NOT ON EACH ROW. st.layover is worn by BOTH lines
+  // -- the duration and the warning under it -- so ten points there would have
+  // put ten above the warning, ten below the duration and the trip's own eight
+  // between them: twenty-eight points splitting one statement into two. The
+  // wrapper is what the journey is spaced from; inside it the two lines sit
+  // flush and read as one block, which is what they are.
+  layoverBlock: { marginVertical: 10 },
   layover: { flexDirection: 'row', alignItems: 'center' },
   // PAGE_BG BEHIND IT IS THE WHOLE TRICK. The line is drawn first and this is
   // drawn over it, so the background punches a hole in the thread exactly as
@@ -3598,8 +3680,20 @@ const st = StyleSheet.create({
   // BOM arrival not published yet", and a Text that cannot shrink reports its
   // intrinsic width to the layout and wins against its parent. Shrinking is
   // what makes it wrap at the trip's own width instead of running past it.
+  // ── FIFTEEN, NOT THIRTEEN ─────────────────────────────────────────────────
+  //
+  // IT WAS SET AT THE SIZE OF A CAPTION and it is not one. Thirteen is what the
+  // flight number and the airline take inside a card -- the supporting lines --
+  // so the wait between two flights was written in the same voice as the small
+  // print on either side of it, and read as a label attached to the card above
+  // rather than as the boundary between two cards.
+  //
+  // FIFTEEN IS THIS FILE'S VALUE SIZE, which legTimeValue already takes: the
+  // register for a fact somebody came to the row to read. It is still well
+  // below legDate's twenty, so the row divides the journey without competing
+  // with the cards it divides.
   layoverTime: {
-    fontFamily: MONO_BOLD, fontSize: 13, color: DIM,
+    fontFamily: MONO_BOLD, fontSize: 15, color: DIM,
     backgroundColor: PAGE_BG,
     paddingLeft: RAIL_INSET, paddingRight: 8, paddingVertical: 2,
     flexShrink: 1,
