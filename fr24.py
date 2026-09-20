@@ -57,7 +57,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 import pollstate
-from airport_icao import icao_for
+from airport_icao import iata_for, icao_for
 
 logger = logging.getLogger("flight-tracker")
 
@@ -263,6 +263,64 @@ def _destination(leg):
 
 def _destination_actual(leg):
     return _code(leg, "destination_icao_actual", "dest_icao_actual")
+
+
+# ── WHERE IT ACTUALLY LANDED, AS A CODE THE DEVICE CAN READ ─────────────────
+#
+# THE LIGHT RESPONSE IS ICAO THROUGHOUT and the app is IATA throughout, which is
+# what airport_icao.py exists for -- it has been translating the other way for
+# _pick since this module shipped. The reverse map is the same generated table
+# read backwards and costs nothing.
+#
+# MEASURED, ON TWO REAL LEGS OF ONE FLIGHT NUMBER (AA293, DEL->JFK):
+#
+#   2026-09-17, diverted to Heathrow:  dest_icao KJFK, dest_icao_actual EGLL
+#   2026-09-15, ordinary arrival:      dest_icao KJFK, dest_icao_actual KJFK
+#
+# SO dest_icao HOLDS THE SCHEDULE AND dest_icao_actual HOLDS THE OUTCOME, and
+# the second is ALWAYS PRESENT -- equal to the first when nothing went wrong.
+#
+# THE COMMENT HERE USED TO SAY THE OPPOSITE: "FR24 fills this only on a
+# diversion, so it is null on every normal leg." That was never tested and it is
+# false, and believing it produced the guard this replaces -- see _diverted_to.
+#
+# UNTRANSLATABLE STAYS ICAO rather than becoming None. A diversion to an airport
+# outside the 3,986 in the table is still a true and useful fact; "EGLL" on a
+# card is worse than "LHR" and far better than silence.
+def _diversion_iata(leg):
+    """The IATA code of where this leg ACTUALLY ended, or "" if unreadable."""
+    actual = _destination_actual(leg)
+    return (iata_for(actual) or actual) if actual else ""
+
+
+# ── AND WHETHER IT IS A DIVERSION AT ALL ────────────────────────────────────
+#
+# THE LEG IS COMPARED AGAINST ITSELF, which is the whole fix. The old test was
+#
+#     actual_icao if actual_icao and actual_icao != want_icao else None
+#
+# and want_icao is OUR request -- icao_for(the destination the caller asked
+# about) -- which is None whenever the caller sent no destination or sent a IATA
+# code outside the table. With dest_icao_actual always populated, "KJFK" != None
+# is true, so an ordinary arrival at the requested airport was reported as a
+# DIVERSION to that same airport, on every flight whose IATA code we cannot
+# translate. Nothing caught it because the field was never read on the device.
+#
+# A DIVERSION IS dest_icao_actual != dest_icao AND NOTHING ELSE. Both come off
+# the same record, so the answer does not depend on what the caller knew, on the
+# table's coverage, or on whether a destination was supplied at all.
+#
+# EITHER FIELD MISSING SUPPRESSES THE CLAIM. A provider rename would otherwise
+# read as "every flight diverted": with dest_icao gone the comparison has no
+# schedule to disagree with, and asserting a diversion from an absence is the
+# class of error this module exists to refuse.
+def _diverted_to(leg):
+    """Where the leg ended if that is NOT where it was going, else None."""
+    scheduled = _destination(leg)
+    actual = _destination_actual(leg)
+    if not scheduled or not actual or actual == scheduled:
+        return None
+    return _diversion_iata(leg) or None
 
 
 def _window(date, departure_utc):
@@ -560,16 +618,17 @@ def landing_for(flight_number, date=None, destination_iata=None,
     landed = _parse_naive_utc(leg.get("datetime_landed"))
     takeoff = _parse_naive_utc(leg.get("datetime_takeoff"))
     ended = _ended(leg.get("flight_ended"))
-    actual_icao = _destination_actual(leg) or None
 
     common = {
         "takeoff_utc": takeoff.strftime("%Y-%m-%dT%H:%M:%S") if takeoff else None,
         "flight": leg.get("flight"),
         "registration": leg.get("reg"),
         "destination_icao": _destination(leg) or None,
-        # WHERE IT ACTUALLY WENT, when that is not where it was going. FR24
-        # fills this only on a diversion, so it is null on every normal leg.
-        "diverted_to": actual_icao if actual_icao and actual_icao != want_icao else None,
+        # WHERE IT ACTUALLY WENT, WHEN THAT IS NOT WHERE IT WAS GOING, as a IATA
+        # code. Null on an ordinary arrival. The test and the translation are
+        # both _diverted_to's; see the two notes there for what was measured and
+        # for the guard that used to get this wrong.
+        "diverted_to": _diverted_to(leg),
         "match": match,
         "records": len(legs),
     }

@@ -1716,6 +1716,21 @@ export function SavedProvider({ children }: { children: ReactNode }) {
           landedUtc: result.landedUtc,
           landingSource: result.outcome === 'landed' ? 'fr24' : null,
           landingCheck: result.outcome,
+          // ── THE LINE THIS FACT USED TO DIE ON ──────────────────────────
+          //
+          // checkLanding HAS PARSED THIS ALL ALONG and this sweep passed three
+          // fields, so a diversion FR24 had reported was read off the wire,
+          // typed, and dropped one call short of the store. lib/landing.ts
+          // said so at the field and listed what surfacing it would take; that
+          // list is done, and this is the last item on it.
+          //
+          // PASSED ON EVERY OUTCOME, NOT ONLY ON 'landed'. FR24 knows where an
+          // aircraft went as soon as the leg ends, which can be a check before
+          // it reports a touchdown -- and on the 'unknown' path it may never
+          // report one at all. Gating this on 'landed' would lose the
+          // diversion at precisely the airports the unknown path exists for.
+          // setFlightLanding will not unwrite one it already holds.
+          divertedTo: result.divertedTo,
         });
       }
       // ONE setState FOR THE WHOLE SWEEP. Each write returns the full list, so

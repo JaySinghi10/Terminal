@@ -2870,6 +2870,13 @@ export function FlightCard({
   // the strict test the ARRIVED label below depends on -- while the window has
   // to run from the arrival itself, because landedAt dates the observation and
   // was starting this window up to 48 minutes late.
+  // ── WHERE A DIVERTED AIRCRAFT ACTUALLY LANDED, OR null ────────────────────
+  //
+  // BOUND ONCE so the two places that print it cannot come to disagree, and
+  // bound HERE beside the other flightRecord reads rather than at either call
+  // site. Already a IATA code: the server translates FR24's ICAO through
+  // airport_icao.py, so nothing on this side needs a map. See SavedFlight.
+  const divertedTo = flightRecord?.divertedTo ?? null;
   const landedAt = flightRecord?.landedAt ?? null;
   const landedTs = flightRecord ? landedInstant(flightRecord, now) : null;
   const beltState = bagsClaimedHere
@@ -4471,17 +4478,25 @@ export function FlightCard({
                       gives a disrupted route, so the row and the card it opens
                       into say this fact in one voice.
 
-                      AND A DIVERTED FLIGHT STILL REFUSES THE CLAIM. The arrival
-                      code on the record is the ORIGINAL destination and nothing
-                      has replaced it, so "BOM → DXB" would assert a place the
-                      aircraft is not reaching. The question mark is the
-                      destination slot left honestly empty -- with DIVERTED in
-                      amber directly beneath it, it reads as the one thing this
-                      app does not yet know rather than as a missing value. */}
+                      AND A DIVERTED FLIGHT NAMES WHERE IT ACTUALLY WENT. The
+                      arrival code on the DTO is the ORIGINAL destination and
+                      nothing has replaced it, so "BOM → DXB" would assert a
+                      place the aircraft is not reaching -- but FR24 reports the
+                      airport it did reach, and divertedTo is that, already
+                      translated to IATA by the server. So the slot holds a
+                      fact rather than a refusal.
+
+                      THE QUESTION MARK IS THE FALLBACK AND STAYS. FR24 can be
+                      unreachable, can be asked before the leg ends, or can
+                      answer for an airport outside the translation table; in
+                      any of those the destination slot is honestly empty, and
+                      with DIVERTED in amber directly beneath it that reads as
+                      the one thing this app does not yet know. What it must
+                      never do is fall back to the scheduled code. */}
                   {tripVariant && tripPhase === 'off' && (
                     <Text style={[s.tripOffRoute, s.airportHeadTail]} numberOfLines={1}>
                       {tripEffective === 'diverted'
-                        ? `${flight.from} → ?`
+                        ? `${flight.from} → ${divertedTo ?? '?'}`
                         : `${flight.from} → ${flight.to}`}
                     </Text>
                   )}
@@ -4865,18 +4880,32 @@ export function FlightCard({
                         was sold at, because that is what tells the reader WHICH
                         flight this was.
 
-                        NO DIVERSION AIRPORT, AND THAT IS NOT AN OMISSION. Nothing
-                        in the DTO carries one: "Diverted" exists as a status and
-                        the arrival airport stays the ORIGINAL destination. There
-                        is nothing to show and inventing one is not available.
+                        THE DIVERSION AIRPORT IS AVAILABLE NOW, AND THIS NOTE
+                        USED TO SAY IT COULD NEVER BE. It read: "Nothing in the
+                        DTO carries one: 'Diverted' exists as a status and the
+                        arrival airport stays the ORIGINAL destination. There is
+                        nothing to show and inventing one is not available." The
+                        first sentence was true of AeroDataBox and is still true
+                        of it. The conclusion was wrong, because the DTO is not
+                        the only thing this card reads.
 
-                        SO A DIVERTED FLIGHT SHOWS ITS ORIGIN ALONE, and this is
-                        the one place the two ended states differ. "DXB → BOM"
-                        over a diverted flight ASSERTS a destination the aircraft
-                        is not reaching -- the arrival code is the original one
-                        and nothing has replaced it -- and an arrow to a place
-                        this app cannot confirm is exactly the claim the card must
-                        not make. "DXB" alone is true, and it is all that is true.
+                        FR24 HAS ALWAYS CARRIED IT. flight-summary/light returns
+                        dest_icao_actual on every leg -- measured on two legs of
+                        AA293, EGLL on the day it diverted to Heathrow and KJFK
+                        on the day it did not -- and fr24.py has had a
+                        diverted_to field since it shipped. It reached the wire,
+                        lib/landing.ts parsed it, and the landing sweep dropped
+                        it one call short of the store. The chain is joined up
+                        now and the server translates the code to IATA on the
+                        way, so what arrives here is "LHR".
+
+                        SO A DIVERTED FLIGHT NAMES WHERE IT WENT. The old
+                        argument stands wherever the fact is missing and is why
+                        the fallback is still a question mark rather than the
+                        scheduled arrival code: "DXB → BOM" over a diverted
+                        flight ASSERTS a destination the aircraft is not
+                        reaching. What has changed is that the app usually has
+                        something true to put there instead of nothing.
 
                         A CANCELLED FLIGHT KEEPS ITS FULL ROUTE. Nothing flew, so
                         nothing went anywhere else: where it was going remains a

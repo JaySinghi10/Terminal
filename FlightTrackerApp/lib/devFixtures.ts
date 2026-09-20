@@ -138,6 +138,11 @@ type LegArgs = {
   rawStatus?: string | null;
   tripId?: string | null;
   landedMs?: number | null;
+  // WHERE A DIVERTED LEG ACTUALLY LANDED, as the server delivers it: a IATA
+  // code, already translated from FR24's ICAO. Only the diverted scenario sets
+  // it; every other fixture leaves it null, which is what an ordinary flight
+  // carries and what the card must render as a question mark.
+  divertedTo?: string | null;
 };
 
 function leg(a: LegArgs): SavedFlight {
@@ -164,6 +169,7 @@ function leg(a: LegArgs): SavedFlight {
     landingSource: a.landedMs != null ? 'fr24' : null,
     landingCheck: a.landedMs != null ? 'landed' : null,
     landingCheckedAt: a.landedMs != null ? now : null,
+    divertedTo: a.divertedTo ?? null,
     archivedAt: null,
     remindersSetAt: null,
     tripId: a.tripId ?? null,
@@ -173,7 +179,7 @@ function leg(a: LegArgs): SavedFlight {
     rawStatus: a.rawStatus ?? 'Expected',
     // THE CURRENT VERSION, so normalizeRecord leaves these alone rather than
     // running a migration over them on the first read.
-    schemaVersion: 13,
+    schemaVersion: 14,
   };
 }
 
@@ -241,6 +247,11 @@ function tripLegs(tripId: string, opts: {
       status: opts.leg2Status ?? 'scheduled',
       rawStatus: opts.leg2Status === 'diverted' ? 'Diverted'
         : opts.leg2ArrivesAt != null ? 'Delayed' : 'Expected',
+      // THE FIXTURE'S WHOLE POINT, NOW THAT THERE IS SOMETHING TO SHOW. This
+      // leg is DEL -> BLR; HYD is a real diversion for it and is far enough
+      // from the scheduled arrival to be obviously not it. Before this the
+      // scenario could only prove the card refused to name a destination.
+      divertedTo: opts.leg2Status === 'diverted' ? 'HYD' : null,
     }),
     leg({
       number: 'ZZ903', tripId,
@@ -343,7 +354,7 @@ export const DEV_SCENARIOS: DevScenario[] = [
   {
     key: 'leg2-diverted',
     label: 'Trip · leg 2 diverted',
-    note: 'The middle leg is diverted. Its destination and the arrow disappear.',
+    note: 'The middle leg is diverted, and the card names where it actually went.',
     build: () => ({ flights: tripLegs(tripId(), { leg2Status: 'diverted' }), pending: [] }),
   },
   {

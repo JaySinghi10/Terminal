@@ -4,7 +4,7 @@ const LEGACY_KEY = 'savedFlights';
 const KEY_PREFIX = 'savedFlights:';
 const GUEST_KEY = `${KEY_PREFIX}guest`;
 const BACKUP_PREFIX = 'backup:v1:';
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 // ── NOT A LIMIT TODAY, AND THE NUMBER SAYS SO ──────────────────────────────
 //
 // TWENTY WAS COSTING MORE THAN IT BOUGHT. A single real booking is three or
@@ -99,6 +99,23 @@ export type SavedFlight = {
   // the provider this was taken away from.
   landingCheck: string | null;
   landingCheckedAt: number | null;
+  // ── WHERE IT ACTUALLY LANDED, WHEN THAT IS NOT WHERE IT WAS GOING ─────────
+  //
+  // A IATA CODE, AND null ON EVERY ORDINARY FLIGHT. FR24 is the only source in
+  // this app that knows this: AeroDataBox has a 'Diverted' status and leaves
+  // the arrival airport as the ORIGINAL one, so before this field the app could
+  // say a flight went somewhere else and never say where.
+  //
+  // THE SERVER TRANSLATES IT. FR24's light response is ICAO throughout -- EGLL,
+  // not LHR -- and fr24.py turns it round through airport_icao.py before it
+  // reaches the wire, so nothing on the device needs an airport map. An ICAO
+  // code that is not in that table arrives untranslated rather than as null: a
+  // diversion to a small field is still true and still worth printing.
+  //
+  // FR24's OWN, NOT DERIVED, so touchSavedFlight must carry it forward for the
+  // same reason it carries the other four -- a /flight response knows nothing
+  // about FR24 and would null it once a minute.
+  divertedTo: string | null;
   // WHEN THE USER ARCHIVED IT BY HAND, or null if they never did.
   //
   // The archive is otherwise derived: index.tsx calls a flight archived once its
@@ -311,6 +328,7 @@ export function savedFlightFromApi(data: any): SavedFlight {
     landingSource: null,
     landingCheck: null,
     landingCheckedAt: null,
+    divertedTo: null,
     // A fresh lookup is never manually archived. touchSavedFlight carries the
     // stored value forward, so a refresh cannot silently un-archive anything.
     archivedAt: null,
@@ -485,6 +503,24 @@ function normalizeRecord(flight: SavedFlight): { record: SavedFlight | null; cha
     if (flight.pnr === undefined) flight.pnr = null;
     if (flight.operatingFlightNumber === undefined) flight.operatingFlightNumber = null;
     if (flight.operatedBy === undefined) flight.operatedBy = null;
+    changed = true;
+  }
+
+  // v13 -> v14: where a diverted flight actually landed.
+  //
+  // null IS CORRECT FOR EVERY EXISTING RECORD, and unlike v12's landing fields
+  // it is correct for a second reason as well. null here means "not diverted",
+  // not "never asked" -- and the overwhelming majority of stored flights were
+  // not diverted, so the default is the true value rather than a placeholder.
+  //
+  // THE FEW THAT WERE DIVERTED DO NOT BACKFILL, and that is accepted. The fact
+  // came from FR24 at the moment of arrival; a flight that has already landed
+  // is past its landing window -- see landingDue, which stops three hours after
+  // the estimate -- so nothing will ask again. Those records keep the status
+  // they have and say nothing about where the aircraft went, which is what they
+  // did before this field existed.
+  if (version < 14 && flight.divertedTo === undefined) {
+    flight.divertedTo = null;
     changed = true;
   }
 
@@ -727,6 +763,10 @@ export async function setFlightLanding(
     landedUtc?: string | null;
     landingSource?: string | null;
     landingCheck: string | null;
+    // OPTIONAL, AND FOR THE SAME REASON landedUtc IS. A check that comes back
+    // 'error' carries no diversion, and an absent one must not erase a
+    // diversion an earlier check already established -- see below.
+    divertedTo?: string | null;
   },
 ): Promise<SavedFlight[]> {
   const flights = await readKey(keyFor(email));
@@ -741,6 +781,19 @@ export async function setFlightLanding(
     landingSource: landing.landingSource ?? prev.landingSource ?? null,
     landingCheck: landing.landingCheck,
     landingCheckedAt: Date.now(),
+    // ── A DIVERSION IS NEVER UNWRITTEN EITHER ────────────────────────────
+    //
+    // THE SAME RULE landedUtc TAKES, for the same reason. Where an aircraft
+    // landed is as immutable as when, and a later 'error' outcome from a
+    // provider having a bad afternoon carries divertedTo: null -- which
+    // without this would delete a fact we already hold.
+    //
+    // AND IT IS NOT SYMMETRIC WITH "not diverted". Nothing here can turn a
+    // diversion back into an ordinary arrival, because nothing ever should:
+    // FR24 reports dest_icao_actual on every leg, so a leg it has called
+    // diverted was diverted, and a later null means we failed to ask rather
+    // than that the aircraft went back.
+    divertedTo: landing.divertedTo ?? prev.divertedTo ?? null,
     // landedAt IS THE FLAG "a landing has been observed", and FR24 confirming
     // one IS observing it. The card gates the belt pill and the ARRIVED label
     // on this field, so a landing that set only landedUtc would change the
@@ -909,6 +962,12 @@ export async function touchSavedFlight(
     landingSource: prev.landingSource ?? null,
     landingCheck: prev.landingCheck ?? null,
     landingCheckedAt: prev.landingCheckedAt ?? null,
+    // THE FIFTH FR24 FIELD, AND IT BELONGS IN THIS LIST FOR THE LIST'S OWN
+    // REASON. A /flight response is AeroDataBox's and carries no diversion at
+    // all -- that provider leaves the arrival airport as the scheduled one --
+    // so without this line an ordinary refresh nulls it, once a minute, on
+    // exactly the flight the field exists for.
+    divertedTo: prev.divertedTo ?? null,
   };
   await writeKey(keyFor(email), next);
   return next;
