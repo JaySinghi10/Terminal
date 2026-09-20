@@ -4174,22 +4174,22 @@ const dr = StyleSheet.create({
   // sizes to its own words, which is what keeps it compact.
   bubbleWrap: { position: 'absolute' },
   bubble: {
-    borderRadius: GLASS_RADIUS,
+    borderRadius: GLASS_RADIUS, borderCurve: 'continuous',
     borderWidth: 1,
     borderColor: SURFACE_EDGE,
     overflow: 'hidden',
     padding: CARD_PAD,
     gap: 8,
   },
-  bubbleMeta: { fontFamily: MONO, fontSize: 11, color: 'rgba(226,226,226,0.45)' },
+  bubbleMeta: { fontFamily: MONO, fontSize: 11, color: 'rgba(226,226,226,0.52)' },
   // baseline, so the arrow sits on the clocks rather than between the blocks;
   // centred with a gap rather than spread, because the row is as wide as its
   // own content and has no margins to push against.
   bubbleRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center', gap: 14 },
   bubbleEnd: { alignItems: 'flex-end' },
   bubbleTime: { fontFamily: MONO_BOLD, fontSize: 22, color: '#ffffff' },
-  bubbleCode: { fontFamily: MONO, fontSize: 13, color: 'rgba(226,226,226,0.45)', marginTop: 2 },
-  bubbleArrow: { fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.4)' },
+  bubbleCode: { fontFamily: MONO, fontSize: 13, color: 'rgba(226,226,226,0.52)', marginTop: 2 },
+  bubbleArrow: { fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.52)' },
   bubbleWhy: { fontFamily: SANS_SEMI, fontSize: 12, color: 'rgba(226,226,226,0.6)' },
 
 });
@@ -4305,7 +4305,7 @@ const ap = StyleSheet.create({
     fontFamily: MONO,
     fontSize: 16,
     lineHeight: 22,
-    color: 'rgba(226,226,226,0.45)',
+    color: 'rgba(226,226,226,0.52)',
     paddingHorizontal: 10,
     textShadowColor: PAGE_BG,
     textShadowRadius: 6,
@@ -4313,7 +4313,7 @@ const ap = StyleSheet.create({
   country: {
     fontFamily: SANS,
     fontSize: 12,
-    color: 'rgba(226,226,226,0.5)',
+    color: 'rgba(226,226,226,0.52)',
     marginTop: 2,
     textShadowColor: PAGE_BG,
     textShadowRadius: 6,
@@ -4341,7 +4341,7 @@ const ap = StyleSheet.create({
     fontFamily: MONO,
     fontSize: 11,
     lineHeight: 17,
-    color: 'rgba(226,226,226,0.45)',
+    color: 'rgba(226,226,226,0.52)',
     textShadowColor: PAGE_BG,
     textShadowRadius: 6,
   },
@@ -4363,7 +4363,7 @@ const ap = StyleSheet.create({
     marginTop: 14,
     paddingVertical: 7,
     paddingHorizontal: 11,
-    borderRadius: 14,
+    borderRadius: 14, borderCurve: 'continuous',
     borderWidth: 1,
     borderColor: SURFACE_EDGE,
     backgroundColor: `rgba(${PAGE_RGB},0.82)`,
@@ -4384,7 +4384,7 @@ const ap = StyleSheet.create({
     fontFamily: MONO,
     fontSize: 12,
     letterSpacing: 1,
-    color: 'rgba(226,226,226,0.45)',
+    color: 'rgba(226,226,226,0.52)',
     textShadowColor: PAGE_BG,
     textShadowRadius: 6,
   },
@@ -4438,7 +4438,7 @@ const cs = StyleSheet.create({
   no: {
     fontFamily: MONO,
     fontSize: 11,
-    color: 'rgba(226,226,226,0.45)',
+    color: 'rgba(226,226,226,0.52)',
     letterSpacing: 0.3,
   },
 });
@@ -4457,7 +4457,7 @@ const PAST_RULE_ON = 'rgba(255,255,255,0.16)';
 // light taken out of it, which reads as unlit rather than missing.
 const PAST_RULE_OFF = 'rgba(255,255,255,0.05)';
 const PAST_INK_ON = 'rgba(226,226,226,0.62)';
-const PAST_INK_OFF = 'rgba(226,226,226,0.28)';
+const PAST_INK_OFF = 'rgba(226,226,226,0.52)';
 
 const pt = StyleSheet.create({
   btn: {
@@ -4564,13 +4564,13 @@ const s = StyleSheet.create({
   // A step down in size and two down the ramp from the route above it: the
   // route is what will be searched, these are its settings.
   routeEchoMods: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS, marginTop: 3,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS, marginTop: 3,
   },
   // Where the reading came from, and whether the next press spends anything.
   // One step further down the same ramp than the settings above it: this is the
   // app talking about itself, which is the least important thing in the block.
   routeEchoNote: {
-    fontSize: 11, color: "rgba(226,226,226,0.3)", fontFamily: SANS, marginTop: 4,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS, marginTop: 4,
   },
 });
 

@@ -486,7 +486,7 @@ const sf = StyleSheet.create({
   swipeBtn: {
     height: SWIPE_SIZE,
     marginHorizontal: SWIPE_MARGIN,
-    borderRadius: SWIPE_RADIUS,
+    borderRadius: SWIPE_RADIUS, borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -531,7 +531,7 @@ const sf = StyleSheet.create({
   // only to be a helper.
   swipeFill: {
     position: 'absolute', left: 0, right: 0, top: 0, bottom: 0,
-    borderRadius: SWIPE_RADIUS,
+    borderRadius: SWIPE_RADIUS, borderCurve: 'continuous',
   },
   // The scaling half of the button. Kept separate from swipeBtn so the touch
   // target stays a fixed 64pt however small the contents are drawn.

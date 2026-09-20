@@ -332,13 +332,13 @@ const st = StyleSheet.create({
 
   pierRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 16,
     marginBottom: 8 },
-  pierChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
+  pierChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderCurve: 'continuous',
     backgroundColor: SURFACE, borderWidth: 1, borderColor: 'transparent' },
   pierChipOn: { borderColor: GREEN },
   pierChipText: { fontFamily: MONO, fontSize: 11, color: DIM },
   pierChipTextOn: { color: INK },
 
-  frame: { height: 380, marginHorizontal: 16, borderRadius: 14, overflow: 'hidden',
+  frame: { height: 380, marginHorizontal: 16, borderRadius: 14, borderCurve: 'continuous', overflow: 'hidden',
     backgroundColor: SURFACE },
   scroll: { flex: 1 },
 
@@ -378,10 +378,10 @@ const st = StyleSheet.create({
 
   strip: { position: 'absolute', right: 4, top: 8, bottom: 8, width: 3,
     borderRadius: 2, backgroundColor: 'rgba(226,226,226,0.08)' },
-  stripWindow: { position: 'absolute', left: 0, right: 0, borderRadius: 2,
+  stripWindow: { position: 'absolute', left: 0, right: 0, borderRadius: 2, borderCurve: 'continuous',
     backgroundColor: 'rgba(226,226,226,0.35)' },
 
-  empty: { marginHorizontal: 16, padding: 16, borderRadius: 14, backgroundColor: SURFACE },
+  empty: { marginHorizontal: 16, padding: 16, borderRadius: 14, borderCurve: 'continuous', backgroundColor: SURFACE },
   emptyTitle: { fontFamily: SANS_SEMI, fontSize: 15, color: INK },
   emptyBody: { fontFamily: SANS, fontSize: 12, color: DIM, marginTop: 6, lineHeight: 18 },
 

@@ -57,7 +57,7 @@ const SANS_SEMI = 'Inter_600SemiBold';
 
 const GREEN = '#4ade80';
 const INK = '#e2e2e2';
-const DIMMER = 'rgba(226,226,226,0.28)';
+const DIMMER = 'rgba(226,226,226,0.52)';
 const AMBER = '#fbbf24';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -976,7 +976,7 @@ const st = StyleSheet.create({
   // ── the airport picker ──
   picker: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: SURFACE_2, borderRadius: CARD_RADIUS, padding: CARD_PAD,
+    backgroundColor: SURFACE_2, borderRadius: CARD_RADIUS, borderCurve: 'continuous', padding: CARD_PAD,
   },
   pickerLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 12 },
   code: { fontFamily: MONO_BOLD, fontSize: 22, color: INK, letterSpacing: 1 },
@@ -986,7 +986,7 @@ const st = StyleSheet.create({
   change: { fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: 0.5 },
 
   search: {
-    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS,
+    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD, marginTop: CARD_GAP,
   },
   input: {
@@ -1000,7 +1000,7 @@ const st = StyleSheet.create({
 
   // ── the budget ──
   budget: {
-    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS,
+    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD, marginTop: CARD_GAP,
   },
   budgetTight: { borderWidth: 1, borderColor: 'rgba(251,191,36,0.35)' },
@@ -1016,7 +1016,7 @@ const st = StyleSheet.create({
 
   // ── one outlet ──
   row: {
-    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS,
+    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD, marginTop: CARD_GAP,
   },
   rowTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
@@ -1032,7 +1032,7 @@ const st = StyleSheet.create({
 
   // ── the empty states ──
   empty: {
-    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS,
+    backgroundColor: SURFACE_1, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD, marginTop: CARD_GAP,
   },
   emptyTitle: { fontFamily: SANS_SEMI, fontSize: 16, color: INK },
@@ -1041,7 +1041,7 @@ const st = StyleSheet.create({
   coveredLabel: { fontFamily: MONO, fontSize: 10, color: DIMMER, letterSpacing: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: CARD_GAP, marginTop: 8 },
   pickWrap: { marginHorizontal: 16, marginTop: 10, padding: 12,
-    backgroundColor: SURFACE_2, borderRadius: CARD_RADIUS },
+    backgroundColor: SURFACE_2, borderRadius: CARD_RADIUS, borderCurve: 'continuous' },
   pickName: { fontFamily: SANS_SEMI, fontSize: 15, color: INK },
   pickMeta: { fontFamily: MONO, fontSize: 11, color: DIM, marginTop: 3 },
   pickHint: { fontFamily: SANS, fontSize: 11, color: DIMMER,
@@ -1052,7 +1052,7 @@ const st = StyleSheet.create({
   devLabel: { fontFamily: MONO, fontSize: 10, color: AMBER, letterSpacing: 1 },
   devChipOn: { borderColor: AMBER },
   chip: {
-    backgroundColor: SURFACE_2, borderRadius: 8,
+    backgroundColor: SURFACE_2, borderRadius: 8, borderCurve: 'continuous',
     paddingVertical: 6, paddingHorizontal: 10, minWidth: 74,
   },
   chipCode: { fontFamily: MONO_BOLD, fontSize: 12, color: INK, letterSpacing: 0.5 },

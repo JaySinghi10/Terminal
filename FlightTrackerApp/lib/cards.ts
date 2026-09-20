@@ -117,7 +117,77 @@ export const SURFACE_EDGE = 'rgba(255,255,255,0)';
 // SURFACE_1. Renaming it at every call site would be a large diff that changed
 // nothing, and deleting it would break them all.
 export const CARD_FILL = SURFACE_1;
-export const CARD_RADIUS = 12;
+// 20, UP FROM 12, AND THE NUMBER IS A CEILING RATHER THAN A PREFERENCE. It was
+// going to be 24 -- twice the old value -- and 24 is over half the height of
+// the shortest thing this constant is used on. The note below explains why that
+// matters: a continuous curve needs a straight edge to blend into, and at
+// radius >= min(dimension) / 2 there is none left and a card becomes a lozenge.
+//
+// THE BINDING SURFACE IS 42 POINTS TALL -- pickWrap and a trip stub, 12 of
+// padding either side of one line -- so 21 is the limit and 20 is it with a
+// point in hand. Every other card has more room; none of them needed less.
+//
+// A LOZENGE ON THE SHORT SURFACES IS WORSE THAN THE EXTRA CURVE ON THE TALL
+// ONES, which is the trade and is the whole reason this is 20. If a larger
+// radius is ever wanted on the big surfaces it wants a SECOND token, because
+// the constraint lives on the small ones and a global cannot serve both.
+export const CARD_RADIUS = 20;
+
+// ── AND THE CURVE EVERY ONE OF THEM IS DRAWN WITH ───────────────────────────
+//
+// NOT A CONSTANT, A HABIT: `borderCurve: 'continuous'` sits beside the radius
+// at every rounded surface in this app. It is recorded here because it is the
+// kind of thing that gets applied once and then forgotten at the next new
+// component, and because there is nowhere else that all of them meet.
+//
+// WHAT IT IS. CALayer.cornerCurve, which React Native has exposed as a style
+// prop since 0.71 and this app had never used. The difference is between a
+// quarter circle bolted onto a straight edge and the squircle every system
+// surface on iOS is drawn with -- sheets, alerts, app icons, search fields. At
+// twelve points it is a small difference, and it is most of what separates a
+// hand-built surface from one that looks like the platform's.
+//
+// iOS ONLY, AND SILENTLY IGNORED ELSEWHERE, so it needs no Platform check: on
+// Android the prop does nothing and the corner is the circular one it would
+// have been regardless.
+//
+// ── EXCEPT ON A CAPSULE OR A CIRCLE, AND THAT EXCEPTION IS THE WHOLE RULE ───
+//
+// A CONTINUOUS CURVE NEEDS A STRAIGHT EDGE TO BLEND INTO. Where the radius
+// reaches half the smaller dimension there is none left -- the corners meet --
+// and the shape stops being a capsule and becomes a lozenge that is flat where
+// it should be round. Eighteen surfaces are in that class and every one of them
+// keeps the circular curve: the profile button, the five corridor dots, the
+// progress track and its fill, the airborne pulse, the sort pill, the grabber,
+// the four home buttons and the two past buttons.
+//
+// THE TEST IS radius >= min(width, height) / 2. A radius written as half a
+// named dimension -- HOME_BTN_SIZE / 2 -- is that class by construction and is
+// the form to look for when adding one.
+//
+// THE LARGEST SURFACE THAT DOES TAKE IT is the swipe button: 18 on 52, which is
+// 0.69 of the way to a capsule and the ratio where the squircle is most
+// visible. If anything looks wrong, look there first.
+//
+// ── AND THIS IS WHAT BOUNDS CARD_RADIUS ────────────────────────────────────
+//
+// A CARD'S HEIGHT IS ITS CONTENT'S, so the number that matters is not what a
+// card usually measures but what it measures at its SHORTEST -- padding plus a
+// single line. Seventeen surfaces take CARD_RADIUS and can reach that floor:
+//
+//   deck        picker, search, budget, row, empty (46), pickWrap (42)
+//   flights     compactLeg, addBtn, importRow, pastRow (46), stub (42)
+//   home        row (44), leg (44), addBtn, heroCard, routeSurface (46)
+//   card        routeCard, airportCard (46)
+//
+// MOST OF THEM NEVER RENDER THAT SHORT -- a collapsed leg is four lines, a hero
+// card more -- so the fault would show on the ones that CAN: an empty state
+// with one sentence, a single-line import row, a stub with nothing under its
+// date. Their absolutely positioned edges would follow them, because
+// cardEdge, rowEdge, airportCardEdge and routeCardEdge all take this same
+// constant and cannot disagree with the fill they trace.
+//
+// 42 IS THE SMALLEST OF THEM AND 20 IS WHAT IT ALLOWS. See CARD_RADIUS.
 export const CARD_GAP = 8;
 export const CARD_PAD = 14;
 
@@ -142,16 +212,48 @@ export const PAGE_BG = '#0a0a0a';
 // question: the ink for a label, a caption, a secondary line, anything that is
 // present and deliberately quiet.
 //
-// 0.4 OF #e2e2e2 ON THE PAGE. Not a grey of its own: the same ink every bright
-// line uses, at the opacity that puts it a step back without dropping it out of
-// the reading order.
+// 0.52 OF #e2e2e2, AND THE NUMBER IS A CONTRAST FLOOR RATHER THAN A TASTE.
+// Not a grey of its own: the same ink every bright line uses, at the lowest
+// opacity that still clears WCAG AA for body text on this app's surfaces.
 //
-// WHAT IS STILL SPELLED OUT ELSEWHERE, and knowingly: roughly thirty-eight
-// inline uses of the same rgba, most of them in components/FlightCard.tsx.
-// Those are literals in stylesheets rather than named constants, and collapsing
-// them is a separate pass with a much wider diff; this one removes the NAMES
-// that could come to disagree.
-export const DIM = 'rgba(226,226,226,0.4)';
+// IT WAS 0.4, WHICH FAILED. A card is SURFACE_1 over PAGE_BG -- rgb(21,21,21)
+// -- and 0.4 of #e2e2e2 over that is 3.23:1, against the 4.5:1 that text below
+// 18pt has to reach. Thirty of this ink's uses are at 11pt, the app's label
+// size, which is what made the screen hard to read at low brightness.
+//
+// 0.52 BECAUSE 0.51236 IS THE THRESHOLD and two decimals is what a colour
+// literal carries. 0.51 lands at 4.47:1 and does not clear it; 0.52 is 4.60:1.
+// Four other inks that were dimmer still -- DIMMER, PAST_INK_OFF, CD_AGE and
+// CD_EARLY -- converge here for the same reason, so this is now one floor
+// rather than five opinions.
+//
+// WHAT IS STILL SPELLED OUT ELSEWHERE, and knowingly: the same rgba appears as
+// a literal in about sixty stylesheet entries, most of them in
+// components/FlightCard.tsx. They all carry the value above -- the raise moved
+// every one of them -- so nothing disagrees today; they are simply not reading
+// it from here. Collapsing them onto this name is a separate pass with a much
+// wider diff. What this export removes is the risk of two NAMES drifting.
+export const DIM = 'rgba(226,226,226,0.52)';
+// ── AND THE SAME INK FOR TYPE THAT IS BIG ENOUGH NOT TO NEED THE FLOOR ──────
+//
+// 0.4, WHICH IS WHAT DIM WAS. WCAG's 4.5:1 is for text below 18pt; at 18 and
+// above the bar is 3:1, and 0.4 clears that at 3.23:1 with room. So type at
+// that size never had the legibility problem DIM was raised to fix, and
+// raising it anyway cost something real.
+//
+// WHAT IT COST, AT THE THREE PLACES THIS EXISTS FOR. All three are in
+// components/FlightCard.tsx and all three already carried a note arguing they
+// must stay quiet: sheetFlightDate at 32, whose point is to leave the tile
+// values the only white in the sheet; and tripRouteArrow and routeArrow at 20,
+// where the argument is that punctuation must not grow -- in size or in
+// weight -- with what it separates. Brightening them did exactly the thing
+// those notes rejected.
+//
+// THE SPLIT IS WCAG'S OWN, which is why it is a size and not a judgement: 18pt
+// is where the standard changes its mind, so this token is for 18 and above
+// and DIM is for everything under it. Anything in between is DIM's, because
+// the floor is the safer default when the size is in doubt.
+export const DIM_LARGE = 'rgba(226,226,226,0.4)';
 // THE GREEN. The accent every surface already sets by literal -- the close
 // glyph, the links, the countdown, the corridor -- and the one the profile
 // sheet's icon tiles, switch and Done item now read from here instead. The
@@ -214,7 +316,40 @@ export const GLASS_OVER_CONTENT = { glassEffectStyle: 'clear', colorScheme: 'dar
 
 // THE RADIUS EVERY GLASS SURFACE ROUNDS TO. It was SHEET_RADIUS in lib/glass.tsx
 // and it means the same thing; it lives here now because the material does.
-export const GLASS_RADIUS = 16;
+//
+// ── 24, UP FROM 16, AND IT MOVES MORE THAN THE SHEET IT WAS RAISED FOR ─────
+//
+// FOUR POINTS ABOVE CARD_RADIUS, DELIBERATELY. A sheet sits over the page and a
+// card sits on it, and the corner is one of the two things that says which is
+// which -- the other being the surface colour. Equal radii would flatten that,
+// and a sheet rounder than the cards inside it is the order every system on
+// this platform uses.
+//
+// WHAT MOVES WITH IT, all of it at once, because this is one constant with
+// several readers: both detent sheets -- the alternatives drawer AND the route
+// results sheet, which share components/DetentSheet.tsx -- the glass shell and
+// its edge in lib/glass.tsx, the route drop panel, the map bubble on search,
+// and the two toasts.
+//
+// AND SHEET_RADIUS IN lib/glass.tsx IS THE SAME NUMBER AGAIN. That constant is
+// this one under its old name, kept when the material moved here, and the two
+// have to be changed together until one of them is deleted. They are equal
+// today; a diff that moves one and not the other is a bug.
+//
+// ── THE TOAST IS THE ONE SURFACE THIS IS TOO BIG FOR ───────────────────────
+//
+// toastCard IS 36 POINTS TALL -- ten of padding either side of one 13pt line --
+// so half of it is 18, and anything above that is a capsule rather than a
+// rounded rectangle. At 16 it cleared; at 24 it does not, and iOS will clamp it
+// to 18 and draw a pill.
+//
+// A PILL TOAST IS A NORMAL SHAPE and nothing breaks, which is why this is a
+// note rather than an exception. It is a change to how the toast looks that
+// nobody asked for, though, and if it is unwanted the answer is a constant of
+// its own at 16 rather than holding this one down. The toast does NOT carry
+// borderCurve -- its radius is written inline at the call site, not in a style
+// block -- so it stays a circular pill and not a lozenge.
+export const GLASS_RADIUS = 24;
 
 // THE TWO ENTRIES BOTH SCREENS READ, and the only reason this file now declares
 // a stylesheet at all.

@@ -102,7 +102,10 @@ export const SHEET_FILL = 'rgba(0,0,0,0.22)';
 //
 // SHEET_RADIUS survives because sheetShell still rounds and still clips — the
 // clip is what confines the blur, which is now the only thing marking the edge.
-export const SHEET_RADIUS = 16;
+// 24, AND IT IS cards.ts's GLASS_RADIUS UNDER THE OLD NAME. The two mean the
+// same thing and must hold the same value until one is deleted; see the note
+// there for what moves when this does.
+export const SHEET_RADIUS = 24;
 // The rule under the heading is NOT an edge treatment. It separates two pieces
 // of content and keeps its own weight accordingly.
 export const SHEET_RULE = 'rgba(255,255,255,0.07)';
@@ -305,7 +308,7 @@ export const g = StyleSheet.create({
   // and putting the same GlassLayers pair in behind their content.
   // Nothing here knows anything about archives.
   sheetShell: {
-    borderRadius: SHEET_RADIUS,
+    borderRadius: SHEET_RADIUS, borderCurve: 'continuous',
     // Clips the blur — and the rows — to the radius. This is now doing real
     // work: it is what confines the blur to the panel's own rounded rectangle
     // instead of the whole screen.
@@ -325,7 +328,7 @@ export const g = StyleSheet.create({
   // curve instead of meeting.
   sheetEdge: {
     position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-    borderWidth: 1, borderColor: SHEET_EDGE, borderRadius: SHEET_RADIUS,
+    borderWidth: 1, borderColor: SHEET_EDGE, borderRadius: SHEET_RADIUS, borderCurve: 'continuous',
   },
   // Padding only.
   sheetBody: { padding: 20 },

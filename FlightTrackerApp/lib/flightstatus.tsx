@@ -133,9 +133,9 @@ export function zoneLabel(t: string | null | undefined): string | null {
 
 // --- Live-countdown helpers -------------------------------------------------
 export const CD_GREEN = '#4ade80';
-const CD_AGE = 'rgba(226,226,226,0.3)';
+const CD_AGE = 'rgba(226,226,226,0.52)';
 export const CD_LATE = '#fbbf24';
-const CD_EARLY = 'rgba(226,226,226,0.5)';
+const CD_EARLY = 'rgba(226,226,226,0.52)';
 
 type LineSeg = { text: string; color: string };
 
@@ -213,7 +213,7 @@ function flightLineSegments(f: SavedFlight, now: number, hideAbsolute?: boolean)
     if (s === 'landed') {
       const ago = now - ts;
       if (ago >= 0) {
-        const segs: LineSeg[] = [statusSeg, { text: ` · ${formatCountdown(ago)} ago`, color: 'rgba(226,226,226,0.5)' }];
+        const segs: LineSeg[] = [statusSeg, { text: ` · ${formatCountdown(ago)} ago`, color: 'rgba(226,226,226,0.52)' }];
         const d = delaySegment(ep, s); if (d) segs.push(d);
         return segs;
       }

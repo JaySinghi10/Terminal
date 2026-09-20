@@ -133,6 +133,9 @@ import {
 // one.
 import {
   CARD_RADIUS, CARD_PAD, CARD_FILL, PAGE_BG, SURFACE_EDGE, SURFACE_2,
+  // THE QUIET INK FOR BIG TYPE, at the 0.4 DIM used to be. Three readers,
+  // all of them below, and each one has its own note on why it stays back.
+  DIM_LARGE,
 } from '../lib/cards';
 // HOW FAR THE BLACK TAKES TO BECOME GLASS, in points, measured from the bottom
 // of the cutout downward.
@@ -5359,7 +5362,7 @@ const s = StyleSheet.create({
   // 14 in. Both columns move by the same 14, so the row is still a row.
   routeCard: {
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD,
   },
   // ── THE HAIRLINE, AS A SIBLING ──
@@ -5377,7 +5380,7 @@ const s = StyleSheet.create({
   // shape. See the elevation scale in lib/cards.ts.
   routeCardEdge: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS,
+    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
   },
   // THE ROW, WHICH IS THE OLD routeCard UNDER A NAME THAT SAYS WHAT IT IS.
   // Character for character what it was; only the key changed, because the
@@ -5395,8 +5398,8 @@ const s = StyleSheet.create({
   routeMid: { alignItems: "center", paddingHorizontal: 8 },
   routeIATA: { fontSize: 32, color: "#ffffff", letterSpacing: -0.5, fontFamily: MONO_BOLD },
   routeCity: { fontSize: 13, color: "rgba(226,226,226,0.55)", marginTop: 2, fontFamily: SANS },
-  routeDuration: { fontSize: 13, color: "rgba(226,226,226,0.5)", marginBottom: 6, fontFamily: MONO },
-  routeArrow: { fontSize: 20, color: "rgba(226,226,226,0.45)", fontFamily: MONO },
+  routeDuration: { fontSize: 13, color: "rgba(226,226,226,0.52)", marginBottom: 6, fontFamily: MONO },
+  routeArrow: { fontSize: 20, color: DIM_LARGE, fontFamily: MONO },
   // routeDirect WENT WITH THE WORD IT DRESSED. See the note at the route row.
   // ── THE LONG-PRESS MENU ────────────────────────────────────────────────────
   //
@@ -5412,7 +5415,7 @@ const s = StyleSheet.create({
   // 0.4. It names the subject and is not the action, so it must not compete with
   // the row under it.
   mapMenuRoute: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS_SEMI,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS_SEMI,
     letterSpacing: 1, textTransform: "uppercase",
   },
   // 10 between the glyph and the word, the same gutter the swipe button leaves
@@ -5430,13 +5433,13 @@ const s = StyleSheet.create({
   // both refuse one. Composed after sheetShell so this radius wins over the
   // sheet's 16.
   airportCard: {
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD,
     gap: 14,
   },
   // sheetEdge at a card's corner. Radius only: the position, the hairline and
   // SHEET_EDGE's colour all still come from sheetEdge itself.
-  airportCardEdge: { borderRadius: CARD_RADIUS },
+  airportCardEdge: { borderRadius: CARD_RADIUS, borderCurve: 'continuous' },
   // THE RAMP'S BOX. Pinned to the top and full width; its HEIGHT is set inline
   // because it is the safe-area inset plus the fade, and only the render knows
   // the inset.
@@ -5459,7 +5462,7 @@ const s = StyleSheet.create({
   // one is shared with the watchlist heading on the home screen, and this card
   // wants no marginBottom because the card's own gap already spaces it.
   airportTitle: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS_SEMI,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS_SEMI,
     letterSpacing: 1, textTransform: "uppercase",
   },
   // THE SHEET'S HEADINGS, forked from airportTitle above rather than edited into
@@ -5481,7 +5484,7 @@ const s = StyleSheet.create({
   // the separating instead, and both words are short enough for it to cost
   // nothing: at 13pt Inter SemiBold "Airports" is 50.9pt and "Aircraft" 47.9,
   // against the sheet's 248.
-  sheetHeading: { fontSize: 13, color: "rgba(226,226,226,0.4)", fontFamily: SANS_SEMI },
+  sheetHeading: { fontSize: 13, color: "rgba(226,226,226,0.52)", fontFamily: SANS_SEMI },
   // TWO UNLIKE HALVES, on the same 50/50 split the tile grid uses so the block
   // lines up with the groups under it.
   sheetFlightHead: { flexDirection: "row" },
@@ -5509,7 +5512,7 @@ const s = StyleSheet.create({
   // It leaves the tile values as the only white left in the sheet, which is the
   // point: white now means "a reading", and everything that names or frames one
   // is grey.
-  sheetFlightDate: { fontSize: 32, color: "rgba(226,226,226,0.4)", fontFamily: MONO_BOLD },
+  sheetFlightDate: { fontSize: 32, color: DIM_LARGE, fontFamily: MONO_BOLD },
   // rowGap only. There is no column gap on purpose: the basis percentages have
   // to add up to the row exactly, and a gap between them would push the third
   // tile onto a second line when three were meant to fit.
@@ -5549,7 +5552,7 @@ const s = StyleSheet.create({
     width: 1,
     backgroundColor: "rgba(255,255,255,0.06)",
   },
-  airportTileLabel: { fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS },
+  airportTileLabel: { fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS },
   // THE SHEET'S LABELS, one step heavier than the card's. Family only, so the 11
   // and the grey above still apply and the empty state's colour still overrides
   // on top of it.
@@ -5601,7 +5604,7 @@ const s = StyleSheet.create({
   // the label and the model name carry the same visual claim, which is very
   // little, and everything that matters is brighter than both.
   archiveTileValueQuiet: {
-    fontSize: SHEET_QUIET_SIZE, fontFamily: MONO, color: "rgba(226,226,226,0.4)",
+    fontSize: SHEET_QUIET_SIZE, fontFamily: MONO, color: "rgba(226,226,226,0.52)",
   },
   // FAMILY ONLY, so the 15 and the white are still archiveTileValue's.
   //
@@ -5637,7 +5640,7 @@ const s = StyleSheet.create({
   // definition and SheetGroup still offers them to any tile through its `mono`
   // and `sans` flags. Tinting them there would quietly grey out the next tile
   // that only wanted a different family.
-  sheetFlightIdent: { color: "rgba(226,226,226,0.4)" },
+  sheetFlightIdent: { color: "rgba(226,226,226,0.52)" },
   airportRule: { height: 1, backgroundColor: "rgba(255,255,255,0.06)" },
   // 28 BETWEEN GROUPS against airportGroup's 10 WITHIN one, and the ratio is the
   // point rather than either number: a heading has to sit closer to the tiles it
@@ -5688,7 +5691,7 @@ const s = StyleSheet.create({
   // 'scheduled' and 'active', so nothing new enters the palette.
   airportHeadPill: {
     backgroundColor: "#aeaeb212",
-    borderRadius: 6,
+    borderRadius: 6, borderCurve: 'continuous',
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
@@ -5774,7 +5777,7 @@ const s = StyleSheet.create({
     fontFamily: SANS,
     fontSize: 11,
     lineHeight: 16,
-    color: 'rgba(226,226,226,0.4)',
+    color: 'rgba(226,226,226,0.52)',
     marginTop: 4,
   },
   tripCountdown: { fontSize: 15, fontFamily: MONO_BOLD, color: CD_GREEN },
@@ -5784,7 +5787,7 @@ const s = StyleSheet.create({
   // it here would tie this tag to a style that exists to be overridden. Every
   // value below is airportTitle's; nothing new is introduced.
   tripLeg: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS_SEMI,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS_SEMI,
     letterSpacing: 1, textTransform: "uppercase",
   },
 
@@ -5848,7 +5851,7 @@ const s = StyleSheet.create({
   // BASELINE, so a 20 between two 28s sits on their line rather than floating in
   // the middle of them.
   tripRouteArrow: {
-    fontSize: 20, fontFamily: MONO, color: "rgba(226,226,226,0.4)",
+    fontSize: 20, fontFamily: MONO, color: DIM_LARGE,
     paddingHorizontal: 8,
   },
   // ONE LINE, THREE FAMILIES. The size and colour live on the parent so a nested
@@ -5866,7 +5869,7 @@ const s = StyleSheet.create({
   // than as one more detail, and nowhere near white, which on this card is the
   // treatment for a LIVE value. It is the collapsed row's disrupted date to the
   // point and the shade; see legDateOff there.
-  tripOffDate: { fontSize: 15, color: "rgba(226,226,226,0.4)", fontFamily: MONO_BOLD },
+  tripOffDate: { fontSize: 15, color: "rgba(226,226,226,0.52)", fontFamily: MONO_BOLD },
   // THE ROUTE, at tripIdent's size and ink: the identity tier, which is where a
   // fact that identifies the flight belongs once it is no longer the news. Mono
   // because it is airport codes.
@@ -5874,18 +5877,18 @@ const s = StyleSheet.create({
   // IT IS COMPOSED WITH airportHeadTail NOW and no longer renders in the body at
   // all -- this entry is typography only, and the position comes from the style
   // it is paired with. See the call site in the head row.
-  tripOffRoute: { fontSize: 13, color: "rgba(226,226,226,0.4)", fontFamily: MONO },
+  tripOffRoute: { fontSize: 13, color: "rgba(226,226,226,0.52)", fontFamily: MONO },
   // THE TIMETABLE, at the card's qualifier tier -- tripColWhen's 12 and its
   // half ink -- which is the register this card already uses for "context for
   // the number above", and is now the register for the number itself.
-  tripOffWhen: { fontSize: 12, color: "rgba(226,226,226,0.5)", fontFamily: MONO },
+  tripOffWhen: { fontSize: 12, color: "rgba(226,226,226,0.52)", fontFamily: MONO },
   // Its label, in the heading treatment every other group label on this card
   // takes. Nested inside the line rather than stacked above it, because one
   // line is what stops this becoming a column again.
   tripOffWhenLabel: {
-    fontFamily: SANS_SEMI, color: "rgba(226,226,226,0.4)", letterSpacing: 0.5,
+    fontFamily: SANS_SEMI, color: "rgba(226,226,226,0.52)", letterSpacing: 0.5,
   },
-  tripIdent: { fontSize: 13, color: "rgba(226,226,226,0.4)" },
+  tripIdent: { fontSize: 13, color: "rgba(226,226,226,0.52)" },
   tripIdentMono: { fontFamily: MONO },
   tripIdentSans: { fontFamily: SANS },
   // Dimmer than the values it separates, so the line reads as three facts rather
@@ -5926,7 +5929,7 @@ const s = StyleSheet.create({
   // label -- enough that measuring the lowercase form would have said it fits
   // when it does not.
   tripColHead: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS_SEMI,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS_SEMI,
     letterSpacing: 0.5, textTransform: "uppercase",
   },
   // THE CLOCK, AND THE LARGEST THING IN THE COLUMN. White is the timetable and
@@ -5947,7 +5950,7 @@ const s = StyleSheet.create({
   // 12 IS THE FLOOR AND THIS IS AT IT. The date and the zone are the safety half
   // of this card -- which day, whose clock -- and they do not go smaller to fit.
   // If they cannot fit they wrap; see the note at the element.
-  tripColWhen: { fontSize: 12, fontFamily: MONO, color: "rgba(226,226,226,0.5)" },
+  tripColWhen: { fontSize: 12, fontFamily: MONO, color: "rgba(226,226,226,0.52)" },
   // THE OFFSET, ON THE SAME LINE AS THE TIME IT QUALIFIES. 12pt mono against the
   // clock's 20 -- tripColWhen's size, which is the card's one qualifier tier:
   // this and the date are both things you read AFTER the clock, and neither
@@ -5974,7 +5977,7 @@ const s = StyleSheet.create({
   // Label and value on one line, baseline-aligned so an 11pt word and a 13pt
   // value sit on the same rule rather than centred against each other.
   tripColRow: { flexDirection: "row", gap: 6, alignItems: "baseline" },
-  tripColLabel: { fontSize: 11, fontFamily: SANS, color: "rgba(226,226,226,0.4)" },
+  tripColLabel: { fontSize: 11, fontFamily: SANS, color: "rgba(226,226,226,0.52)" },
   tripColValue: { fontSize: 13, color: "#ffffff", fontFamily: MONO_BOLD },
   // ── NOT YET, IN THE LABEL'S OWN GREY ──
   //
@@ -5990,7 +5993,7 @@ const s = StyleSheet.create({
   //
   // ONE ENTRY, TWO READERS -- the pill's value and the plain row's -- so the
   // belt and the gate cannot come to say "not yet" in two different voices.
-  tripSlotEmpty: { color: "rgba(226,226,226,0.4)" },
+  tripSlotEmpty: { color: "rgba(226,226,226,0.52)" },
   // ── THE BADGES ──
   //
   // THE STACK OF BADGE ROWS, 6 apart, which is tripCol's own gap -- a badge row
@@ -6044,7 +6047,7 @@ const s = StyleSheet.create({
   // alignSelf WAS THE OTHER HALF OF THIS NOTE and has gone -- see above.
   tripPill: {
     backgroundColor: SURFACE_2,
-    borderRadius: 6,
+    borderRadius: 6, borderCurve: 'continuous',
     paddingHorizontal: 8,
     paddingVertical: 5,
     flex: 1,
@@ -6055,7 +6058,7 @@ const s = StyleSheet.create({
   // 0.4, which is tripColLabel exactly. It is not restated as a fork of that
   // style because the two now differ in nothing at all; they are separate entries
   // only so that the pill's label can move without dragging the belt's with it.
-  tripPillLabel: { fontSize: 11, fontFamily: SANS, color: "rgba(226,226,226,0.4)" },
+  tripPillLabel: { fontSize: 11, fontFamily: SANS, color: "rgba(226,226,226,0.52)" },
   // 15 RATHER THAN THE PLAIN ROW'S 13, and the pill is what pays for it. A badge
   // is read at a glance from further away than a line of text -- it is the thing
   // somebody looks up from a phone to check against a departure board -- and the
@@ -6069,7 +6072,7 @@ const s = StyleSheet.create({
   // reference -- and it should not compete with the arrival above it. Lowercase
   // "departed" rather than a label-and-value pair, because a pair would give it
   // the weight of a row in a column it is no longer part of.
-  tripQuiet: { fontSize: 12, fontFamily: MONO, color: "rgba(226,226,226,0.5)" },
+  tripQuiet: { fontSize: 12, fontFamily: MONO, color: "rgba(226,226,226,0.52)" },
   // ── THE LANDED CARD'S ONE ROW ──
   //
   // IDENTITY LEFT, ANSWER RIGHT, AND THE ANSWER TAKES THE REMAINDER. flex: 1 on
@@ -6218,8 +6221,8 @@ const s = StyleSheet.create({
   // The identifiers, in the label grey. Mono for the number because it is a
   // code, sans for the carrier because it is a name — the same split the sheet's
   // header makes, one step down the scale.
-  airportIdentNum: { fontSize: 13, fontFamily: MONO, color: "rgba(226,226,226,0.4)" },
-  airportIdentName: { fontSize: 13, fontFamily: SANS, color: "rgba(226,226,226,0.4)" },
+  airportIdentNum: { fontSize: 13, fontFamily: MONO, color: "rgba(226,226,226,0.52)" },
+  airportIdentName: { fontSize: 13, fontFamily: SANS, color: "rgba(226,226,226,0.52)" },
   airportTimes: { gap: 12 },
   // Right-aligned with the column, so a short label and a long value end on the
   // same edge instead of starting on one.
@@ -6228,7 +6231,7 @@ const s = StyleSheet.create({
   // by width alone — but the ragged edge moves to the LEFT, so a value broken
   // over three lines ends flush with the card's right edge on every one of them.
   airportTimeLabel: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS, textAlign: "right",
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS, textAlign: "right",
   },
   airportTimeValue: {
     fontSize: 15, color: "#ffffff", fontFamily: MONO_BOLD, textAlign: "right",
@@ -6282,7 +6285,7 @@ const s = StyleSheet.create({
   // on the Text it would have widened the box the runway anchors to.
   footerPlaneWrap: { marginRight: 2 },
   footerPlane: {
-    fontSize: SHEET_QUIET_SIZE, color: "rgba(226,226,226,0.4)",
+    fontSize: SHEET_QUIET_SIZE, color: "rgba(226,226,226,0.52)",
   },
   // A View with a background, not a border, as every hairline in this file is.
   footerRunway: {
@@ -6304,11 +6307,11 @@ const s = StyleSheet.create({
   // the plane back on the baseline the code and the name share.
   footerPlaneUp: { transform: [{ rotate: '-20deg' }] },
   footerPlaneDown: { transform: [{ rotate: '20deg' }] },
-  footerCode: { fontSize: SHEET_QUIET_SIZE, fontFamily: MONO, color: "rgba(226,226,226,0.4)" },
+  footerCode: { fontSize: SHEET_QUIET_SIZE, fontFamily: MONO, color: "rgba(226,226,226,0.52)" },
   // flex 1 so the name takes whatever the code leaves and truncates there rather
   // than wrapping onto a second line under it.
   footerName: {
-    fontSize: SHEET_QUIET_SIZE, fontFamily: SANS, color: "rgba(226,226,226,0.4)", flex: 1,
+    fontSize: SHEET_QUIET_SIZE, fontFamily: SANS, color: "rgba(226,226,226,0.52)", flex: 1,
   },
   // FOUR PROPERTIES ON TOP OF airportTitle, and only four. The family, the
   // letterSpacing and the uppercase transform all still come from that style, so

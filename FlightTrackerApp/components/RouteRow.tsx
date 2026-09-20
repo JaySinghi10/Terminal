@@ -231,7 +231,7 @@ const s = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: CARD_PAD,
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     marginBottom: CARD_GAP,
   },
   // ── THE HAIRLINE, AS A SIBLING ──
@@ -249,7 +249,7 @@ const s = StyleSheet.create({
   // shape. See the elevation scale in lib/cards.ts.
   routeFlatRowEdge: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS,
+    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
   },
   // See routeLastKey. The hidden-count and truncation notes below the list keep
   // their own spacing, so dropping the gap leaves nothing touching.
@@ -258,7 +258,7 @@ const s = StyleSheet.create({
   routeFlatHead: { flexDirection: "row", alignItems: "center" },
   routeFlatIdent: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
   routeFlatAirline: { fontSize: 13, color: "rgba(226,226,226,0.6)", fontFamily: SANS, flexShrink: 1 },
-  routeFlatNumber: { fontSize: 13, color: "rgba(226,226,226,0.4)", fontFamily: MONO },
+  routeFlatNumber: { fontSize: 13, color: "rgba(226,226,226,0.52)", fontFamily: MONO },
   // Content-width, never reserved: these are flags, and a fixed cell for a
   // status that almost never renders would leave a permanent hole. The identity
   // group flexes, so nothing here can push the row wider than the screen.
@@ -309,7 +309,7 @@ const s = StyleSheet.create({
   // edge and arrivals still end on its right.
   routeFlatCodes: { flexDirection: "row", alignItems: "center", marginTop: 2 },
   routeFlatCode: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: MONO, minWidth: 60,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: MONO, minWidth: 60,
   },
   routeFlatCodeEnd: { textAlign: "right" },
   routeConnSpacer: { flex: 1, marginHorizontal: 12 },

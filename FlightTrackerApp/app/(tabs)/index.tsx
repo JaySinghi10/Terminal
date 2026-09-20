@@ -201,7 +201,7 @@ const SANS = 'Inter_400Regular';
 const SANS_SEMI = 'Inter_600SemiBold';
 
 // The same grey the bookmark outline uses on the flight card.
-const ARCHIVE_ICON = 'rgba(226,226,226,0.5)';
+const ARCHIVE_ICON = 'rgba(226,226,226,0.52)';
 
 // THE PERSON IN THE HEADER BUTTON. A step brighter than ARCHIVE_ICON, because
 // this glyph sits on a FILL rather than on the page: the archive icon is ink on
@@ -314,7 +314,7 @@ const ir = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.06)",
   },
-  label: { fontSize: 13, color: "rgba(226,226,226,0.45)", fontFamily: SANS },
+  label: { fontSize: 13, color: "rgba(226,226,226,0.52)", fontFamily: SANS },
   value: { fontSize: 13, color: "#ffffff", textAlign: "right", flex: 1, marginLeft: 16, fontFamily: MONO },
   valueSans: { fontFamily: SANS },
 });
@@ -1106,7 +1106,7 @@ const sf = StyleSheet.create({
     paddingVertical: 13,
     paddingHorizontal: CARD_PAD,
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     marginBottom: CARD_GAP,
   },
   // ── THE HAIRLINE, AS A SIBLING ──
@@ -1124,7 +1124,7 @@ const sf = StyleSheet.create({
   // shape. See the elevation scale in lib/cards.ts.
   rowEdge: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS,
+    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
   },
   // Applied after sf.row, so it is this paddingVertical that survives.
   rowRoomy: { paddingVertical: 18 },
@@ -1154,13 +1154,13 @@ const sf = StyleSheet.create({
   archiveBtn: { marginBottom: 10 },
   archiveBtnCollapsed: { paddingLeft: 12 },
   noneActive: {
-    fontSize: 11, color: 'rgba(226,226,226,0.4)', fontFamily: SANS,
+    fontSize: 11, color: 'rgba(226,226,226,0.52)', fontFamily: SANS,
     paddingVertical: 10,
   },
   collapsedRow: { flexDirection: 'row', alignItems: 'center' },
   collapsedLine: { paddingVertical: 10, flex: 1 },
   collapsedNumber: { fontFamily: MONO, fontSize: 11, color: '#ffffff' },
-  collapsedDim: { fontFamily: MONO, fontSize: 11, color: 'rgba(226,226,226,0.45)' },
+  collapsedDim: { fontFamily: MONO, fontSize: 11, color: 'rgba(226,226,226,0.52)' },
   route: { fontSize: 13, color: 'rgba(226,226,226,0.6)', fontFamily: MONO, flex: 1, marginLeft: 12 },
   // Supporting detail, so a step down in size and two steps down the grey ramp
   // from the route beside it. Same 11pt mono the codes line under the route
@@ -1168,7 +1168,7 @@ const sf = StyleSheet.create({
   // MONO_BOLD and a step up the ramp: with two instances of one number in the
   // list this is what tells them apart, so it had to stop whispering.
   date: { fontSize: 11, color: 'rgba(226,226,226,0.6)', fontFamily: MONO_BOLD, marginLeft: 8 },
-  updated: { color: 'rgba(226,226,226,0.3)' },
+  updated: { color: 'rgba(226,226,226,0.52)' },
   // getStatusColor('landed') exactly, and the same 11pt mono StatusLine renders
   // at, so the archive's line sits where the saved list's line sits and in the
   // colour that word already has everywhere else in the app.
@@ -1972,7 +1972,7 @@ export default function Index() {
                   heading and this is still plainly the line under it. The 0.4
                   alpha does the rest of the separating and is unchanged. */}
               {effectiveName !== null && (
-                <Text style={{ fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.4)', marginTop: 3 }}>{formatClock(now)}</Text>
+                <Text style={{ fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.52)', marginTop: 3 }}>{formatClock(now)}</Text>
               )}
             </View>
             {/* THE SHEET IS A ROUTE: app/profile.tsx, presented over the tabs
@@ -2006,7 +2006,7 @@ export default function Index() {
 
           {username === null && (
             <View style={{ alignItems: 'center', marginBottom: 24, marginTop: 0 }}>
-              <Text style={{ fontFamily: SANS, color: 'rgba(226,226,226,0.5)', fontSize: 11, marginBottom: 12, textAlign: 'center' }}>
+              <Text style={{ fontFamily: SANS, color: 'rgba(226,226,226,0.52)', fontSize: 11, marginBottom: 12, textAlign: 'center' }}>
                 {'// sign in to pull your flights straight from gmail'}
               </Text>
               <TouchableOpacity
@@ -2310,7 +2310,7 @@ const s = StyleSheet.create({
     alignSelf: 'center',
     marginTop: 32,
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     paddingVertical: 14,
     paddingHorizontal: 20,
   },
@@ -2319,7 +2319,7 @@ const s = StyleSheet.create({
   // UNREFERENCED SINCE THE ROUTE WENT BARE. There is no card around it any
   // more: the row and its bar sit on the page. Left in place.
   heroCard: {
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD,
     gap: 12,
   },
@@ -2337,13 +2337,13 @@ const s = StyleSheet.create({
   // It is unreferenced, like routeSurface below, and there is nothing to put a
   // sibling into.
   heroBtn: {
-    width: 36, height: 36, borderRadius: 10,
+    width: 36, height: 36, borderRadius: 10, borderCurve: 'continuous',
     backgroundColor: SURFACE_2,
     alignItems: "center", justifyContent: "center",
   },
   flightNumber: { fontSize: 32, color: "#ffffff", letterSpacing: 1, fontFamily: MONO_BOLD },
   // UNREFERENCED SINCE THE AIRLINE CAME OUT OF THE CARD. Left in place.
-  flightAirline: { fontSize: 13, color: "rgba(226,226,226,0.5)", marginTop: 3, fontFamily: SANS },
+  flightAirline: { fontSize: 13, color: "rgba(226,226,226,0.52)", marginTop: 3, fontFamily: SANS },
   // The fill is flight.statusBg and the rail flight.statusColor, both applied
   // inline: they come from getStatusBg and getStatusColor, which are the one
   // place this app decides what a status looks like.
@@ -2353,7 +2353,7 @@ const s = StyleSheet.create({
     // between them. alignItems flex-start so both sit against the left edge
     // rather than being stretched across the band.
     alignItems: "flex-start",
-    borderRadius: 8,
+    borderRadius: 8, borderCurve: 'continuous',
     // 6 AND 10, DOWN FROM 10 AND 12. The band carries a short word and one line
     // of small grey text, and at 10 vertical it was a block the size of the
     // route row beneath it — a container arguing for more attention than its
@@ -2373,7 +2373,7 @@ const s = StyleSheet.create({
   // still getStatusColor's, applied inline, and the rail beside it is unchanged.
   statusWord: { fontSize: 13, letterSpacing: 0.5, fontFamily: MONO_BOLD, flexShrink: 0 },
   statusSaveError: { fontFamily: SANS, fontSize: 11, color: "rgba(248,113,113,0.8)" },
-  statusUpdated: { fontFamily: MONO, fontSize: 11, color: "rgba(226,226,226,0.3)" },
+  statusUpdated: { fontFamily: MONO, fontSize: 11, color: "rgba(226,226,226,0.52)" },
 
   // UNREFERENCED SINCE THE MERGE. The route no longer has a surface of its own;
   // it is the lower half of heroCard. Left in place rather than deleted -- and
@@ -2381,7 +2381,7 @@ const s = StyleSheet.create({
   // sibling into. See sf.rowEdge for the treatment it would get.
   routeSurface: {
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD,
   },
   // UNREFERENCED SINCE THE AIRLINE AND THE SEAM CAME OUT. Left in place.
@@ -2395,11 +2395,11 @@ const s = StyleSheet.create({
   heroRuleSpace: { marginVertical: 2 },
   routeTime: { fontSize: 13, color: "#aeaeb2", marginTop: 8, fontFamily: MONO_BOLD },
 
-  // The empty pair. Both recede, and the value recedes further than its label:
-  // the label still names a thing worth knowing, the dash only says we do not
-  // know it yet.
-  airportTileLabelEmpty: { color: "rgba(226,226,226,0.22)" },
-  airportTileValueEmpty: { color: "rgba(226,226,226,0.18)" },
+  // THE EMPTY PAIR WAS HERE AND NOTHING EVER RENDERED IT. Two styles at 0.22
+  // and 0.18 -- the faintest ink the app ever declared, 1.82:1 and 1.60:1 on a
+  // card -- defined once and referenced nowhere, which is why nobody noticed
+  // they were a third of the way to invisible. The tile that would have used
+  // them draws its dash in the ordinary label grey.
 
   // No backgroundColor, no borderRadius, no padding: see the note at the call
   // site. The one visual difference that matters is that this starts at the page
@@ -2407,13 +2407,13 @@ const s = StyleSheet.create({
   footer: { gap: 6 },
   // A step quieter than the lines above it: the airports are at least about
   // where you are going, and this is metadata about the aircraft.
-  footerMeta: { fontSize: 11, fontFamily: MONO, color: "rgba(226,226,226,0.3)" },
+  footerMeta: { fontSize: 11, fontFamily: MONO, color: "rgba(226,226,226,0.52)" },
 
   // A FLOOR AND A CEILING. More than half the screen whatever is in it, and
   // never so tall that the scrim disappears at both ends.
   archiveSheet: { minHeight: "62%", maxHeight: "82%" },
   archiveEmpty: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: SANS,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS,
     textAlign: "center", lineHeight: 18, paddingVertical: 12,
   },
   // Negative margin then equal padding, so a row's hairline runs the full width
@@ -2435,13 +2435,13 @@ const s = StyleSheet.create({
 // container and msg is what prints "this list is full".
 const gm = StyleSheet.create({
   wrap: { marginBottom: 24 },
-  msg: { fontFamily: SANS, fontSize: 11, color: 'rgba(226,226,226,0.5)', paddingVertical: 6 },
+  msg: { fontFamily: SANS, fontSize: 11, color: 'rgba(226,226,226,0.52)', paddingVertical: 6 },
   leg: {
     paddingVertical: 13, paddingHorizontal: CARD_PAD,
-    backgroundColor: CARD_FILL, borderRadius: CARD_RADIUS, marginBottom: CARD_GAP,
+    backgroundColor: CARD_FILL, borderRadius: CARD_RADIUS, borderCurve: 'continuous', marginBottom: CARD_GAP,
   },
   legLast: { marginBottom: 0 },
-  legSub: { fontFamily: MONO, fontSize: 11, color: 'rgba(226,226,226,0.45)', marginTop: 4 },
+  legSub: { fontFamily: MONO, fontSize: 11, color: 'rgba(226,226,226,0.52)', marginTop: 4 },
   // The chip, inline at the head of that line. legSub's own face and size --
   // it is nested inside it -- with the trip view's tracking and nothing else;
   // the colour is applied at the call site because it comes from getStatusColor.

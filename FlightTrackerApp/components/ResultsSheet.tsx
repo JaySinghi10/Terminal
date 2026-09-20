@@ -1242,7 +1242,7 @@ const s = StyleSheet.create({
   // A FIXED width, not content width: it lines the two pills up with each
   // other. 28pt holds "from" at 6.6pt per character.
   routeEndSide: {
-    fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: MONO,
+    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: MONO,
     width: 28, marginRight: 8,
   },
   // No flexWrap. Wrapping is what this layout is built to make impossible, and
@@ -1260,7 +1260,7 @@ const s = StyleSheet.create({
     alignSelf: "flex-start",
     borderWidth: 1,
     borderColor: SURFACE_EDGE,
-    borderRadius: 4,
+    borderRadius: 4, borderCurve: 'continuous',
     paddingVertical: 5,
     paddingHorizontal: 10,
     marginTop: 6,
@@ -1269,7 +1269,7 @@ const s = StyleSheet.create({
   // pills' height, which alignSelf flex-start on the base style would do from
   // the top instead of the baseline.
   resetInline: { alignSelf: 'center', marginTop: 0 },
-  routeReset: { fontSize: 11, color: "rgba(226,226,226,0.5)", fontFamily: MONO },
+  routeReset: { fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: MONO },
   // Layout only. The dim that used to live here is now a sibling layer, so it
   // can fade on its own value.
   routeOverlayScrim: { flex: 1 },
@@ -1289,11 +1289,11 @@ const s = StyleSheet.create({
   routeCalRow: { flexDirection: "row" },
   routeCalHead: {
     flex: 1, textAlign: "center", fontSize: 11,
-    color: "rgba(226,226,226,0.4)", fontFamily: MONO, marginBottom: 6,
+    color: "rgba(226,226,226,0.52)", fontFamily: MONO, marginBottom: 6,
   },
   // flex divides the row evenly whatever the screen. Height is the one axis
   // with room, so it takes the 44pt guideline outright.
-  routeCalCell: { flex: 1, height: 44, alignItems: "center", justifyContent: "center", borderRadius: 4 },
+  routeCalCell: { flex: 1, height: 44, alignItems: "center", justifyContent: "center", borderRadius: 4, borderCurve: 'continuous' },
   routeCalCellOn: { backgroundColor: "rgba(74,222,128,0.08)" },
   routeCalCellToday: { borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },
   routeCalDay: { fontSize: 13, color: "#ffffff", fontFamily: MONO },
@@ -1306,7 +1306,7 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: SHEET_EDGE,
     backgroundColor: CARD_FILL,
-    borderRadius: 8,
+    borderRadius: 8, borderCurve: 'continuous',
     paddingVertical: 5,
     paddingHorizontal: 8,
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
@@ -1327,7 +1327,7 @@ const s = StyleSheet.create({
     // GlassLayers.
     borderWidth: 1,
     borderColor: SHEET_EDGE,
-    borderRadius: SHEET_RADIUS,
+    borderRadius: SHEET_RADIUS, borderCurve: 'continuous',
     // Keeps the scrolling contents — and the blur — inside the corners.
     overflow: "hidden",
   },
@@ -1335,7 +1335,7 @@ const s = StyleSheet.create({
     paddingVertical: 8, paddingHorizontal: 10,
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
   },
-  routeDropItemTxt: { fontSize: 11, color: "rgba(226,226,226,0.4)", fontFamily: MONO },
+  routeDropItemTxt: { fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: MONO },
   routeDropItemOn: { fontSize: 11, color: "#ffffff", fontFamily: MONO_BOLD },
   routeDropMark: { fontSize: 11, color: "#ffffff", fontFamily: MONO },
 });
