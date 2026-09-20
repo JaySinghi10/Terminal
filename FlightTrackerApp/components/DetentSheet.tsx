@@ -162,6 +162,27 @@ export type DetentSheetProps = {
   // Drawn first inside the clipped box, under the grabber and the children:
   // the results sheet's glass and veil, or a flat fill.
   surface?: ReactNode;
+  // ── HOW FAR THE SURFACE HOLDS OFF THE SCREEN'S EDGES ──────────────────────
+  //
+  // POINTS AT THE SMALL DETENT, CLOSING TO NOTHING AT THE LARGEST, so the sheet
+  // reads as a card lifted off the page while it is short and as the page
+  // itself once it fills the screen. Zero is every sheet that has shipped so
+  // far and is the default: passing nothing changes nothing.
+  //
+  // THE SURFACE MOVES AND THE BOX DOES NOT, which is the whole of why this is
+  // affordable. See the note at the surface slot.
+  //
+  // Read once, on mount, like mode and dismissible.
+  //
+  // THE GAP IS MEASURED FROM THE SCREEN'S EDGES, INCLUDING THE BOTTOM ONE. A
+  // bottomInset prop was added here once so a sheet could hold off a tab bar
+  // instead, and was taken out again: a sheet in a tab's content is drawn
+  // BENEATH the UITabBar, and running the surface on behind it is what both
+  // sheets in this app do. The consequence is worth knowing rather than
+  // rediscovering -- on a tabbed screen the two lower corners are behind the
+  // bar and only the top two are ever seen -- and it is the behaviour that was
+  // wanted.
+  inset?: number;
   children: ReactNode;
 };
 
@@ -170,7 +191,7 @@ export function DetentSheet({
   mode = 'translate', dismissible = true,
   closing = false, onDismissRequest, onDismissed,
   presentOnMount = true, dim = true, grabber = true,
-  surface, children,
+  inset = 0, surface, children,
 }: DetentSheetProps) {
   // THE HEIGHT IS THE ONE VALUE. It is how tall the sheet is, measured from the
   // screen's bottom edge, and everything else is read off it on the UI thread:
@@ -425,6 +446,96 @@ export function DetentSheet({
       ? { height: height.value }
       : { transform: [{ translateY: detentsSV.value[detentsSV.value.length - 1] - height.value }] }
   ));
+  // ── THE SURFACE'S INSET, AND WHY IT IS NOT THE BOX'S ──────────────────────
+  //
+  // left, right AND bottom ARE LAYOUT PROPS. Animating them on the SHEET would
+  // re-run Yoga over the whole subtree every frame -- and in translate mode the
+  // box is deliberately a fixed rectangle moved by a transform, which is the
+  // one property that mode exists to buy. Giving that up to move an edge a few
+  // points would be paying the expensive price for the cheap half of the
+  // effect.
+  //
+  // SO ONLY THE PAINTED RECTANGLE MOVES. The surface is an absolutely
+  // positioned child with no flow children of its own, so a layout pass on it
+  // measures one view and stops. The grabber and the consumer's content stay in
+  // the full-width box and are never re-measured; they hold their own constant
+  // horizontal padding, which has to be at least `inset` or the content would
+  // spill over the surface's edge as it pulls in.
+  //
+  // THE SAME HEIGHT THE DIM READS, over the same two detents, so the two cannot
+  // drift: the sheet is flush exactly when the scrim is at full strength.
+  // Continuous rather than per-detent -- nothing here is quantised, so the
+  // inset tracks a finger mid-drag rather than snapping when it lands.
+  //
+  // CLAMPED AT BOTH ENDS, which matters above the largest detent: the rubber
+  // band carries the height past it, and without the clamp the surface would
+  // keep growing past flush and pull its corners off the screen.
+  //
+  // ── AND NO RADIUS ANIMATES AT ALL, WHICH IS THE SECOND THING THAT WAS WRONG
+  //
+  // IT USED TO INTERPOLATE THE BOTTOM PAIR from the glass radius down to zero,
+  // and on screen the bottom corners stayed square throughout. The likely
+  // reason is that the view spends the whole drag with MIXED corner radii --
+  // round on top, something else below -- and iOS reaches that through a
+  // different mechanism than the uniform case: a uniform radius is
+  // layer.cornerRadius, and a mixed one is a CAShapeLayer mask that is rebuilt
+  // when the view redraws rather than when a UI-thread animator writes a prop.
+  // Which of those it is has not been confirmed on a device.
+  //
+  // SO THE SHAPE STOPPED DEPENDING ON THE ANSWER. All four corners are the
+  // glass radius, constantly, declared in the static style and never touched by
+  // an animator -- so the view is always uniform and always takes the cheap
+  // path. What moves is WHERE THE BOTTOM EDGE IS: it travels from `gap` above
+  // the screen to a RADIUS BELOW it, carrying the two round corners off the
+  // bottom of the screen as the sheet goes flush. The visible edge is round
+  // while there is a gap to be round against and straight once there is not,
+  // which is the effect the interpolation was after, reached by moving a
+  // rectangle instead of reshaping one.
+  //
+  // IT IS ALSO ONE FEWER ANIMATED PROPERTY PER FRAME, and the one that was
+  // hardest for the platform to honour.
+  //
+  // ── AND THE BOTTOM IS NOT MEASURED FROM THE BOX. THIS WAS WRONG ONCE ──────
+  //
+  // `bottom: gap` LOOKED RIGHT AND INVERTED THE EFFECT. In translate mode the
+  // box is the LARGEST detent tall and is slid DOWN by whatever the sheet is
+  // short of that, so its lower edge sits (largest - height) BELOW the screen.
+  // A bottom inset measured from that edge is off screen for as long as the
+  // sheet is short: no gap at the small detent, and a gap appearing only in the
+  // last few points of the drag, where the offset finally fell under the inset.
+  // Exactly backwards, and from a line that reads as obviously correct.
+  //
+  // SO THE OFFSET IS ADDED BACK. (largest - height) + gap puts the surface's
+  // lower edge `gap` above the SCREEN's bottom at every height, which is what
+  // the sides already did and what the eye compares it against.
+  //
+  // HEIGHT MODE NEEDS NONE OF THAT, because there the box IS the sheet: its
+  // lower edge is the screen's, and the inset is the inset.
+  const surfaceStyle = useAnimatedStyle(() => {
+    const ds = detentsSV.value;
+    const from = ds.length > 1 ? ds[ds.length - 2] : ds[0];
+    const to = ds[ds.length - 1];
+    const gap = interpolate(height.value, [from, to], [inset, 0], Extrapolation.CLAMP);
+    // ── THE BOTTOM TRACKS THE SIDES, THEN DUCKS UNDER AT THE LAST MOMENT ────
+    //
+    // THE BOTTOM GAP IS THE SIDE GAP for the whole drag. Interpolating it
+    // straight to -GLASS_RADIUS instead pulled it in faster than the sides --
+    // 7.9 against 11.6 halfway up, and already off screen while the sides still
+    // held five points -- which reads as a sheet pinned to the bottom edge and
+    // inset only at the sides. Whatever the corners are doing, the three gaps
+    // are one gap and have to close together.
+    //
+    // THE RADIUS IS SUBTRACTED OVER THE LAST 16 POINTS OF TRAVEL and nowhere
+    // else. That is the only stretch where the bottom corners are about to meet
+    // the screen edge, and by then the shared gap is under a point, so the
+    // divergence is invisible and the corners are clear of the screen before
+    // the sheet lands.
+    const duck = interpolate(
+      height.value, [to - GLASS_RADIUS, to], [0, GLASS_RADIUS], Extrapolation.CLAMP);
+    const below = mode === 'height' ? 0 : to - height.value;
+    return { left: gap, right: gap, bottom: below + gap - duck };
+  });
+
   const dimStyle = useAnimatedStyle(() => {
     const ds = detentsSV.value;
     const from = ds.length > 1 ? ds[ds.length - 2] : ds[0];
@@ -441,6 +552,22 @@ export function DetentSheet({
   const motion = useMemo<SheetMotion>(
     () => ({ height, detents: detentsSV, listActive, scrollY, pan }),
     [height, detentsSV, listActive, scrollY, pan],
+  );
+
+  // THE SHEET'S CONTENTS, IN ONE PIECE so that the inset branch below chooses
+  // where they live rather than repeating them in both arms. Order is
+  // unchanged: the surface under everything, the grabber over it, the
+  // consumer's content last.
+  const sheetBody = (
+    <>
+      {surface}
+      {grabber && (
+        <View style={sh.grabberRow} pointerEvents="none">
+          <View style={sh.grabber} />
+        </View>
+      )}
+      {children}
+    </>
   );
 
   return (
@@ -468,13 +595,33 @@ export function DetentSheet({
             sheetStyle,
           ]}
         >
-          {surface}
-          {grabber && (
-            <View style={sh.grabberRow} pointerEvents="none">
-              <View style={sh.grabber} />
-            </View>
-          )}
-          {children}
+          {/* ── THE INSET CARRIES THE CONTENT, NOT ONLY THE PAINT ──────────
+              IT WRAPPED THE SURFACE ALONE AND THE TEXT READ AS CUT OFF. The
+              content kept a constant 16 from the SCREEN's edge while the
+              surface pulled 15 points in from it, so the padding the eye
+              actually sees -- surface edge to first glyph -- was ONE POINT at
+              the small detent, opening to sixteen only once the sheet was
+              flush. Constant in the coordinates nobody looks at.
+              SO THE SLOT HOLDS EVERYTHING. Inside it a consumer's 16 is 16 from
+              the surface at every height, which is what "constant padding"
+              has to mean on a surface that moves.
+              AND IT COSTS THE LAYOUT THE FIRST VERSION WAS AVOIDING, which is
+              the honest trade and is why `inset` is opt-in. A slot with no flow
+              children measured one view per frame; with the content inside, a
+              width change re-measures the content. A sheet that does not want
+              to pay that passes no inset and is not wrapped at all -- see
+              below, where the whole branch disappears.
+              AT inset 0 THE TREE IS EXACTLY WHAT IT WAS, with no wrapper of any
+              kind. Not a micro-optimisation: the results sheet's surface is a
+              native blur view, and putting one inside a new clipping parent is
+              a change to how the platform composites it that nobody has looked
+              at. AND THE FLAG IS READ ONCE, so the branch cannot flip under a
+              mounted sheet and move a native view between two parents. */}
+          {inset > 0 ? (
+            <Reanimated.View style={[sh.surfaceSlot, surfaceStyle]}>
+              {sheetBody}
+            </Reanimated.View>
+          ) : sheetBody}
         </Reanimated.View>
       </GestureDetector>
     </SheetMotionContext.Provider>
@@ -541,6 +688,21 @@ const sh = StyleSheet.create({
   sheet: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
     borderTopLeftRadius: GLASS_RADIUS, borderTopRightRadius: GLASS_RADIUS,
+    borderCurve: 'continuous',
+    overflow: 'hidden',
+  },
+  // THE INSET SURFACE'S BOX. Pinned to the sheet's top and given its left,
+  // right and bottom by the animated style; it clips so the consumer's fill
+  // takes the animated corners without having to know about them. The top pair
+  // are constant and live here.
+  surfaceSlot: {
+    position: 'absolute', top: 0,
+    // ALL FOUR, CONSTANT, AND NEVER ANIMATED. See the note at surfaceStyle: a
+    // uniform radius is the one iOS honours through layer.cornerRadius, and the
+    // bottom pair leave the screen rather than squaring off.
+    borderRadius: GLASS_RADIUS, borderCurve: 'continuous',
+    // borderCurve IS THE APP'S DEFAULT NOW, at every rounded surface that is
+    // not a capsule. The argument for it is in lib/cards.ts beside CARD_RADIUS.
     overflow: 'hidden',
   },
   // THE SHEETS' SCRIM, full screen under the sheet. Its opacity is the shell's.

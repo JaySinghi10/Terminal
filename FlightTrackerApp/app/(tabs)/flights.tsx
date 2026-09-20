@@ -169,6 +169,9 @@ import {
   // own way is how the two come to disagree about one flight.
   displayStatus,
 } from '../../components/FlightCard';
+// WHAT TO DO ABOUT A LEG THAT IS NOT OPERATING. An overlay over this whole
+// screen rather than anything inside a row; see the note where it is mounted.
+import { AlternativesDrawer } from '../../components/AlternativesDrawer';
 // THE BOOKING REFERENCE, HELD UP TO BE READ. Shared with Home rather than
 // written twice: Home shows the same leg when nothing ties it to a journey, and
 // a screen may never be the place another screen imports from.
@@ -2502,6 +2505,22 @@ export default function Flights() {
   // currentLegIndex and the override would pin focus to the leg behind it. Null
   // is a different state from "the same index by coincidence", and it is the
   // one that keeps tracking.
+  // ── WHICH DISRUPTED LEG HAS ITS DRAWER OPEN ───────────────────────────────
+  //
+  // ONE AT A TIME AND HELD BY THE SCREEN, because the drawer is an overlay over
+  // the whole of it -- DetentSheet's dim is an absolute fill in the consumer's
+  // own tree, so it has to be mounted where it can cover the list rather than
+  // inside the row that opened it.
+  //
+  // THE LEG ITSELF, NOT ITS ID. The drawer needs the flight number, the date
+  // and both airports to ask for and to draw; looking those back up from an id
+  // on every render would be the list being searched to answer a question the
+  // tap already knew.
+  //
+  // CLEARED ON onDismissed RATHER THAN ON THE TAP, so the shell's spring has
+  // something to land in. See DetentSheet's closing/onDismissed pair.
+  const [drawerLeg, setDrawerLeg] = useState<SavedFlight | null>(null);
+
   const openLeg = (legs: SavedFlight[], leg: SavedFlight) => {
     const tripId = legs[0]?.tripId ?? '';
     setOpenByTrip(prev => {
@@ -2728,7 +2747,25 @@ export default function Flights() {
             state={state}
             belt={showsBelt(legs, i, now)}
             now={now}
-            onPress={() => openLeg(legs, leg)}
+            // ── A DISRUPTED ROW OPENS THE DRAWER, NOT THE CARD ─────────
+            //
+            // EXPANDING A CANCELLED LEG SHOWS A CARD WITH NOTHING ON IT. The
+            // phase-four card is a status word, a route and a scheduled
+            // departure that is not happening -- it says what went wrong and
+            // has nothing to say about what to do, which is the only question
+            // anybody has at that point. The drawer is what answers it.
+            //
+            // ONLY THE COLLAPSED ROWS FOR NOW. A disrupted leg that is the
+            // journey's CURRENT one still renders as an expanded card, because
+            // legState decides that by index rather than by status; changing
+            // it is its own piece of work and every other leg's 'next' label
+            // moves with it. Until then this screen has both, which is a
+            // coherent middle rather than a broken one: whichever surface a
+            // disrupted leg lands on, it is reachable.
+            onPress={() => {
+              if (disruptToneOf(effectiveStatus(leg, now)) !== null) setDrawerLeg(leg);
+              else openLeg(legs, leg);
+            }}
           />
       ) : (
       <FlightCard
@@ -3440,6 +3477,17 @@ export default function Flights() {
 
       </ScrollView>
       </ScrollViewMarker>
+
+      {/* ── THE DRAWER, OVER EVERYTHING AND OUTSIDE THE SCROLL ──────────────
+          LAST IN THE TREE so it draws over the list, and a SIBLING of the
+          scroll view rather than a child: a sheet inside a ScrollView would
+          scroll away with the content it is covering, and its dim would be
+          bounded by the content's height rather than the screen's.
+          UNMOUNTED WHEN THERE IS NO LEG, which is what makes re-opening fetch
+          again -- see lib/alternatives.ts on why nothing is kept. */}
+      {drawerLeg !== null && (
+        <AlternativesDrawer leg={drawerLeg} onClose={() => setDrawerLeg(null)} />
+      )}
     </View>
   );
 }
@@ -3479,7 +3527,7 @@ const st = StyleSheet.create({
   // from hitSlop instead, so the target is comfortable without the glyph growing.
   headerAdd: { alignItems: 'center', justifyContent: 'center' },
   // index.tsx's clock line, character for character.
-  clock: { fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.4)', marginTop: 3 },
+  clock: { fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.52)', marginTop: 3 },
 
   // ── THE EMPTY STATE ──
   // routeEmptyWrap's own padding, so a wrapped line breaks well short of the
@@ -3568,7 +3616,7 @@ const st = StyleSheet.create({
   stripHead: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     paddingLeft: STRIP_PAD,
     overflow: 'hidden',
   },
@@ -3624,7 +3672,7 @@ const st = StyleSheet.create({
   divRoute: { fontFamily: MONO_BOLD, fontSize: 17, color: '#ffffff' },
   divPill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: SURFACE_1, borderRadius: 6,
+    backgroundColor: SURFACE_1, borderRadius: 6, borderCurve: 'continuous',
     paddingLeft: 8, paddingRight: 5, paddingVertical: 4,
   },
   divPillText: { fontFamily: MONO, fontSize: 11, color: DIM },
@@ -3640,7 +3688,7 @@ const st = StyleSheet.create({
   stubs: { gap: CARD_GAP, paddingRight: 20, paddingVertical: 20 },
   stub: {
     width: 170, gap: 6,
-    backgroundColor: CARD_FILL, borderRadius: CARD_RADIUS,
+    backgroundColor: CARD_FILL, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: 12,
   },
   // THE CHOSEN ONE IS A STEP UP THE SCALE, not a new colour and not an outline.
@@ -3652,7 +3700,7 @@ const st = StyleSheet.create({
   stubRoute: { fontFamily: MONO_BOLD, fontSize: 15, color: '#ffffff' },
   stubCount: {
     alignSelf: 'flex-start',
-    backgroundColor: SURFACE_2, borderRadius: 6,
+    backgroundColor: SURFACE_2, borderRadius: 6, borderCurve: 'continuous',
     paddingHorizontal: 7, paddingVertical: 2,
   },
   // A FIXED BOX FOR TWO STACKED LAYERS. Both shapes are absolutely positioned
@@ -3813,7 +3861,7 @@ const st = StyleSheet.create({
   // identical ones.
   cardEdge: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS,
+    borderWidth: 1, borderColor: SURFACE_EDGE, borderRadius: CARD_RADIUS, borderCurve: 'continuous',
   },
 
   // ── THE LEG BESIDE THE CURRENT ONE ──
@@ -3823,7 +3871,7 @@ const st = StyleSheet.create({
   // that can sit under the first line here is a single belt.
   compactLeg: {
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD,
     gap: 6,
   },
@@ -3939,7 +3987,7 @@ const st = StyleSheet.create({
     alignSelf: 'center',
     marginTop: 32,
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     paddingVertical: 14,
     paddingHorizontal: 20,
   },
@@ -3969,7 +4017,7 @@ const st = StyleSheet.create({
   sheetList: { marginHorizontal: -20, paddingHorizontal: 20, flex: 1 },
   importRow: {
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD,
     marginBottom: CARD_GAP,
     gap: 6,
@@ -3990,7 +4038,7 @@ const st = StyleSheet.create({
   pastTrip: { marginBottom: CARD_GAP, gap: 2 },
   pastRow: {
     backgroundColor: CARD_FILL,
-    borderRadius: CARD_RADIUS,
+    borderRadius: CARD_RADIUS, borderCurve: 'continuous',
     padding: CARD_PAD,
     gap: 4,
   },

@@ -77,7 +77,11 @@ const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 // save does not wait on AsyncStorage after the first call.
 let deviceIdCache: string | null = null;
 
-async function deviceId(): Promise<string> {
+// EXPORTED FOR THE SAME READER, AND THE CACHE IS WHY IT MATTERS. A second
+// module generating its own id would file the same device under two of them --
+// the watch rows under one, the alternatives request under the other -- and the
+// server's ownership check would refuse every read.
+export async function deviceId(): Promise<string> {
   if (deviceIdCache !== null) return deviceIdCache;
   const stored = await AsyncStorage.getItem(DEVICE_ID_KEY);
   if (stored !== null && stored !== '') {
@@ -227,7 +231,10 @@ function platformName(): 'ios' | 'android' | 'unknown' {
 // refuses, and registration silently stops — exactly as it would with a wrong
 // value. There is nothing better this file could do with that, for the reason
 // the note at the top gives.
-const WATCH_SECRET = process.env.EXPO_PUBLIC_WATCH_SECRET ?? '';
+// EXPORTED FOR ONE OTHER READER: lib/alternatives.ts, which calls a second
+// endpoint guarded by the same secret. Exported rather than read from the
+// environment twice, so there is one place that knows the variable's name.
+export const WATCH_SECRET = process.env.EXPO_PUBLIC_WATCH_SECRET ?? '';
 
 // One place the request is actually made, so both endpoints behave the same
 // way. A non-2xx does not throw and is not read — there is nothing this side
