@@ -237,9 +237,31 @@ def board(schedule):
 sched = T(21, 30, day=9)
 lk = board({"2026-09-09": [("6E6188", "IndiGo", "21:30", "cancelled"), ("AI2812", "Air India", "20:00", "scheduled"), ("6E5294", "IndiGo", "23:55", "scheduled")]})
 got = run([(sched - timedelta(hours=6), dto(sched=sched), None), (sched - timedelta(hours=5), dto("cancelled", sched=sched), None)], lookup=lk)[1]
-check("one message, with the next departure after the cancelled one, skipping the earlier and the cancelled",
-      kinds(got) == [N.CANCELLED] and got[0][1]["values"]["next"]["flight_number"] == "6E5294", got[0][1]["values"] if got else None)
-check("cancellation text", N.render(got[0][1]) == "Your flight to Bangalore is cancelled. The next one leaves today at 11:55 PM, IndiGo 6E5294.", N.render(got[0][1]))
+# ── AND THE EARLIER ONE IS THE ANSWER, WHICH IS A REVERSAL ──────────────────
+# This assertion used to read "skipping the earlier", and the 20:00 was skipped
+# because the filter was anchored to the cancelled flight\'s own 21:30. Told at
+# 16:30, a passenger can make the 20:00 and would rather: the only floor that
+# means anything is whether they can still get there, which is NEXT_MIN_LEAD.
+check("the earliest reachable departure wins, even one leaving before the cancelled flight would have",
+      kinds(got) == [N.CANCELLED] and got[0][1]["values"]["next"]["flight_number"] == "AI2812", got[0][1]["values"] if got else None)
+check("cancellation text", N.render(got[0][1]) == "Your flight to Bangalore is cancelled. The next one leaves today at 8:00 PM, Air India AI2812.", N.render(got[0][1]))
+# ── BOTH EDGES OF THAT FLOOR, because a rule with only one test passes just as
+# happily when it is inverted. Ninety minutes is the line: a departure inside it
+# is unreachable and must not be offered, one outside it must.
+near = board({"2026-09-09": [("6E1111", "IndiGo", "17:45", "scheduled"), ("6E2222", "IndiGo", "18:30", "scheduled")]})
+edge = run([(sched - timedelta(hours=6), dto(sched=sched), None),
+            (T(16, 30, day=9), dto("cancelled", sched=sched), None)], lookup=near)[1]
+check("a departure inside the ninety minutes is not offered; the one past it is",
+      edge[0][1]["values"]["next"]["flight_number"] == "6E2222", edge[0][1]["values"]["next"])
+# ── AND THE BOARD IS KEPT, NOT THROWN AWAY ──────────────────────────────────
+rows = run([(sched - timedelta(hours=6), dto(sched=sched), None),
+            (sched - timedelta(hours=5), dto("cancelled", sched=sched), None)], lookup=board(
+    {"2026-09-09": [("AI2812", "Air India", "20:00", "scheduled"),
+                    ("6E5294", "IndiGo", "23:55", "scheduled"),
+                    ("6E6188", "IndiGo", "21:30", "cancelled")]}))[0]["next_search"]
+check("every qualifying row is kept, in time order, cancelled ones excluded",
+      [r["flight_number"] for r in rows["rows"]] == ["AI2812", "6E5294"], rows.get("rows"))
+check("and the search is dated, so the drawer can say how old it is", rows["searched_at"] is not None)
 check("one day of board asked", lk.calls == ["2026-09-09"], lk.calls)
 check("a tap opens the route list, earliest first", N.deep_link(got[0][1]) == {"screen": "search", "from": "BOM", "to": "BLR", "date": "2026-09-09", "sort": "earliest"}, N.deep_link(got[0][1]))
 check("not deferred: departure is inside a day", got[0][1]["deliver_after"] is None)
@@ -262,8 +284,17 @@ lk = board({})
 steps = [(c0 - timedelta(hours=1), dto(sched=sched), None), (c0, dto("cancelled", sched=sched), None)]
 steps += [(c0 + timedelta(minutes=30 * i), dto("cancelled", sched=sched), None) for i in range(1, 40)]
 ns, got = run(steps, lookup=lk)
-check("an empty route runs to the sixty-day ceiling and says so once", kinds(got) == [N.CANCELLED, N.NEXT_FLIGHT] and len(lk.calls) == 60, (kinds(got), len(lk.calls)))
-check("the ceiling text is honest about its reach", N.render(got[1][1]) == "No flight to Bangalore is in the schedule for the next 60 days, which is as far as the schedule reaches.", N.render(got[1][1]))
+# SEVEN BOARDS, NOT SIXTY. The ceiling is what a stranded passenger will read
+# rather than how far the timetable is published; see NEXT_MAX_DAYS. At four
+# units a board this is the difference between 28 units and 240 for one
+# cancellation on a route with no service.
+check("an empty route stops at a week and says so once", kinds(got) == [N.CANCELLED, N.NEXT_FLIGHT] and len(lk.calls) == 7, (kinds(got), len(lk.calls)))
+check("the exhausted text says what it looked at, not that the schedule ends",
+      N.render(got[1][1]) == "Nothing else to Bangalore on this route in the next week.", N.render(got[1][1]))
+check("and the cancelled branch says the same thing about itself",
+      N.render(dict(got[0][1], values={"none_within_days": N.NEXT_MAX_DAYS}))
+      == "Your flight to Bangalore is cancelled. Nothing else on this route in the next week.",
+      N.render(dict(got[0][1], values={"none_within_days": N.NEXT_MAX_DAYS})))
 
 withdrawn = run([(sched - timedelta(hours=6), dto(sched=sched), None), (sched - timedelta(hours=5), dto("cancelled", sched=sched), None),
                  (sched - timedelta(hours=4), dto("scheduled", sched=sched), None)], lookup=board({}))[1]
@@ -368,6 +399,69 @@ check("no connection when the airports do not meet",
       N.connection_band(home(), onward(origin="MAA")) is None)
 check("no connection when the gap is wider than a day",
       N.connection_band(home(), onward(dep=T(23, 40, day=8))) is None)
+
+# ── WOULD A REPLACEMENT STILL MAKE THE CONNECTION ───────────────────────────
+#
+# The same hub and the same minimum, asked of a BOARD ROW rather than of the
+# leg the passenger is on. Onward leaves BLR at 00:40, so domestic 60 + 30 of
+# cushion puts at_risk in (60, 90] minutes and a miss under 60.
+print()
+print("-- replacements against the next leg --")
+
+
+def row(arr=None, num="6E100", dest="BLR"):
+    return {"flight_number": num, "airline": "IndiGo", "destination_iata": dest,
+            "departure_scheduled_iso": iso(T(19, 0)),
+            "arrival_scheduled_iso": iso(arr) if arr else None}
+
+
+def verdicts(rows, nxt=onward()):
+    return [(r["connects"], r["layover_minutes"])
+            for r in N.classify_alternatives(home(), nxt, rows)]
+
+check("lands well clear: comfortable, with the layover in minutes",
+      verdicts([row(T(22, 0))]) == [("comfortable", 160)], verdicts([row(T(22, 0))]))
+check("lands inside the cushion: at risk",
+      verdicts([row(T(23, 25))]) == [("at_risk", 75)], verdicts([row(T(23, 25))]))
+check("lands too late: will miss",
+      verdicts([row(T(0, 10, day=8))]) == [("will_miss", 30)], verdicts([row(T(0, 10, day=8))]))
+
+# ── AND THE ROW WITH NO ARRIVAL TIME, WHICH IS THE WHOLE POINT ──────────────
+# A board row can name a destination and carry no arrival time at all. Calling
+# that a miss would hide a usable flight behind a number nobody had; calling it
+# comfortable would promise a connection on no evidence.
+check("no arrival time is unknown, and is neither a miss nor a promise",
+      verdicts([row(None)]) == [("unknown", None)], verdicts([row(None)]))
+check("and it is not dropped: every row that went in comes out",
+      len(N.classify_alternatives(home(), onward(), [row(T(22, 0)), row(None), row(T(0, 10, day=8))])) == 3)
+
+check("no next leg at all: every row is simply a flight to the destination",
+      verdicts([row(T(22, 0))], nxt=None) == [(None, None)], verdicts([row(T(22, 0))], nxt=None))
+check("a row that does not go to the hub cannot have a layover",
+      verdicts([row(T(22, 0), dest="MAA")]) == [(None, None)], verdicts([row(T(22, 0), dest="MAA")]))
+
+# THE MINIMUM TRAVELS WITH THE ROW, so the drawer can say what it was judged
+# against, and an international hub raises it for a replacement exactly as it
+# does for the leg being flown.
+dom = N.classify_alternatives(home(), onward(), [row(T(22, 0))])[0]
+intl = N.classify_alternatives(home(arr_country="AE"), onward(), [row(T(22, 0))])[0]
+check("the domestic minimum is reported", dom["minimum_minutes"] == 60, dom["minimum_minutes"])
+check("crossing a border raises it for a replacement too, and 160 minutes still clears it",
+      (intl["minimum_minutes"], intl["connects"]) == (120, "comfortable"), intl)
+
+# ── THE BLOCK THE DEVICE READS ──────────────────────────────────────────────
+blk = N.alternatives_block(home(), onward(),
+                           {"rows": [row(T(22, 0)), row(None)], "searched_at": "2026-09-07T18:00:00+00:00",
+                            "days_searched": 1, "done": True}, T(18, 0))
+check("the block names the route it searched", (blk["origin"], blk["destination"]) == ("BOM", "BLR"), blk["origin"])
+check("it carries the age of the search", blk["searched_at"] == "2026-09-07T18:00:00+00:00")
+check("and how far it looked", (blk["days_searched"], blk["max_days"], blk["done"]) == (1, N.NEXT_MAX_DAYS, True))
+check("it summarises the leg the connection is for, without embedding the whole DTO",
+      blk["next_leg"]["flight_number"] == "6E777" and "arrival" not in blk["next_leg"], blk["next_leg"])
+check("both rows survive into it, verdicts and all",
+      [r["connects"] for r in blk["rows"]] == ["comfortable", "unknown"], blk["rows"])
+check("a final leg has no next_leg block at all",
+      N.alternatives_block(home(), None, {"rows": [row(T(22, 0))]}, T(18, 0))["next_leg"] is None)
 
 # ── THE MESSAGES ──
 NOW = T(20, 0)

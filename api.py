@@ -21,6 +21,7 @@ import fr24
 # never stored, truncated before the model sees them -- live in one file.
 import gmail_flights
 import auth
+import re
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,6 +41,11 @@ from mcp_server import (
 )
 
 load_dotenv()
+
+# A CALENDAR DAY AND NOTHING ELSE. The same shape store.py and pollstate.py
+# both match on; this file needed one of its own for the single endpoint that
+# validates a date WITHOUT asking whether it is in the future.
+_ISO_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # ANTHROPIC_API_KEY IS GONE FROM THIS FILE, and on the default configuration
 # it is not read at all: Vertex authenticates as the Cloud Run service
@@ -1068,6 +1074,75 @@ def watch(req: WatchRequest, x_watch_secret: str | None = Header(default=None)):
         logger.warning("watch rejected: %s", result.get("error"))
         return {"error": WATCH_ERROR}
     return {"ok": True, "created": result.get("created")}
+
+
+# ── WHAT THE SERVER FOUND WHEN THIS FLIGHT WAS CANCELLED ───────────────────
+#
+# THE DEVICE DOES NO SEARCHING. The poller has already walked the board, judged
+# every row against the next leg and stored the result; this hands that back.
+# NO PROVIDER CALL HAPPENS HERE, on any path, which is what lets the drawer open
+# instantly and what keeps a screen nobody scrolls from costing units.
+#
+# ── AND NOTHING IS CACHED ON THE DEVICE ────────────────────────────────────
+#
+# These rows are provider data under a seven-day ceiling -- see
+# docs/connection-search.md -- and the app's own store is the open question in
+# that same document: a SavedFlight DTO is written to AsyncStorage and never
+# deleted by age. Copying board rows onto the device would extend an unresolved
+# exposure to a second class of data, deliberately, while the first is still
+# unanswered. Server-side they expire with the state object, at five days.
+#
+# ── WHY THE OWNERSHIP CHECK IS NOT DECORATION ──────────────────────────────
+#
+# X-Watch-Secret IS A SHARED CLIENT SECRET. It ships inside the app bundle as
+# EXPO_PUBLIC_WATCH_SECRET, so it establishes "a build of this app is calling"
+# and nothing whatever about WHO. That is adequate for /watch, which only lets a
+# caller subscribe a token it already holds. It is not adequate on its own here,
+# where the response is somebody's itinerary.
+#
+# SO THE DEVICE ID IS THE SECOND FACTOR, such as it is, and the honest reading
+# is that this is enumeration-resistant rather than secure: a device id is a
+# random opaque value rather than a guessable one, and a caller who has both a
+# bundle and a device id can read that device's alternatives. Worth revisiting
+# when there is an account token to carry instead.
+#
+# ── NOT OWNED AND NOT FOUND ANSWER IDENTICALLY ─────────────────────────────
+#
+# Both return an empty block rather than a distinguishable refusal, so a caller
+# cannot use this to learn which flights a device is watching. The drawer needs
+# no distinction: with nothing stored it says the search is still running, which
+# is the true thing to say in both cases.
+@app.get("/alternatives/{flight_number}")
+def get_alternatives(flight_number: str, date: str | None = None,
+                     device_id: str | None = None,
+                     x_watch_secret: str | None = Header(default=None)):
+    if not _secret_ok(x_watch_secret, WATCH_SECRET):
+        logger.warning("alternatives rejected: bad or missing %s", WATCH_SECRET_HEADER)
+        return _alert_not_found()
+    num = str(flight_number or "").strip().upper()
+    day = str(date or "").strip()
+    # THE FORMAT ONLY, NOT THE HORIZON. _validate_route_date refuses past dates
+    # because a route SEARCH cannot answer for them; this reads an object that
+    # is already on disk, and a flight cancelled yesterday is exactly the case
+    # somebody opens the drawer for.
+    if not num or not _ISO_DAY_RE.match(day):
+        return {"alternatives": None}
+    # NOT OWNED, NOT WATCHED, OR THE WATCH STORE COULD NOT BE READ -- owns_watch
+    # collapses all three into no, deliberately. Logged here rather than there
+    # because this is where the request is; the number and the date are already
+    # in this log line's siblings and neither is a secret.
+    if not store.owns_watch(device_id, num, day):
+        return {"alternatives": None}
+    try:
+        doc, _gen = pollstate.read_state(num, day)
+    except Exception:  # noqa: BLE001
+        # UNREADABLE STATE IS AN EMPTY ANSWER, NOT AN ERROR. The drawer's
+        # fallback -- "still looking" -- is the right thing to show while the
+        # bucket is unavailable, and a 500 here would make a transient storage
+        # blip look like a broken feature.
+        logger.warning("alternatives: state unreadable for %s/%s", num, day)
+        return {"alternatives": None}
+    return {"alternatives": (doc or {}).get("alternatives")}
 
 
 # The same secret, the same 404, and the same narrowed gap as /watch above.

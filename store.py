@@ -374,6 +374,60 @@ def watched_flights():
                   reverse=True)
 
 
+def owns_watch(device_id, flight_number, flight_date) -> bool:
+    """Is this device watching this flight, AS A PASSENGER ON IT?
+
+    THE ONE QUESTION THE ALTERNATIVES ENDPOINT ASKS, and it is here rather than
+    in api.py because it is a question about this store's rows. watched_flights
+    above answers the inverse -- which devices watch each flight -- and building
+    the whole of that to look up one pair would read and reshape every row in
+    the file to answer a yes or no.
+
+    OWNED, NOT MERELY WATCHED. Somebody MEETING a cancelled flight has no
+    connection to make and no seat to rebook; the alternatives are not theirs to
+    read. The same rule connection_candidates applies, for the same reason.
+
+    FALSE WHEN THE STORE CANNOT BE READ, which is the one place this module
+    departs from watched_flights' insistence that unreadable and empty are
+    different. They are different to a POLLER, which would otherwise do nothing
+    for ever in silence; to an authorisation check they are the same answer, and
+    the safe one is no.
+
+    AND FALSE ON *ANY* FAILURE, WHICH IS WHY THE except IS BARE. Everywhere else
+    in this file a narrow except is the right habit -- an unexpected error
+    should surface rather than be swallowed as an empty store. This function is
+    not reporting data, it is answering "may this caller read somebody's
+    itinerary", and the only safe answer to a question that went wrong is no. A
+    narrow list here means a failure mode nobody enumerated escapes as a 500 out
+    of an authorisation check, which is the one place a surprise is least
+    welcome.
+    """
+    did, err = _clean_device_id(device_id)
+    if err is not None:
+        return False
+    num = str(flight_number or "").strip().upper()
+    day = str(flight_date or "").strip()
+    if not num or not _ISO_DAY_RE.match(day):
+        return False
+    bucket = _bucket()
+    if bucket is None:
+        return False
+    try:
+        rows, _ = _read_watches(bucket)
+    except Exception:  # noqa: BLE001 -- see the note above: any failure is "no"
+        # SILENT BY THIS FILE'S OWN CONVENTION. store.py has no logger: it
+        # reports through return values so that a caller decides what is worth
+        # saying. The endpoint logs the refusal, where the request context is.
+        return False
+    for r in rows or []:
+        if (str((r or {}).get("device_id") or "") == did
+                and str((r or {}).get("flight_number") or "").strip().upper() == num
+                and str((r or {}).get("flight_date") or "").strip() == day
+                and _clean_owned(r.get("owned")) is not False):
+            return True
+    return False
+
+
 def register_watch(device_id, push_token, platform, flight_number, flight_date, owned=None):
     """Upsert on (device_id, flight_number, flight_date)."""
     did, err = _clean_device_id(device_id)

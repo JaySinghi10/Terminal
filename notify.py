@@ -144,12 +144,63 @@ QUIET_ONLY_BEYOND = timedelta(hours=24)
 # hours, so a day is two windows). The first pass looks three days ahead in
 # the same poll, which is the common case answered at once; after that the
 # search continues two days per poll until it finds a flight or reaches the
-# board's evidenced ceiling. So a route with nothing for a fortnight costs
-# ~30 calls spread over six polls, and never a burst.
+# ceiling below.
 NEXT_FIRST_PASS_DAYS = 3
 NEXT_DAYS_PER_POLL = 2
-NEXT_MAX_DAYS = 60                      # mcp_server.ROUTE_MAX_FUTURE_DAYS, the evidenced limit
+
+# ── A WEEK, WHICH USED TO BE SIXTY DAYS ─────────────────────────────────────
+#
+# IT WAS mcp_server.ROUTE_MAX_FUTURE_DAYS -- how far the SCHEDULE reaches --
+# and that was the wrong quantity. How far the timetable is published is a fact
+# about the provider; how far a stranded passenger will read is a fact about
+# the passenger, and the second is the one this search is for. Nobody whose
+# flight was cancelled this morning is served by a departure seven weeks out.
+#
+# AND SIXTY DAYS WAS THE APP'S LARGEST SINGLE SPEND. A route with no service
+# walked every one of them: 60 days x 4 units = 240 units for one cancellation,
+# spread over about thirty polls. A hundred such cancellations in a month is
+# 24,000 units against a 40,000 allowance. Seven days costs 28, and the walk
+# finishes in three polls instead of thirty.
+#
+# THE COPY IS COUPLED TO THIS NUMBER AND DOES NOT READ IT. Both exhausted
+# sentences say "in the next week" in words -- see render -- because "the next 7
+# days" reads like a machine and a week does not. CHANGE ONE, CHANGE BOTH.
+NEXT_MAX_DAYS = 7
 NEXT_CALLS_PER_DAY = 2
+
+# ── HOW SOON A REPLACEMENT CAN BE, AND STILL BE ONE ─────────────────────────
+#
+# NINETY MINUTES, WHICH IS poller.NEAR_BEFORE_DEPARTURE. That constant is this
+# app's existing answer to "how long before a departure does it start to
+# matter", so a flight closer than that is one the reader cannot realistically
+# reach, and offering it would be the app being confidently useless.
+#
+# IT REPLACES A FLOOR THAT WAS ANCHORED TO THE DEAD FLIGHT. The filter used to
+# be max(scheduled departure, now), which excluded every alternative leaving
+# BEFORE the cancelled one -- so a 21:30 cancelled at 16:30 hid the 20:00 on
+# the same route, the single best option for somebody already at the airport.
+# The further ahead a cancellation landed, the more it hid.
+#
+# THE DAY LOOP IS NOT MOVED BY THIS, and that is the half worth stating. It
+# still begins on the cancelled flight's own date; only the row filter moved.
+# Anchoring the loop to `now` instead would make a cancellation three days out
+# walk today, tomorrow and the next day -- three boards, twelve units -- before
+# reaching the date anybody is travelling on.
+NEXT_MIN_LEAD = timedelta(minutes=90)
+
+# ── AND HOW MANY OF THEM ARE KEPT ───────────────────────────────────────────
+#
+# THE BOARD WAS FETCHED AND ALL BUT ONE ROW THROWN AWAY. The search kept the
+# earliest qualifying departure and discarded the rest of a board already paid
+# for; the drawer needs a list, and this is that list at no extra cost.
+#
+# EIGHT, which fills a drawer section and is well inside the 25 a board returns.
+#
+# FROM THE FIRST PRODUCTIVE DAY ONLY, and never accumulated across days. A day
+# that yields two rows returns two -- reaching eight by walking further would
+# spend four units a day to lengthen a list whose first entry is already the
+# answer, on exactly the thin routes that can least afford it.
+NEXT_KEEP_ROWS = 8
 
 OUTBOX_MAX = 40
 
@@ -578,35 +629,185 @@ def connection_band(dto, nxt, now=None):
     if remaining >= CONNECT_MAX:
         return None
 
-    # EITHER LEG CROSSING A BORDER RAISES THE MINIMUM, which is three countries:
-    # where this leg started, where it connects, where the next one ends.
+    minimum = connection_minimum(dto, nxt)
+    return _band(remaining, minimum), remaining, minimum
+
+
+# ── THE MINIMUM FOR THIS JOURNEY'S HUB, LIFTED OUT OF connection_band ───────
+#
+# TWO CALLERS NOW AND THE RULE MUST NOT BE WRITTEN TWICE. The warning asks
+# "will the leg you are on make the leg you booked"; the drawer asks "would
+# this REPLACEMENT make it". Same hub, same three countries, same threshold --
+# and two copies of a border test is exactly how the warning and the list come
+# to disagree about whether one connection is domestic.
+#
+# THE REPLACEMENT FLIES THE SAME CITY PAIR, which is why this works unchanged
+# for it. A board row carries no country at all -- only IATA codes -- but a
+# replacement for a cancelled BOM->DEL leg is itself BOM->DEL, so the countries
+# are the cancelled leg's own and are read from its DTO.
+#
+# EITHER LEG CROSSING A BORDER RAISES THE MINIMUM, which is three countries:
+# where this leg started, where it connects, where the next one ends. An
+# unknown country counts as crossing, which is the stricter reading and the
+# same one docs/connection-search.md records.
+def connection_minimum(dto, nxt):
+    nxt_dep = (nxt or {}).get("departure") or {}
+    nxt_arr = (nxt or {}).get("arrival") or {}
     origin = _country(dto, "departure")
     at_hub = _country(dto, "arrival") or nxt_dep.get("country") or None
     end = nxt_arr.get("country") or None
     crosses = None in (origin, at_hub, end) or origin != at_hub or at_hub != end
-    minimum = CONNECT_MIN_INTERNATIONAL if crosses else CONNECT_MIN_DOMESTIC
+    return CONNECT_MIN_INTERNATIONAL if crosses else CONNECT_MIN_DOMESTIC
 
+
+def _band(remaining, minimum):
     if remaining < minimum:
-        band = "will_miss"
-    elif remaining <= minimum + CONNECT_CUSHION:
-        band = "at_risk"
-    else:
-        band = "comfortable"
-    return band, remaining, minimum
+        return "will_miss"
+    if remaining <= minimum + CONNECT_CUSHION:
+        return "at_risk"
+    return "comfortable"
+
+
+# ── WHAT OF A BOARD ROW IS WORTH KEEPING ────────────────────────────────────
+#
+# A SUBSET, AND NAMED RATHER THAN THE WHOLE ROW. A board row carries fields the
+# drawer has no use for, and this is provider data under a seven-day ceiling --
+# see docs/connection-search.md -- so storing less of it for less time is the
+# habit, not an optimisation.
+#
+# ARRIVAL TIMES ARE KEPT EVEN WHEN NULL, and the key is always present. A board
+# row can name a destination airport and carry no arrival time at all; that row
+# is still a real flight to the right place and belongs in the list. What it
+# cannot do is be tested against a connection, so the absence has to survive to
+# the surface that decides -- see Stage 2 -- rather than being defaulted here.
+def _kept_row(r, t, now):
+    return {
+        "flight_number": r.get("flight_number"),
+        "airline": r.get("airline"),
+        "origin_iata": r.get("origin_iata"),
+        "destination_iata": r.get("destination_iata"),
+        "departure_scheduled_iso": r.get("departure_scheduled_iso"),
+        "departure_scheduled": r.get("departure_scheduled"),
+        "departure_timezone": r.get("departure_timezone"),
+        "arrival_scheduled_iso": r.get("arrival_scheduled_iso"),
+        "arrival_scheduled": r.get("arrival_scheduled"),
+        "arrival_timezone": r.get("arrival_timezone"),
+        # THE SAME THREE THE PUSH ALREADY RENDERS, so a row and the sentence
+        # about it cannot come to disagree about which day it leaves.
+        "time": _clock(t),
+        "tz": _tz_label(r.get("departure_scheduled")),
+        "day": _day_label(t, now),
+        "date": t.date().isoformat(),
+    }
+
+
+# ── WOULD THIS REPLACEMENT STILL MAKE THE NEXT LEG ──────────────────────────
+#
+# THE ONE QUESTION THE DRAWER EXISTS TO ANSWER, and it is asked per row here so
+# that no surface has to do arithmetic on a layover. Every row gets a verdict;
+# nothing is silently dropped.
+#
+# FIVE VERDICTS, AND "unknown" IS NOT "no". A board row can name a destination
+# airport and carry NO ARRIVAL TIME AT ALL -- see _kept_row -- and such a row is
+# a real flight to the right place that simply cannot be tested. Calling that
+# "will_miss" would hide a usable flight behind a number we never had; calling
+# it "comfortable" would promise a connection on no evidence. It says unknown,
+# stays out of the connection list, and stays in the list of flights to the
+# destination.
+#
+#   None          there is no next leg -- a final leg, or a trip the server
+#                 cannot pair. Every row is simply a flight to the destination.
+#   "unknown"     no arrival time on the row.
+#   "will_miss"   lands too late by the minimum.
+#   "at_risk"     inside the cushion.
+#   "comfortable" clears it.
+#
+# THE LAYOVER IS REPORTED IN MINUTES ALONGSIDE, because a band alone cannot be
+# rendered as "2h 40m in Delhi" and the drawer should not re-derive it from two
+# timestamps and get a different answer.
+def classify_alternatives(dto, nxt, rows, now=None):
+    """Each row, tagged with whether it still makes the next leg."""
+    out = []
+    minimum = connection_minimum(dto, nxt) if nxt else None
+    leaves_at = _parse(((nxt or {}).get("departure") or {}).get("scheduled_iso")) if nxt else None
+    hub = (((dto or {}).get("arrival") or {}).get("iata") or "").strip().upper()
+    for r in rows or []:
+        row = dict(r)
+        lands = _parse(r.get("arrival_scheduled_iso"))
+        # THE ROW MUST ACTUALLY GO TO THE HUB. True by construction -- the board
+        # was fetched for this city pair -- and checked anyway, because a row
+        # that does not is a row whose layover is meaningless rather than long.
+        same_hub = (not hub) or (str(r.get("destination_iata") or "").strip().upper() == hub)
+        if nxt is None or leaves_at is None or not same_hub:
+            row["connects"] = None
+            row["layover_minutes"] = None
+        elif lands is None:
+            row["connects"] = "unknown"
+            row["layover_minutes"] = None
+        else:
+            gap = leaves_at - lands
+            row["connects"] = _band(gap, minimum)
+            row["layover_minutes"] = int(gap.total_seconds() // 60)
+        row["minimum_minutes"] = int(minimum.total_seconds() // 60) if minimum else None
+        out.append(row)
+    return out
+
+
+# ── AND THE WHOLE BLOCK THE DEVICE READS ────────────────────────────────────
+#
+# BUILT HERE RATHER THAN IN THE POLLER, because every judgement in it is this
+# module's: which rows qualified, how old the search is, what a workable gap is.
+# The poller's part is storage and it should stay that.
+#
+# PURE, and it costs nothing -- the search already ran, the next leg is already
+# loaded from state. This is a reshaping of two things the caller holds.
+#
+# THE NEXT LEG IS SUMMARISED, NOT EMBEDDED. The drawer needs to name what the
+# connection is FOR -- "to make ZZ902 at 14:05" -- and nothing more; the whole
+# DTO is provider data with a seven-day ceiling on it, and a second copy of one
+# inside another object is a second thing to expire.
+def alternatives_block(dto, nxt, search, now):
+    search = search or {}
+    rows = classify_alternatives(dto, nxt, search.get("rows") or [], now)
+    arr = (dto or {}).get("arrival") or {}
+    nxt_dep = ((nxt or {}).get("departure") or {}) if nxt else {}
+    return {
+        "searched_at": search.get("searched_at"),
+        "days_searched": int(search.get("days_searched") or 0),
+        "done": bool(search.get("done")),
+        "max_days": NEXT_MAX_DAYS,
+        "origin": ((dto or {}).get("departure") or {}).get("iata"),
+        "destination": arr.get("iata"),
+        "next_leg": {
+            "flight_number": (nxt or {}).get("flight_number"),
+            "departure_iata": nxt_dep.get("iata"),
+            "arrival_iata": ((nxt or {}).get("arrival") or {}).get("iata"),
+            "departure_scheduled_iso": nxt_dep.get("scheduled_iso"),
+            "departure_scheduled": nxt_dep.get("scheduled"),
+        } if nxt else None,
+        "rows": rows,
+    }
 
 
 def _search_next(facts, dto, now, search, lookup_next, days):
     """Walk the route board forward. Returns (found or None, search state).
 
     search state: {"from": iso of the cancelled departure, "next_day": the
-    next local day to ask about, "days_searched": n, "done": bool}."""
+    next local day to ask about, "days_searched": n, "done": bool,
+    "found": the earliest row as the push renders it, "rows": up to
+    NEXT_KEEP_ROWS of them for the drawer, "searched_at": when}."""
     dep = dto.get("departure") or {}
     origin, dest = facts["origin"]["iata"], facts["destination"]["iata"]
     sched = _parse(dep.get("scheduled_iso")) or now
-    after = max(sched, now)
+    # WHERE THE DAY LOOP BEGINS: the travel date, or today if that is already
+    # past. Unchanged, and deliberately not the row filter -- see NEXT_MIN_LEAD.
+    anchor = max(sched, now)
+    # WHAT A ROW HAS TO BEAT: reachable, not the dead flight's own schedule.
+    earliest = now + NEXT_MIN_LEAD
     if search is None:
-        search = {"from": _iso(after), "next_day": after.date().isoformat(),
-                  "days_searched": 0, "done": False, "found": None}
+        search = {"from": _iso(anchor), "next_day": anchor.date().isoformat(),
+                  "days_searched": 0, "done": False, "found": None,
+                  "rows": [], "searched_at": None}
     search = dict(search)
     if lookup_next is None or not origin or not dest:
         return None, search
@@ -625,19 +826,26 @@ def _search_next(facts, dto, now, search, lookup_next, days):
             break
         search["days_searched"] += 1
         search["next_day"] = (datetime.fromisoformat(day) + timedelta(days=1)).date().isoformat()
-        best = None
+        # EVERY QUALIFYING ROW, IN TIME ORDER, rather than a running minimum.
+        # fetch_route already returns a board sorted by departure, so the sort
+        # here is a guarantee rather than a correction -- it costs nothing on an
+        # already ordered list and means this function's output does not depend
+        # on an ordering another module could change.
+        good = []
         for r in rows:
             t = _parse(r.get("departure_scheduled_iso"))
-            if t is None or t <= after:
+            if t is None or t < earliest:
                 continue
             if str(r.get("status") or "") == STATUS_CANCELLED:
                 continue
-            if str(r.get("flight_number") or "").upper() == own and t.date() == after.date():
+            if str(r.get("flight_number") or "").upper() == own and t.date() == anchor.date():
                 continue
-            if best is None or t < best[0]:
-                best = (t, r)
-        if best is not None:
-            t, r = best
+            good.append((t, r))
+        good.sort(key=lambda pair: pair[0])
+        if good:
+            search["rows"] = [_kept_row(r, t, now) for t, r in good[:NEXT_KEEP_ROWS]]
+            search["searched_at"] = _iso(now)
+            t, r = good[0]
             found = {"flight_number": r.get("flight_number"), "airline": r.get("airline"),
                      "time": _clock(t), "tz": _tz_label(r.get("departure_scheduled")),
                      "day": _day_label(t, now), "date": t.date().isoformat(),
@@ -647,6 +855,10 @@ def _search_next(facts, dto, now, search, lookup_next, days):
             return found, search
     if search["days_searched"] >= NEXT_MAX_DAYS:
         search["done"] = True
+        # NOTHING FOUND IS ALSO A RESULT, AND IT IS DATED. The drawer has to be
+        # able to say "we looked, an hour ago, and there was nothing" rather
+        # than showing an empty list that could equally mean nobody has asked.
+        search["searched_at"] = _iso(now)
     return None, search
 
 
@@ -688,14 +900,26 @@ def render(msg, owned=True, same_city=1, same_time=1):
             return "%s is cancelled. The next one leaves %s at %s, %s %s." % (
                 s, nxt.get("day"), nxt.get("time"), nxt.get("airline") or "", nxt.get("flight_number") or "")
         if v.get("none_within_days"):
-            return "%s is cancelled. Nothing else is in the schedule for the next %d days, which is as far as the schedule reaches." % (s, v["none_within_days"])
+            # NOT "AS FAR AS THE SCHEDULE REACHES", WHICH STOPPED BEING TRUE.
+            # That clause was honest while the search ran to the timetable's own
+            # sixty-day limit; it now stops at a week, and saying the schedule
+            # ends there would be the app inventing an absence. It says what it
+            # did instead: it looked a week ahead. The week is NEXT_MAX_DAYS in
+            # words -- change one, change both, and the same sentence again
+            # under NEXT_FLIGHT below.
+            return "%s is cancelled. Nothing else on this route in the next week." % s
         return "%s is cancelled. Terminal is looking for the next departure and will tell you." % s
     if k == NEXT_FLIGHT:
         nxt = v.get("next")
         if nxt:
             return "The next flight to %s leaves %s at %s, %s %s." % (
                 city_to, nxt.get("day"), nxt.get("time"), nxt.get("airline") or "", nxt.get("flight_number") or "")
-        return "No flight to %s is in the schedule for the next %d days, which is as far as the schedule reaches." % (city_to, v.get("none_within_days") or NEXT_MAX_DAYS)
+        # THE SAME SENTENCE, PLUS THE CITY. This one arrives on its own, hours
+        # after the cancellation it follows, so it cannot lean on a subject line
+        # the reader is still looking at -- "this route" alone would not say
+        # which. See the cancelled branch for why the schedule is no longer
+        # claimed to end here.
+        return "Nothing else to %s on this route in the next week." % city_to
     if k == CANCEL_WITHDRAWN:
         return "%s is no longer showing as cancelled. Scheduled %s from %s." % (s, v.get("scheduled"), city_from)
     if k == GATE:

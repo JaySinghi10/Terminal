@@ -176,12 +176,33 @@ check("a future touchdown is refused and downgraded to UNKNOWN",
 
 print()
 print("-- diversion --")
+# ── IATA, NOT THE ICAO FR24 SENDS. This assertion used to expect "VOMM" and
+# the translation is the point: every surface in the app speaks IATA, and the
+# alternative was shipping an airport map to the device. See _diversion_iata.
 with_fetch([leg(actual="VOMM")])
 r = fr24.landing_for("6E5071", date="2026-09-06", destination_iata="BLR")
-check("a diversion is reported rather than hidden", r["diverted_to"] == "VOMM", r)
+check("a diversion is reported, translated to the code the app speaks", r["diverted_to"] == "MAA", r)
 with_fetch([leg(actual="VOBL")])
 r = fr24.landing_for("6E5071", date="2026-09-06", destination_iata="BLR")
 check("arriving where it was going is not a diversion", r["diverted_to"] is None, r)
+# ── AND THE THREE WAYS IT MUST REFUSE TO GUESS ──────────────────────────────
+# The old guard compared the actual airport against OUR REQUEST, which is None
+# whenever the caller sent no destination or one outside the table -- and since
+# FR24 fills dest_icao_actual on every leg, that read every ordinary arrival as
+# a diversion to the airport it had just arrived at. The comparison is now the
+# leg against itself, so none of these three can assert one.
+with_fetch([leg(actual="VOBL")])
+r = fr24.landing_for("6E5071", date="2026-09-06")
+check("no destination asked about is still not a diversion", r["diverted_to"] is None, r)
+with_fetch([leg(actual="VOMM")])
+r = fr24.landing_for("6E5071", date="2026-09-06", destination_iata="ZZZ")
+check("an untranslatable destination is still not a diversion on its own",
+      r["diverted_to"] == "MAA", r)
+# AN AIRPORT OUTSIDE THE TABLE TRAVELS AS ICAO rather than as null: a diversion
+# to a small field is still true and still worth printing.
+with_fetch([leg(actual="ZZZZ")])
+r = fr24.landing_for("6E5071", date="2026-09-06", destination_iata="BLR")
+check("an airport the table cannot name travels untranslated", r["diverted_to"] == "ZZZZ", r)
 
 print()
 print("-- configuration and input --")

@@ -770,6 +770,11 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
     current_landing = landing if landing is not None else (doc or {}).get("landing")
     prior_ns = (doc or {}).get("notify")
     new_ns, messages = prior_ns, []
+    # BOUND BEFORE THE BRANCH, NOT INSIDE IT. The state write below is a closure
+    # that reads this, and it runs on EVERY poll -- including the ones that skip
+    # the block under it, where a prior poll's stored search would otherwise
+    # have it reading a name that was never bound.
+    onward = None
     if current_dto and (new_dto or landing is not None or searching):
         def lookup_next(origin, dest, day):
             # A dated board is two provider calls; counted against this run's
@@ -843,6 +848,29 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
             # The last-told state and the outbox. Nothing drains the outbox yet;
             # it is bounded inside notify.decide.
             d["notify"] = new_ns
+            # ── AND THE BLOCK THE DRAWER READS, BESIDE IT RATHER THAN INSIDE ──
+            #
+            # ITS OWN KEY, because it has its own reader. `notify` is the
+            # record of what this server has TOLD somebody and is written and
+            # read by the push path alone; this is what the DEVICE asks for.
+            # Serving a response out of the middle of the notification ledger
+            # would tie a wire shape to a state machine that changes for
+            # reasons the wire does not care about.
+            #
+            # WRITTEN ONLY WHEN THERE IS A SEARCH, and absent otherwise. Every
+            # flight that is running has no alternatives block at all, which is
+            # what the endpoint returns 404-shaped emptiness for; a block of
+            # nulls on every healthy flight would be a lie shaped like data.
+            #
+            # REBUILT EVERY POLL RATHER THAN APPENDED TO. classify_alternatives
+            # is pure over the search and the next leg, both of which can move
+            # -- the onward leg's own departure is retimed by its own poll --
+            # so a stored verdict could quietly outlive the times it was
+            # computed from. Recomputing costs nothing and cannot go stale.
+            search = new_ns.get("next_search")
+            if search and (search.get("rows") or search.get("searched_at")):
+                d["alternatives"] = notify.alternatives_block(
+                    current_dto, onward, search, now)
         if changes:
             pending = list(d.get("pending") or [])
             pending.append({"at": pollstate._iso(now), "tier": tier,
