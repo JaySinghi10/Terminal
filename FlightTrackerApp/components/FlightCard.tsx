@@ -311,19 +311,46 @@ export type FlightData = {
 // how the open card and the row beneath it come to disagree by a hex digit.
 export type DisruptTone = 'cancelled' | 'diverted';
 
-export const DISRUPT_FILL: Record<DisruptTone, string> = {
-  cancelled: 'rgba(248,113,113,0.13)',
-  diverted: 'rgba(251,191,36,0.13)',
+// ── AND IT IS OPAQUE, WHICH IS THE ONLY WAY THE TWO SURFACES MATCH ──────────
+//
+// THEY DID NOT MATCH, AND A TRANSLUCENT FILL IS WHY. The same rgba over two
+// different grounds is two different colours:
+//
+//   the collapsed row sat on the PAGE, rgb(10,10,10), and the tint REPLACED
+//   CARD_FILL rather than layering over it -- one backgroundColor overriding
+//   another in a style array -- so it composited to about rgb(41,23,23);
+//   the expanded card sat on GLASS, whose ground is a blur under 22% black and
+//   is deliberately the darkest thing on the screen -- see SHEET_FILL, which
+//   argues for exactly that -- so the identical tint composited nearer
+//   rgb(34,16,16).
+//
+// A DARKER RED UNDER THE SAME NAME. The difference is small in arithmetic and
+// plain on a screen, because the eye reads two versions of one state side by
+// side rather than each on its own.
+//
+// SO THE VALUE IS THE COMPOSITE, STATED ONCE. These are the tint over the page
+// ground, computed and frozen: a surface that does not ask what is behind it
+// cannot disagree with another surface about what it is.
+//
+// IT COSTS THE GLASS ON A DISRUPTED CARD, which is the trade and is worth
+// naming. An opaque fill hides the blur underneath it. A disrupted card is not
+// a live surface -- no progress, no countdown, no gate -- and a guaranteed
+// match with the row beneath it is worth more here than a material effect. The
+// blur is also what made the match impossible: its ground varies with whatever
+// the card happens to be over, so any translucent value would be right on one
+// screen and wrong on the next.
+export const DISRUPT_SURFACE: Record<DisruptTone, string> = {
+  cancelled: 'rgb(41,23,23)',
+  diverted: 'rgb(41,34,13)',
 };
-export const DISRUPT_EDGE: Record<DisruptTone, string> = {
-  cancelled: 'rgba(248,113,113,0.45)',
-  diverted: 'rgba(251,191,36,0.45)',
-};
-// The pill behind the word, at the softer alpha a small filled box wants.
-export const DISRUPT_PILL: Record<DisruptTone, string> = {
-  cancelled: 'rgba(248,113,113,0.18)',
-  diverted: 'rgba(251,191,36,0.18)',
-};
+
+// DISRUPT_FILL, DISRUPT_PILL AND DISRUPT_EDGE WERE HERE AND ALL THREE HAVE GONE
+// WITH THEIR LAST CALLERS. The fill was the translucent rgba(248,113,113,0.13)
+// and rgba(251,191,36,0.13) that DISRUPT_SURFACE above is the frozen composite
+// of; every surface takes the opaque value now, for the reason stated there.
+// The pill tint went with the pill, which a disrupted card no longer draws at
+// all. The edge was the coloured 0.45 border on the trip card and the two
+// collapsed rows, and it went with every other border on My Flights.
 
 // THE ONE PLACE THE TWO WORDS BECOME A TONE. Everything else asks this rather
 // than testing the status twice and getting it half right the second time.
@@ -3886,15 +3913,14 @@ export function FlightCard({
                   // Diverted is amber: it happened, somewhere else. See
                   // DISRUPT_FILL.
                   //
-                  // A backgroundColor HERE IS NOT WHAT PAINTS IT. sheetShell
-                  // carries no fill of its own -- the blur samples what is behind
-                  // it, so the fill is a SIBLING drawn after the blur, see
-                  // GlassLayers -- and a colour set here lands behind that
-                  // sibling and is washed out by it. That is why the card read
-                  // weaker than the flat collapsed row at the same alpha. The
-                  // tint that actually shows is the overlay below, beside the
-                  // edge. This one stays because it is what the card is when the
-                  // glass cannot draw.
+                  // AND NOTHING IS SET HERE, WHICH IS DELIBERATE. sheetShell
+                  // carries no fill of its own -- the blur samples what is
+                  // behind it, so the fill is a SIBLING drawn after the blur,
+                  // see GlassLayers -- and a colour set on the shell lands
+                  // BEHIND that sibling and is washed out by it. That is why an
+                  // earlier attempt at this read weaker on the card than on the
+                  // flat collapsed row at the identical alpha. The surface that
+                  // actually paints is the overlay below, beside the edge.
                   // THE TOP EDGE IS THE SCREEN'S, so there must not be a corner
                   // on it. Squaring the two upper corners and paying the safe
                   // area back as padding is what lets the surface run up behind
@@ -4120,15 +4146,22 @@ export function FlightCard({
                 <View
                   style={[
                     g.sheetEdge, s.airportCardEdge,
-                    // AND THE EDGE CARRIES IT, which is what turns a tint into a
-                    // shape. sheetEdge's own note makes this argument already:
-                    // at 4.5% white a fill alone barely registers, and one pixel
-                    // of border is what says "this is an object" rather than "a
-                    // slightly different patch of page". A soft fill needs the
-                    // same help. Not the status colour at full strength: an
-                    // outlined red box is an alert dialog, and this is a card
-                    // that has bad news on it.
-                    disruptTone !== null && { borderColor: DISRUPT_EDGE[disruptTone] },
+                    // ── AND THE TRIP CARD HAS NO EDGE AT ALL ────────────────
+                    //
+                    // THE DISRUPTED CARD ALREADY LOOKED LIKE THIS and nobody
+                    // designed it that way: the opaque surface is drawn as a
+                    // sibling AFTER this border and covers it, so a cancelled
+                    // card has been borderless since that fill went in. Seen
+                    // beside the bordered healthy cards on the same screen, the
+                    // borderless one read as the deliberate version -- so the
+                    // rest of My Flights matches it rather than the reverse.
+                    //
+                    // tripVariant IS THE GATE, AND IT IS THE WHOLE SCOPE. This
+                    // component draws the card on Home and in Search as well,
+                    // and both keep their edge; that flag is passed from one
+                    // place in the app -- the trip list -- so the change cannot
+                    // reach a screen it was not asked for.
+                    tripVariant && { borderWidth: 0 },
                     // AND IT STARTS BELOW THE CAP. Squaring the corners killed
                     // the arcs, but the LEFT AND RIGHT borders still ran from
                     // y=0 down -- two 1px verticals at rgba(255,255,255,0.08),
@@ -4163,7 +4196,11 @@ export function FlightCard({
                   <View
                     style={[
                       g.sheetEdge, s.airportCardEdge,
-                      { borderWidth: 0, backgroundColor: DISRUPT_FILL[disruptTone] },
+                      // DISRUPT_SURFACE, NOT DISRUPT_FILL: opaque, so this card
+                      // and the collapsed row beneath it land on one colour
+                      // rather than on one rgba over two different grounds.
+                      // See DISRUPT_SURFACE for what that cost.
+                      { borderWidth: 0, backgroundColor: DISRUPT_SURFACE[disruptTone] },
                       mapVariant && {
                         top: insets.top,
                         borderTopLeftRadius: 0,
@@ -4233,7 +4270,7 @@ export function FlightCard({
                     single flow child means flex-start -- it would put the pill at
                     the left edge of every trip card. Centring is now right for
                     every variant, so there is nothing left for it to override. */}
-                <View style={s.airportHeadRow}>
+                <View style={[s.airportHeadRow, disruptTone !== null && s.airportHeadRowOff]}>
                   {/* THE WORD IN A CONTAINER, WHICH IT HAS NEVER HAD. It floated
                         on the card as loose text -- the only label in the app
                         carrying a status colour with nothing to carry it. A pill
@@ -4318,26 +4355,34 @@ export function FlightCard({
                     {tripVariant && tripPhase === 'air' && (
                       <View style={s.tripPulseSpacer} />
                     )}
-                    {flightRecord !== null && (
+                    {/* ── AND ON A DISRUPTED CARD THERE IS NO PILL AT ALL ────
+                        IT SAID CANCELLED TWICE. The headline below says it at
+                        28pt and the pill said it again at 11 in the same
+                        column of the same card, which is not chrome supporting
+                        a headline -- it is the same word competing with itself
+                        at two sizes.
+                        AND NOTHING REPLACES IT, because there is nothing else
+                        for it to say. In every other phase the pill carries the
+                        flight's current status; on this card the status IS the
+                        headline, and a pill holding the second-best fact would
+                        be a slot being filled rather than a thing worth
+                        reading.
+                        THE ROW IS HELD OPEN INSTEAD. This pill is the head
+                        row's only child in flow -- the leg tag and the
+                        countdown are both absolute -- so without it the row
+                        collapses to nothing and "LEG 2 OF 3" lands on the
+                        identity line beneath it. airportHeadRowOff is the
+                        pill's own height, stated so the row keeps it. */}
+                    {flightRecord !== null && disruptTone === null && (
                       <View style={[
                         s.airportHeadPill,
                         flight.statusColor === CD_GREEN && s.airportHeadPillLive,
-                        // THE SAME RULE THE GREEN ONE FOLLOWS, in the other
-                        // direction. The pill is neutral by default and tinted
-                        // for exactly one state; there are two now, and the
-                        // second is the one that matters more.
-                        //
-                        // AND IT GROWS. CANCELLED was eleven points of mono in a
-                        // small box at the top of a card that had otherwise gone
-                        // quiet -- the most important word on the screen, set
-                        // smaller than the flight number. The pill is already
-                        // where the eye starts; this makes what is in it match
-                        // what it is worth.
-                        disruptTone !== null && {
-                          backgroundColor: DISRUPT_PILL[disruptTone],
-                          paddingHorizontal: 12,
-                          paddingVertical: 6,
-                        },
+                        // GREEN IS THE ONLY TINT LEFT HERE. A disrupted tint
+                        // lived on this line for two rounds -- first enlarging
+                        // the pill, then colouring it -- and both are gone with
+                        // the pill itself: this element does not render at all
+                        // on a disrupted card now, so a branch testing for one
+                        // could never be reached. See the gate above.
                       ]}>
                         {/* ── THE CARD'S OWN WORD, NOT effectiveStatus's ──
                             IT RENDERED StatusWord AND THREW AWAY THE BETTER WORD.
@@ -4370,11 +4415,9 @@ export function FlightCard({
                           style={[
                             s.airportHeadStatus,
                             { color: flight.statusColor },
-                            // 20 AGAINST 11, which is the card's own headline
-                            // size -- airportDate and the movement times are
-                            // both 20. The word is not decoration on a disrupted
-                            // card; it is the card's subject.
-                            disruptTone !== null && s.airportHeadStatusOff,
+                            // THE PILL'S WORD STAYS AT 11 IN EVERY PHASE. The
+                            // disrupted card says it at 28 in its own headline
+                            // slot instead; see the off branch.
                           ]}
                           numberOfLines={1}
                         >
@@ -4405,6 +4448,41 @@ export function FlightCard({
                     && countdown !== null && (
                     <Text style={[s.tripCountdown, s.airportHeadTail]} numberOfLines={1}>
                       {countdown.value}
+                    </Text>
+                  )}
+                  {/* ── AND ON A DISRUPTED CARD THE ROUTE TAKES THAT SLOT ─────
+                      THE TAIL IS FREE HERE AND ONLY HERE. The countdown above
+                      is gated to the two live phases -- an interval to a
+                      departure that will not happen is a number about nothing,
+                      as its own note says -- so on a cancelled or diverted card
+                      nothing has ever been pinned to the right edge. The two
+                      can therefore never collide: the condition that renders
+                      one is the negation of the condition that renders the
+                      other.
+
+                      IT IS A LOCATOR, WHICH IS WHY IT IS UP HERE. Paired across
+                      the row from "LEG 2 OF 3", the route answers the same kind
+                      of question -- which leg of what journey is this -- and
+                      both are chrome that frames the news rather than the news
+                      itself. Below the headline it was competing with it; at
+                      the top it labels the card.
+
+                      THE SAME 13pt MONO AT THE SAME INK the collapsed row now
+                      gives a disrupted route, so the row and the card it opens
+                      into say this fact in one voice.
+
+                      AND A DIVERTED FLIGHT STILL REFUSES THE CLAIM. The arrival
+                      code on the record is the ORIGINAL destination and nothing
+                      has replaced it, so "BOM → DXB" would assert a place the
+                      aircraft is not reaching. The question mark is the
+                      destination slot left honestly empty -- with DIVERTED in
+                      amber directly beneath it, it reads as the one thing this
+                      app does not yet know rather than as a missing value. */}
+                  {tripVariant && tripPhase === 'off' && (
+                    <Text style={[s.tripOffRoute, s.airportHeadTail]} numberOfLines={1}>
+                      {tripEffective === 'diverted'
+                        ? `${flight.from} → ?`
+                        : `${flight.from} → ${flight.to}`}
                     </Text>
                   )}
                 </View>
@@ -4803,28 +4881,112 @@ export function FlightCard({
                         A CANCELLED FLIGHT KEEPS ITS FULL ROUTE. Nothing flew, so
                         nothing went anywhere else: where it was going remains a
                         fact about the flight and is what identifies it. */}
+                    {/* ── THE ORDER OF IMPORTANCE, PUT BACK THE RIGHT WAY UP ──
+                        THE CARD RANKED ITS FACTS route > status > timetable and
+                        every one of those places was wrong for a flight that is
+                        not operating:
+
+                          the ROUTE took 28pt of white, the largest thing on the
+                          card, for the one fact the flight is no longer
+                          delivering;
+                          the WORD took 20pt in a pill, beaten by the route it
+                          contradicts;
+                          the SCHEDULED DEPARTURE took 20pt in pure white --
+                          which is this card's treatment for a LIVE clock -- so
+                          the boldest clock on the card was a departure that will
+                          not happen, marked hypothetical only by an 11pt label.
+
+                        IT IS status > route > timetable NOW, in the same three
+                        slots the other phases use: identity, headline, detail.
+                        The word simply takes the headline slot the route had. */}
                     {tripPhase === 'off' && (
                       <>
+                        {/* ── THE DATELINE, ABOVE THE HEADLINE ───────────────
+                            THE CARD HAD NO DATE LINE AT ALL IN THIS PHASE. The
+                            day was carried as a suffix on the scheduled
+                            departure -- "14:35 · 5 Sep" -- at 12pt in half ink,
+                            which is the smallest thing on the card, for the
+                            fact that decides whether this news is about this
+                            afternoon or about a fortnight from now.
+
+                            IT SITS WHERE A DATELINE SITS: above the headline,
+                            set smaller than it and quieter, framing the word
+                            rather than competing with it. routeDateLabel and
+                            hasTime are the same pair the live card's date uses,
+                            in the same order -- that helper passes through what
+                            it cannot parse, so "N/A" would survive formatting
+                            and render as a date.
+
+                            15pt DIM IS THE COLLAPSED ROW'S OWN DISRUPTED DATE,
+                            value for value. The row and the card it opens into
+                            demote this fact by the same amount. */}
+                        {hasTime(flight.date) && (
+                          <Text style={s.tripOffDate} numberOfLines={1}>
+                            {routeDateLabel(flight.date).toUpperCase()}
+                          </Text>
+                        )}
+                        {/* THE HEADLINE, AT THE ROUTE'S OWN SIZE AND IN THE
+                            STATUS COLOUR. This is the card's subject and is now
+                            drawn as such. The pill above still carries the word
+                            at its ordinary 11pt, which is the card's status
+                            chrome in every phase; it is no longer enlarged,
+                            because two sizes of one word competing was the
+                            problem rather than the fix. */}
+                        <Text
+                          style={[s.tripOffWord, { color: getStatusColor(tripEffective) }]}
+                          numberOfLines={1}
+                        >
+                          {tripEffective === 'diverted' ? 'DIVERTED' : 'CANCELLED'}
+                        </Text>
+                        {/* THE ROUTE WAS HERE AND HAS GONE TO THE HEAD ROW, where
+                            it is pinned opposite the leg tag; see the note there
+                            for why a locator belongs beside a locator and for
+                            what a diverted card prints in place of a
+                            destination it cannot name.
+
+                            WHICH FLIGHT, ON WHOSE METAL, NOW BELOW THE WORD. It
+                            led this block before -- identity above headline, the
+                            order the live phases use, where the headline is the
+                            route and the route needs a subject introduced first.
+                            Here the headline is a STATUS, which needs no
+                            introduction: what happened comes first and what it
+                            happened to comes after. No `aircraft` flag, as
+                            before: a cancelled flight is read to find out what
+                            happened, and the metal is not part of that. */}
                         <TripIdent flight={flight} />
-                        {/* null RATHER THAN A ROUTE, ON A DIVERTED FLIGHT. See
-                            TripRoute: the arrow goes with the destination, so
-                            what renders is the origin alone. */}
-                        <TripRoute
-                          from={flight.from}
-                          to={tripEffective === 'diverted' ? null : flight.to}
-                        />
-                        <TripColumn
-                          head="Scheduled Departure"
-                          time={clock24(flight.depIso, flight.dep)}
-                          // NO TONE ON A FLIGHT THAT IS NOT RUNNING. This column
-                          // prints the SCHEDULED departure of a cancelled or
-                          // diverted flight -- see the note above -- and a
-                          // timetable is not early, late or on time. It is what
-                          // the flight was sold at, in white.
-                          tone={null}
-                          when={whenLine(flight.depIso, flight.dep)}
-                          rows={[]}
-                        />
+                        {/* ── THE TIMETABLE, AS REFERENCE RATHER THAN NEWS ────
+                            ONE LINE, NOT A COLUMN. TripColumn is built for the
+                            two-column row every other phase puts it in, and its
+                            tripCol carries flex: 1 -- so rendered alone here it
+                            claimed half the card and left the other half empty,
+                            which is what made this card read as half-drawn.
+
+                            AND DIMMED, AT THE QUALIFIER TIER. tone={null} was
+                            chosen so a timetable would not be called early or
+                            late, which was right, but null renders WHITE and
+                            white is this card's strongest clock. A departure
+                            nobody will fly is reference: the label and the time
+                            on one quiet line, and nothing else.
+
+                            NEITHER whenLine NOR zoneLabel, AND BOTH WENT FOR THE
+                            SAME REASON. whenLine returned the day AND the zone
+                            -- "5 Sep · GMT+5:30" -- and the day now has its own
+                            line above the headline, so the whole helper would
+                            print the date twice on one card. zoneLabel was what
+                            replaced it, keeping the half that had nowhere else
+                            to go; that half is gone too. A TIME ON A CARD IN
+                            THIS APP IS LOCAL TO ITS AIRPORT, everywhere,
+                            without being told so each time -- the movement
+                            rows, the tiles and the route board all print local
+                            clocks bare. Stating the offset on this one line
+                            made a cancelled departure the single place the app
+                            hedges about which clock it means, and it is the
+                            line that least needs qualifying: the flight is not
+                            going. */}
+                        <Text style={s.tripOffWhen} numberOfLines={1}>
+                          <Text style={s.tripOffWhenLabel}>{'SCHEDULED DEPARTURE  '}</Text>
+                          {clock24(flight.depIso, flight.dep)}
+                        </Text>
                       </>
                     )}
 
@@ -5486,6 +5648,12 @@ const s = StyleSheet.create({
   // 1. A pill that spans the card is not a pill, so the container hugs the word
   // and the ROW is what centres it now. Same appearance, different mechanism.
   airportHeadRow: { flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  // THE PILL'S OWN HEIGHT, KEPT WHEN THE PILL IS GONE. A disrupted card draws
+  // no pill -- see the call site -- and the pill is the only child this row
+  // lays out, so without a floor the row measures zero and the absolutely
+  // positioned leg tag drops onto the line below. Eleven points of line plus
+  // the pill's three of padding at each end.
+  airportHeadRowOff: { minHeight: 20 },
   // THE PILL. Neutral by default and green only when the flight is in the air --
   // see the note at the call site. Both fills are getStatusBg's own values for
   // 'scheduled' and 'active', so nothing new enters the palette.
@@ -5496,12 +5664,11 @@ const s = StyleSheet.create({
     paddingVertical: 3,
   },
   airportHeadPillLive: { backgroundColor: "#4ade8012" },
-  // THE DISRUPTED WORD'S OWN SIZE. 20 is this card's headline -- airportDate and
-  // the movement times both sit there -- and lineHeight is stated so the pill's
-  // height is a sum rather than a font's opinion, the same argument the sheet's
-  // own pill makes. The tracking comes down from airportHeadStatus's 1: letter
-  // spacing that reads as deliberate at 11 reads as a gap at 20.
-  airportHeadStatusOff: { fontSize: 20, lineHeight: 24, letterSpacing: 0.5 },
+  // airportHeadStatusOff WAS HERE AND HAS GONE WITH ITS CALLER. It enlarged the
+  // pill's word to 20 when the pill was the only place a disrupted card said
+  // what had happened; the word is the card's own 28pt headline now, and two
+  // sizes of it ten points apart was the competition this card was suffering
+  // from. The pill is chrome again: see tripOffWord.
   // THE HEAD ROW'S ONE CHILD IN FLOW: the pill, its dot, and the spacer that
   // balances the dot. See the call site -- this being the only thing the row lays
   // out is what centres the pill and what holds the row open.
@@ -5657,6 +5824,38 @@ const s = StyleSheet.create({
   },
   // ONE LINE, THREE FAMILIES. The size and colour live on the parent so a nested
   // Text only has to say which family it takes.
+  // ── THE DISRUPTED CARD'S THREE LINES ──────────────────────────────────────
+  //
+  // THE HEADLINE takes tripRoute's own size and weight, because it takes
+  // tripRoute's slot: 28 mono bold, tracked the same -0.5 so a long word like
+  // CANCELLED sets at the width the route used to. The colour is the status's
+  // and is passed in rather than fixed here -- red for cancelled, amber for
+  // diverted. See DISRUPT_FILL for why those two differ.
+  tripOffWord: { fontSize: 28, letterSpacing: -0.5, fontFamily: MONO_BOLD },
+  // THE DATELINE. 15pt MONO_BOLD in the label grey -- larger than the identity
+  // line beneath the word, so it reads as the frame around the headline rather
+  // than as one more detail, and nowhere near white, which on this card is the
+  // treatment for a LIVE value. It is the collapsed row's disrupted date to the
+  // point and the shade; see legDateOff there.
+  tripOffDate: { fontSize: 15, color: "rgba(226,226,226,0.4)", fontFamily: MONO_BOLD },
+  // THE ROUTE, at tripIdent's size and ink: the identity tier, which is where a
+  // fact that identifies the flight belongs once it is no longer the news. Mono
+  // because it is airport codes.
+  //
+  // IT IS COMPOSED WITH airportHeadTail NOW and no longer renders in the body at
+  // all -- this entry is typography only, and the position comes from the style
+  // it is paired with. See the call site in the head row.
+  tripOffRoute: { fontSize: 13, color: "rgba(226,226,226,0.4)", fontFamily: MONO },
+  // THE TIMETABLE, at the card's qualifier tier -- tripColWhen's 12 and its
+  // half ink -- which is the register this card already uses for "context for
+  // the number above", and is now the register for the number itself.
+  tripOffWhen: { fontSize: 12, color: "rgba(226,226,226,0.5)", fontFamily: MONO },
+  // Its label, in the heading treatment every other group label on this card
+  // takes. Nested inside the line rather than stacked above it, because one
+  // line is what stops this becoming a column again.
+  tripOffWhenLabel: {
+    fontFamily: SANS_SEMI, color: "rgba(226,226,226,0.4)", letterSpacing: 0.5,
+  },
   tripIdent: { fontSize: 13, color: "rgba(226,226,226,0.4)" },
   tripIdentMono: { fontFamily: MONO },
   tripIdentSans: { fontFamily: SANS },

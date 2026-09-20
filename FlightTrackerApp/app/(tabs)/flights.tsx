@@ -162,7 +162,7 @@ import {
   // beneath it and the card above cannot come to disagree by a hex digit --
   // they are one treatment at two sizes. Cancelled is red and diverted is
   // amber; see DISRUPT_FILL for why they are not one colour.
-  DISRUPT_FILL, DISRUPT_EDGE, disruptToneOf,
+  DISRUPT_SURFACE, disruptToneOf,
   // AND THE RULE THE OPEN CARD USES TO CALL A FLIGHT LATE. Imported rather
   // than restated: a scheduled flight with a positive departure delay reads
   // DELAYED on the card, and a row underneath it deciding that question its
@@ -1339,17 +1339,18 @@ function UnpublishedLeg({ leg, open, onToggle }: {
         //
         // SO THE SURFACE IS THE CANCELLED ONE IN BOTH CASES, and the word is
         // what tells them apart.
-        (cancelled || bookingOff) && { backgroundColor: DISRUPT_FILL.cancelled },
+        (cancelled || bookingOff) && { backgroundColor: DISRUPT_SURFACE.cancelled },
       ]}
       activeOpacity={0.7}
       onPress={onToggle}
       accessibilityRole="button"
     >
       <View
-        style={[
-          st.cardEdge,
-          (cancelled || bookingOff) && { borderColor: DISRUPT_EDGE.cancelled },
-        ]}
+        // NO DISRUPTED BORDER HERE EITHER. cardEdge's own SURFACE_EDGE is
+        // already fully transparent, so this row has never drawn a visible
+        // edge; the coloured one added with the disrupted fill was the only
+        // border on it, and it goes with the trip card's. See the note there.
+        style={st.cardEdge}
         pointerEvents="none"
       />
       <View style={st.legSplit}>
@@ -1605,15 +1606,12 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   // not disrupted.
   return (
     <TouchableOpacity
-      style={[st.compactLeg, off !== null && { backgroundColor: DISRUPT_FILL[off] }]}
+      style={[st.compactLeg, off !== null && { backgroundColor: DISRUPT_SURFACE[off] }]}
       activeOpacity={0.7}
       onPress={onPress}
       accessibilityRole="button"
     >
-      <View
-        style={[st.cardEdge, off !== null && { borderColor: DISRUPT_EDGE[off] }]}
-        pointerEvents="none"
-      />
+      <View style={st.cardEdge} pointerEvents="none" />
       <View style={st.legSplit}>
         <View style={st.legIdent}>
           {/* ── THE WORD FIRST, AND AT THE DATE'S OWN SIZE ─────────────────
@@ -1641,14 +1639,38 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
               {`DELAYED${delayWords}`}
             </Text>
           )}
-          {dated !== null && <Text style={st.legDate}>{dated}</Text>}
-          <Text style={st.legIdentNum} numberOfLines={1}>{leg.flightNumber}</Text>
-          {leg.airline !== '' && (
-            <Text style={st.legIdentName} numberOfLines={1}>{leg.airline}</Text>
+          {dated !== null && (
+            <Text style={[st.legDate, off !== null && st.legDateOff]}>{dated}</Text>
           )}
+          {/* ── WHICH FLIGHT, ON WHOSE METAL, IN ONE LINE ─────────────────
+              TWO LINES FOR TWO FACTS THAT ARE READ TOGETHER. The number and the
+              carrier were stacked, each on its own 13pt line with 3 of gap
+              between them, which spent two lines of a compact row on one
+              thought and pushed the times column's rows out of step with it.
+
+              THE OPEN CARD HAS SET THEM ON ONE LINE ALL ALONG -- see TripIdent,
+              whose note makes this argument -- so this is the row catching up
+              with the card it collapses from rather than a new idea. Same
+              mechanism too: nested Texts, because a flight number is machine
+              data and takes mono while an airline is a name and takes Inter,
+              and a nested Text inherits size and colour and overrides only the
+              family.
+
+              THE SEPARATOR STAYS IN THE PARENT'S MONO, which is the dot's
+              family on the card. It is not wrapped, so it takes the line's own
+              family and colour and there is no third style to keep in step. */}
+          <Text style={st.legIdentNum} numberOfLines={1}>
+            {leg.flightNumber}
+            {leg.airline !== '' && (
+              <>
+                {'  ·  '}
+                <Text style={st.legIdentName}>{leg.airline}</Text>
+              </>
+            )}
+          </Text>
         </View>
         <View style={st.legTimes}>
-          <Text style={st.legTimeValue} numberOfLines={1}>
+          <Text style={[st.legTimeValue, off !== null && st.legRouteOff]} numberOfLines={1}>
             {`${leg.from.iata} → ${leg.to.iata}`}
           </Text>
           {cd !== null && (
@@ -3830,8 +3852,24 @@ const st = StyleSheet.create({
   // THE TRACKING IS THE CHIP'S, kept because it is what makes an upper-case
   // word read as a label rather than as a headline that happens to shout.
   legDisrupt: {
-    fontFamily: MONO_BOLD, fontSize: 17, letterSpacing: 1, marginBottom: 7,
+    fontFamily: MONO_BOLD, fontSize: 22, letterSpacing: 1, marginBottom: 7,
   },
+  // ── AND WHAT IT DISPLACES, ON A DISRUPTED ROW ONLY ───────────────────────
+  //
+  // THE DATE WAS 20 WHITE AND THE ROUTE 15 WHITE, which made the two brightest
+  // things on a cancelled row the two facts the cancellation has taken away:
+  // when it was going and where. The status word sat under them in colour but
+  // at a smaller size, so the row led with the timetable and mentioned the
+  // news second.
+  //
+  // THEY SWAP REGISTERS RATHER THAN DISAPPEARING. Both are still worth
+  // printing -- a cancelled leg is still identified by its date and its route
+  // -- so they drop to DIM at the sizes the identity lines beneath them
+  // already use, which is this file's own secondary ink rather than a new
+  // grey. The word keeps full-strength colour and is now the brightest thing
+  // on the row, which is the whole point.
+  legDateOff: { fontSize: 15, color: DIM },
+  legRouteOff: { fontSize: 13, color: DIM },
   // ── THE ROW'S INTERIOR, WHICH IS THE CARD'S GRID ──
   //
   // EVERY ENTRY BELOW IS components/FlightCard.tsx's, matched value for value so
