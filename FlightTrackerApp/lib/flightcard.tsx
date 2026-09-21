@@ -176,11 +176,17 @@ export function useFlightCardHost() {
   // one day is two instances the date cannot separate. Null where the caller
   // genuinely does not know — a flight number typed into the search box names no
   // airport, and guessing one there would be inventing an answer.
+  //
+  // `fresh` GOES TO THE PROVIDER. False for a lookup -- a search, a route row, a
+  // card being opened -- where the server's five-minute cache is exactly right.
+  // True only from refreshFlightCard, because a refresh is a person asking to
+  // be told what is true now. See flightUrl.
   const runFlightLookup = async (
     flightNumber: string,
     keepVisible = false,
     date: string | null = null,
     origin: string | null = null,
+    fresh = false,
   ): Promise<boolean> => {
     setError("");
     setSaveError("");
@@ -190,7 +196,7 @@ export function useFlightCardHost() {
     }
     setLoading(true);
     try {
-      const response = await fetch(flightUrl(flightNumber, date, origin));
+      const response = await fetch(flightUrl(flightNumber, date, origin, fresh));
       const data = await response.json();
 
       if (data.error || !response.ok) {
@@ -357,6 +363,8 @@ export function useFlightCardHost() {
       true,
       /^\d{4}-\d{2}-\d{2}$/.test(flight?.date ?? '') ? (flight?.date ?? null) : null,
       flightRecord.from.iata || null,
+      // FRESH. This is the button; see runFlightLookup.
+      true,
     );
     if (ok) showToast('updated');
   };

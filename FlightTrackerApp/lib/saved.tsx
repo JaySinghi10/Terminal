@@ -64,6 +64,11 @@ import {
   reconcile,
 } from './reminders';
 import { registerWatch, deregisterWatch, backfillWatches, watchScope } from './watch';
+// THE PASSIVE READER'S TWO HALVES: the wire, and the label that says when it
+// last ran. Both are their own files so that lib/flightstatus.tsx can read the
+// second without importing this one. See each file's note.
+import { fetchWatched } from './watched';
+import { CheckedContext, type CheckedAt } from './checked';
 // THE PENDING LEGS: flights the user has booked that the provider does not
 // carry yet. Their own store beside this one, never inside it -- see the note
 // at the top of lib/pendingRules.ts for why a pending leg is not a SavedFlight.
@@ -104,10 +109,22 @@ export const API_BASE = 'https://flight-tracker-970706733452.asia-south1.run.app
 // path that has no "?date=" on it — which is every route-row tap on an undated
 // board, the commonest case there is — would send a malformed URL and lose the
 // filter silently, which is the same class of fault this change exists to fix.
-export function flightUrl(number: string, date: string | null, origin: string | null): string {
+//
+// ── fresh IS WHAT A BUTTON MEANS ────────────────────────────────────────────
+//
+// THE SERVER KEEPS A FIVE-MINUTE CACHE ON /flight, AND THE POLLER FILLS IT. So a
+// refresh pressed thirty seconds after a poll came back with the poller's
+// answer and called it fresh -- and now that the app reads the poller's answer
+// once a minute anyway, a refresh that could return it would be a button that
+// did nothing at all. fresh=1 makes the server go to the provider, every time,
+// at two units. Every MANUAL refresh passes it; nothing else does.
+export function flightUrl(
+  number: string, date: string | null, origin: string | null, fresh = false,
+): string {
   const parts: string[] = [];
   if (date !== null && date !== '') parts.push(`date=${date}`);
   if (origin !== null && origin !== '') parts.push(`origin=${origin}`);
+  if (fresh) parts.push('fresh=1');
   return `${API_BASE}/flight/${number}${parts.length === 0 ? '' : `?${parts.join('&')}`}`;
 }
 
@@ -652,6 +669,40 @@ function refreshable(f: SavedFlight, now: number): boolean {
 // -- is precisely the record this whole exercise was about. Trusting the status
 // alone would rank the broken record last and leave it broken.
 const REFRESH_SOON_MS = 6 * 60 * 60 * 1000;
+
+// ── WHICH FLIGHTS THE OPEN APP KEEPS CURRENT ────────────────────────────────
+//
+// FROM SIX HOURS BEFORE DEPARTURE -- REFRESH_SOON_MS, the same line the app
+// already draws between "soon" and "not yet" -- UNTIL FORTY-FIVE MINUTES AFTER
+// LANDING, OR A BELT. The belt is published after touchdown and is the last
+// thing anybody standing in a terminal is waiting to be told; forty-five minutes
+// is the bag window's own length, and past it the record is history. A flight
+// that never gets a landing stops when the landing window does, three hours
+// past its arrival, which is the same point effectiveStatus gives up waiting.
+//
+// SCHEDULED, ESTIMATED OR ACTUAL, whichever the record has -- departureTs's own
+// precedence -- because the window has to open on the best time we hold.
+const WATCH_AFTER_LANDED_MS = 45 * 60 * 1000;
+
+export function watchLive(f: SavedFlight, now: number): boolean {
+  if (f.archivedAt !== null) return false;
+  const dep = departureTs(f);
+  if (dep === null || now < dep - REFRESH_SOON_MS) return false;
+  if ((f.to.baggage ?? '') !== '') return false;
+  const landed = landedInstant(f, now);
+  if (landed !== null) return now - landed <= WATCH_AFTER_LANDED_MS;
+  return !landingWindowClosed(arrivalTs(f), now);
+}
+
+// HOW OFTEN, AND HOW LONG THE SERVER'S ANSWER STANDS IN FOR THE DEVICE'S OWN.
+// One read a minute while the app is up. A flight the server reported inside
+// the last five minutes is one the device does not ask FR24 about itself: the
+// server asks at two to five minutes in the tiers that matter, which is at
+// least as often as the device ever did, and a credit spent twice on one
+// question is a credit wasted. If the server stops answering, five minutes
+// later the device's own sweep resumes on its own.
+const WATCH_EVERY_MS = 60 * 1000;
+const SERVER_SEEN_GRACE_MS = 5 * 60 * 1000;
 
 function refreshRank(f: SavedFlight, now: number): number {
   const eff = effectiveStatus(f, now);
@@ -1540,8 +1591,9 @@ export function SavedProvider({ children }: { children: ReactNode }) {
         // storage rather than off the screen, and it is also the one that writes
         // unconditionally, so a tag flight refreshed without it would replace a
         // saved BOM-DEL with DEL-BOM under the same id.
+        // FRESH, because a pull is a person asking. See flightUrl.
         const response = await fetch(
-          flightUrl(f.flightNumber, day, f.from.iata || null),
+          flightUrl(f.flightNumber, day, f.from.iata || null, true),
         );
         const data = await response.json();
         // THE PROVIDER ANSWERED, AND THE ANSWER WAS NO. Counted, not recorded
@@ -1689,6 +1741,14 @@ export function SavedProvider({ children }: { children: ReactNode }) {
   // non-event: it is what stops AeroDataBox declaring a landing while FR24 is
   // unreachable, and a check that wrote nothing on failure would look identical
   // to one that never ran.
+  // WHEN THE SERVER LAST ANSWERED FOR EACH FLIGHT, by id. Written by the
+  // passive reader below, read here by the sweep. A ref rather than state:
+  // nothing renders from it, and a state write per minute would re-render the
+  // provider for a bookkeeping fact.
+  const serverSeenRef = useRef<Map<string, number>>(new Map());
+  const serverWatched = useCallback((id: string, now: number) =>
+    (serverSeenRef.current.get(id) ?? 0) > now - SERVER_SEEN_GRACE_MS, []);
+
   const landingSweepRef = useRef(false);
   const landingSweep = useCallback(async (isCancelled: () => boolean) => {
     // ONE SWEEP AT A TIME. A slow network makes ticks overlap, and two sweeps
@@ -1701,7 +1761,12 @@ export function SavedProvider({ children }: { children: ReactNode }) {
       const due = list
         // A FIXTURE IS NEVER ASKED ABOUT. FR24 has never heard of ZZ907 and
         // the question costs a call to find that out. See isDevFixture.
-        .filter(f => !isDevFixture(f) && landingDue(f, arrivalTs(f), now))
+        // AND NOT ONE THE SERVER IS ALREADY WATCHING. Its landing arrives
+        // through /watched with everything else; asking FR24 again from here
+        // would spend a second credit on an answer the app is about to be
+        // handed. See SERVER_SEEN_GRACE_MS.
+        .filter(f => !isDevFixture(f) && !serverWatched(f.id, now)
+          && landingDue(f, arrivalTs(f), now))
         .slice(0, LANDING_SWEEP_MAX);
       if (due.length === 0) return;
 
@@ -1743,7 +1808,114 @@ export function SavedProvider({ children }: { children: ReactNode }) {
     } finally {
       landingSweepRef.current = false;
     }
+  }, [email, serverWatched]);
+
+  // ── THE PASSIVE READER ────────────────────────────────────────────────────
+  //
+  // ONCE A MINUTE WHILE THE APP IS IN FRONT, one request for every live flight,
+  // and nothing else. It reads what the poller has already stored -- see
+  // lib/watched.ts -- so it costs no provider unit, and it applies an answer
+  // only where the server holds something NEWER than the device does.
+  //
+  // NEWER MEANS THE PROVIDER'S TIME, NOT THE FETCH'S. The server corrects
+  // data_age_seconds before answering, so savedFlightFromApi's updatedAt is when
+  // the provider last spoke. Comparing that to the record's is the whole guard:
+  //
+  //   * a server copy the poller has not refreshed since the last read has the
+  //     SAME updatedAt and is not written -- so a quiet minute writes nothing
+  //     and re-renders nothing;
+  //   * a manual refresh has just fetched from the provider, so its updatedAt
+  //     is newer than any stored copy until the poller polls again -- so the
+  //     stored copy cannot overwrite it. When the poller DOES poll again its
+  //     answer is genuinely newer, and applying it is right.
+  //
+  // THE LANDING COMES WITH IT and is applied on the same rule against the
+  // device's own landingCheckedAt, through setFlightLanding, which never
+  // unwrites a touchdown it already holds.
+  //
+  // STOPPED THE MOMENT THE APP LEAVES THE FRONT. The interval is cleared on any
+  // AppState but 'active' and started again on return, with an immediate read
+  // so a screen coming back after an hour does not wait a minute to catch up.
+  //
+  // checkedAt IS THE ONLY STATE THIS WRITES EVERY MINUTE, and it is the label's.
+  // See lib/checked.ts for why it is not on the record.
+  const [checkedAt, setCheckedAt] = useState<CheckedAt>({});
+  const readingRef = useRef(false);
+  const readWatched = useCallback(async (isCancelled: () => boolean) => {
+    if (readingRef.current) return;
+    readingRef.current = true;
+    try {
+      const list = await getSavedFlights(email);
+      const now = Date.now();
+      // A FIXTURE HAS NO SERVER STATE and would be omitted anyway; skipped here
+      // so it is never even asked for. See isDevFixture.
+      const live = list.filter(f => !isDevFixture(f) && watchLive(f, now));
+      if (live.length === 0) return;
+      const got = await fetchWatched(API_BASE, live);
+      if (isCancelled() || got.length === 0) return;
+      const byKey = new Map(live.map(f => [`${f.flightNumber}:${f.flightDate}`, f]));
+      const seen: Record<string, number> = {};
+      let cur = list;
+      let latest: SavedFlight[] | null = null;
+      for (const w of got) {
+        const f = byKey.get(`${w.flightNumber}:${w.flightDate}`);
+        if (f === undefined) continue;
+        seen[f.id] = now;
+        const prev = cur.find(x => x.id === f.id) ?? f;
+        const rec = savedFlightFromApi(w.dto);
+        if (rec.updatedAt > prev.updatedAt) {
+          // f.id, not rec.id, for refreshFlights' reason: the record on disk is
+          // the one being updated, whatever id the answer would have built.
+          const next = await touchSavedFlight(email, rec, f.id);
+          if (next !== null) { cur = next; latest = next; }
+        }
+        if (w.landing !== null && w.landing.outcome !== 'error') {
+          const at = w.landingCheckedAt !== null ? Date.parse(w.landingCheckedAt) : NaN;
+          if (Number.isFinite(at) && at > (prev.landingCheckedAt ?? 0)) {
+            const next = await setFlightLanding(email, f.id, {
+              landedUtc: w.landing.landedUtc,
+              landingSource: w.landing.outcome === 'landed' ? 'fr24' : null,
+              landingCheck: w.landing.outcome,
+              divertedTo: w.landing.divertedTo,
+            });
+            cur = next; latest = next;
+          }
+        }
+      }
+      if (isCancelled()) return;
+      for (const id of Object.keys(seen)) serverSeenRef.current.set(id, now);
+      setCheckedAt(prevChecked => ({ ...prevChecked, ...seen }));
+      // ONE setState FOR THE WHOLE READ, and none at all when nothing was newer.
+      if (latest !== null) setSavedFlights(latest);
+    } catch {
+      // Silent, like the sweep. A read that fails leaves the screen saying
+      // exactly what it said, and the next minute tries again.
+    } finally {
+      readingRef.current = false;
+    }
   }, [email]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer !== null) return;
+      void readWatched(() => cancelled);
+      timer = setInterval(() => { void readWatched(() => cancelled); }, WATCH_EVERY_MS);
+    };
+    const stop = () => {
+      if (timer !== null) { clearInterval(timer); timer = null; }
+    };
+    if (AppState.currentState === 'active') start();
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') start(); else stop();
+    });
+    return () => {
+      cancelled = true;
+      stop();
+      sub.remove();
+    };
+  }, [readWatched]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2558,7 +2730,9 @@ export function SavedProvider({ children }: { children: ReactNode }) {
 
   return (
     <SavedContext.Provider value={value}>
-      {children}
+      <CheckedContext.Provider value={checkedAt}>
+        {children}
+      </CheckedContext.Provider>
     </SavedContext.Provider>
   );
 }

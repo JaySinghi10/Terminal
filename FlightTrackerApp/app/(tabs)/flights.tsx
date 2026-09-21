@@ -2946,7 +2946,9 @@ export default function Flights() {
   const refreshLeg = async (leg: SavedFlight) => {
     try {
       const day = ISO_DAY_RE.test(leg.flightDate) ? leg.flightDate : null;
-      const res = await fetch(flightUrl(leg.flightNumber, day, leg.from.iata || null));
+      // FRESH: this is the card's own refresh, and a refresh must never be
+      // answered from the server's copy. See flightUrl.
+      const res = await fetch(flightUrl(leg.flightNumber, day, leg.from.iata || null, true));
       const data = await res.json();
       if (data.error || !res.ok) { showToast('could not update'); return; }
       await refreshOne(savedFlightFromApi(data), leg.id);

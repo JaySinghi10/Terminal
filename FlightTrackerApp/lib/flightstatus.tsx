@@ -28,6 +28,9 @@ import { zonedIsoToTs, clock24 } from './time';
 // because the refresh loop and the archive split read it too; this file is one
 // more reader.
 import { effectiveStatus } from './saved';
+// WHEN THE APP LAST FETCHED A FLIGHT, for the label. Its own file, so that this
+// module can read it without adding to the import it already has from saved.
+import { useCheckedAt } from './checked';
 
 // Declared here rather than imported from a screen, for the same reason
 // profile.tsx and components/GlassTabBar.tsx declare their own: a module
@@ -190,7 +193,12 @@ function absoluteTime(f: SavedFlight, status: string): string {
 //
 // Cutting it here for everyone would have taken it off the rows too, which is
 // why it is a parameter rather than a deletion.
-function flightLineSegments(f: SavedFlight, now: number, hideAbsolute?: boolean): LineSeg[] {
+// checkedAt IS WHEN THE APP LAST ASKED THE SERVER about this flight, or null
+// when it has not while it has been open. See lib/checked.ts for why that is a
+// different time from f.updatedAt and is not on the record.
+function flightLineSegments(
+  f: SavedFlight, now: number, hideAbsolute?: boolean, checkedAt: number | null = null,
+): LineSeg[] {
   // NOT f.status. A record claiming to have landed six hours before its own
   // arrival time would otherwise take the landed branch below, read the arrival
   // endpoint, and print a grey "landed" on a flight still sitting at the gate.
@@ -209,12 +217,35 @@ function flightLineSegments(f: SavedFlight, now: number, hideAbsolute?: boolean)
 
   const ts = fresh && ep ? zonedIsoToTs(iso, ep.timezone) : null;
 
+  // ── "UPDATED", AND WHICH CLOCK IT READS ───────────────────────────────────
+  //
+  // THE LATER OF THE TWO. checkedAt is when the app last fetched this flight
+  // from the server; f.updatedAt is when the provider last spoke. The label is
+  // there so a person can see the app is watching, which is the first of
+  // those -- and after a manual refresh the second is newer, because a refresh
+  // goes to the provider, so it says "just now" then too.
+  //
+  // ON A LIVE ROW IT IS A TAIL, in the age ink, after the countdown. The
+  // countdown branches used to say nothing about age at all -- the fallback
+  // did, and a live flight never reached the fallback -- so the one row that
+  // IS being watched every minute was the one row that could not say so. It
+  // appears only once the app has actually fetched, so a row the reader is
+  // not covering reads exactly as it did.
+  //
+  // NOT ON THE CARD. hideAbsolute is the card's flag, and the card dropped its
+  // own "updated 4m ago" on purpose -- see components/FlightCard.tsx.
+  const shownAt = checkedAt !== null && checkedAt > f.updatedAt ? checkedAt : f.updatedAt;
+  const watchedTail: LineSeg | null = checkedAt !== null && hideAbsolute !== true
+    ? { text: ` · updated ${timeAgo(shownAt, now)}`, color: CD_AGE }
+    : null;
+
   if (fresh && ep && ts != null) {
     if (s === 'landed') {
       const ago = now - ts;
       if (ago >= 0) {
         const segs: LineSeg[] = [statusSeg, { text: ` · ${formatCountdown(ago)} ago`, color: 'rgba(226,226,226,0.52)' }];
         const d = delaySegment(ep, s); if (d) segs.push(d);
+        if (watchedTail) segs.push(watchedTail);
         return segs;
       }
     } else if (verb) {
@@ -222,6 +253,7 @@ function flightLineSegments(f: SavedFlight, now: number, hideAbsolute?: boolean)
       if (diff >= 0) {
         const segs: LineSeg[] = [statusSeg, { text: ` · ${verb} ${formatCountdown(diff)}`, color: CD_GREEN }];
         const d = delaySegment(ep, s); if (d) segs.push(d);
+        if (watchedTail) segs.push(watchedTail);
         return segs;
       }
     }
@@ -239,8 +271,8 @@ function flightLineSegments(f: SavedFlight, now: number, hideAbsolute?: boolean)
   // an endpoint the time did not come from.
   const absLabel = s === 'landed' || s === 'active' ? 'arr' : 'dep';
   const tail = abs && abs !== 'N/A' && hideAbsolute !== true
-    ? ` · updated ${timeAgo(f.updatedAt, now)} · ${absLabel} ${abs}`
-    : ` · updated ${timeAgo(f.updatedAt, now)}`;
+    ? ` · updated ${timeAgo(shownAt, now)} · ${absLabel} ${abs}`
+    : ` · updated ${timeAgo(shownAt, now)}`;
   return [statusSeg, { text: tail, color: CD_AGE }];
 }
 
@@ -259,7 +291,10 @@ export function StatusWord({ f, now, style }: { f: SavedFlight; now: number; sty
 }
 
 export function StatusLine({ f, now, style, numberOfLines, hideStatus, hideAbsolute }: { f: SavedFlight; now: number; style?: any; numberOfLines?: number; hideStatus?: boolean; hideAbsolute?: boolean }) {
-  const all = flightLineSegments(f, now, hideAbsolute);
+  // READ HERE, NOT PASSED, so no caller changes: every StatusLine in the app is
+  // under SavedProvider, which is where the times come from.
+  const checkedAt = useCheckedAt(f.id);
+  const all = flightLineSegments(f, now, hideAbsolute, checkedAt);
   // The status word is always the first segment, and everything after it opens
   // with " · ". Dropping the word means dropping that separator too.
   const segs = hideStatus
