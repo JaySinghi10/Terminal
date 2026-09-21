@@ -608,9 +608,13 @@ for _ in range(30):
 check("30 five-minute ticks on a dead number cost far fewer than 30 calls",
       misses["n"] <= 8, misses["n"])
 doc, _ = pollstate.read_state("MOK645", "2026-09-07")
-# FOUR CALLS IN TWO AND A HALF HOURS: at 0, +10, +30, +70 minutes as the
-# interval doubles past the five-minute tier. Unbacked-off it would be thirty.
-check("and the misses are counted", doc.get("adb_misses", 0) == 4, doc.get("adb_misses"))
+# SIX CALLS IN TWO AND A HALF HOURS, and it was four. The backoff doubles the
+# TIER's interval, and NEAR came down from five minutes to two: due at +4, +8,
+# +16, +32, +64 after each miss, which on five-minute ticks lands calls at 0, 5,
+# 15, 35, 70 and 135. A shorter tier means a dead number is asked about slightly
+# more often before the backoff reaches its cap -- two extra lookups, four units,
+# per unresolvable flight. Unbacked-off it would still be thirty.
+check("and the misses are counted", doc.get("adb_misses", 0) == 6, doc.get("adb_misses"))
 
 # ── AND IT IS A BACKOFF, NOT A GIVING-UP ──
 FOUND = dto(dep_sched=iso(NOW + timedelta(hours=2)),

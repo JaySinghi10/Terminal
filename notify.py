@@ -312,7 +312,7 @@ def _settled(ns, field, value):
 
 
 # ── THE DECISION ────────────────────────────────────────────────────────────
-def decide(ns, dto, landing, now, lookup_next=None, connection=None):
+def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None):
     """(new_state, messages). dto is the CURRENT record; landing the current
     landing answer or None; lookup_next(origin, dest, day) -> rows, or None
     when the caller has no budget for it this poll.
@@ -323,7 +323,13 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None):
     connection_band.
 
     Pure over its inputs apart from lookup_next, which is the one call that
-    leaves the process, and it is only made on a cancellation."""
+    leaves the process, and it is only made on a cancellation.
+
+    trace, WHEN GIVEN, IS APPENDED TO FOR EVERY MESSAGE DECIDED AGAINST -- a key
+    already sent, or the per-flight rate floor. emit used to return False and say
+    nothing, which is right for a push and useless to anybody asking afterwards
+    why one never arrived. None, the default, changes nothing at all. See
+    diag.py, the only caller that passes one."""
     ns = dict(ns or blank_notify_state())
     ns["settle"] = dict(ns.get("settle") or {})
     ns["notified"] = dict(ns.get("notified") or {})
@@ -369,9 +375,13 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None):
     def emit(kind, values, deliver_after=None, key_value=""):
         k = _key(facts, kind, key_value)
         if k in ns["keys"]:
+            if trace is not None:
+                trace.append({"kind": kind, "reason": "already sent"})
             return False
         last = _parse(ns.get("last_msg_at"))
         if kind not in FLOOR_EXEMPT and last is not None and now - last < FLIGHT_FLOOR:
+            if trace is not None:
+                trace.append({"kind": kind, "reason": "rate floor"})
             return False
         msg = dict(facts)
         msg.update({"key": k, "kind": kind, "at": _iso(now),

@@ -38,6 +38,7 @@ import requests
 
 import notify
 import pollstate
+import diag
 import store
 
 logger = logging.getLogger("flight-tracker")
@@ -676,4 +677,7 @@ def run_once(now=None, post=None):
     logger.info("dispatch: %d flights, %d sent, %d dropped stale, %d receipts asked, "
                 "%d dead tokens", out["flights"], out["sent"], out["dropped_stale"],
                 out["receipts_asked"], out["dead_tokens"])
+    # EVERY NEW DELIVERY STAGE for the diag flights, read back from the slots
+    # this pass just wrote. See diag.note_dispatch.
+    diag.note_dispatch(now)
     return out

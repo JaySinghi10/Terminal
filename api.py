@@ -22,7 +22,7 @@ import fr24
 import gmail_flights
 import auth
 import re
-from fastapi import FastAPI, Header, Request
+from fastapi import FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -104,8 +104,21 @@ app.add_middleware(
 # nothing, because fetch_flight_full normalises anything that is not three
 # letters to "no filter" and the call it would have made is the call it makes.
 # One normalisation, in one place.
+# ── fresh=1 GOES TO THE PROVIDER, AND NOTHING ELSE DOES ──────────────────────
+#
+# A MANUAL REFRESH ON A CARD MUST NOT BE ANSWERED FROM A COPY. fetch_flight_full
+# keeps a five-minute cache, and it is the SAME cache the poller fills -- so a
+# refresh thirty seconds after a poll came back with the poller's answer and
+# called it fresh. For a passive reader that is the point of the cache; for
+# somebody who pressed a button to be told what is true now, it is the app
+# declining to look.
+#
+# max_age ZERO IS A GUARANTEED MISS, and it costs what a miss costs: two units,
+# every time. That is the price of the button meaning what it says. The answer
+# it fetches then fills the cache, so the next poll inside five minutes is free.
 @app.get("/flight/{flight_number}")
-def get_flight(flight_number: str, date: str | None = None, origin: str | None = None):
+def get_flight(flight_number: str, date: str | None = None, origin: str | None = None,
+               fresh: bool = False):
     # The same validator the route search uses, so the two cannot drift on what
     # a date means -- but with the FLIGHT ceiling, which the provider puts at 180
     # days on this plan where the board's is 60. See FLIGHT_MAX_FUTURE_DAYS.
@@ -113,7 +126,8 @@ def get_flight(flight_number: str, date: str | None = None, origin: str | None =
     day, date_error = _validate_route_date(date, max_future=FLIGHT_MAX_FUTURE_DAYS)
     if date_error is not None:
         return {"error": date_error}
-    _text, dto = fetch_flight_full(flight_number, day, origin)
+    _text, dto = fetch_flight_full(flight_number, day, origin,
+                                   max_age=timedelta(0) if fresh else None)
     if dto is None:
         suffix = f" on {day}" if day else ""
         return {"error": f"No flight found for {flight_number.strip().upper()}{suffix}"}
@@ -1143,6 +1157,110 @@ def get_alternatives(flight_number: str, date: str | None = None,
         logger.warning("alternatives: state unreadable for %s/%s", num, day)
         return {"alternatives": None}
     return {"alternatives": (doc or {}).get("alternatives")}
+
+
+# ── WHAT THE POLLER ALREADY KNOWS ABOUT A DEVICE'S OWN FLIGHTS ─────────────
+#
+# THE SERVER HAS BEEN POLLING THE WHOLE TIME, and the device never read it. The
+# poller stores exactly the DTO /flight returns -- both come from
+# fetch_flight_full -- and until now the only way a screen saw it was a
+# pull-to-refresh that asked the provider again and paid for it. This hands the
+# stored copy back, so an open app can stay current once a minute for nothing.
+#
+# NO PROVIDER CALL ON ANY PATH, which is the whole of the feature and is
+# asserted in test_watched.py by replacing every provider with something that
+# raises. The cost is a Cloud Run request and a storage read per flight.
+#
+# ONE REQUEST FOR EVERY LIVE FLIGHT, repeated `f=NUMBER:DATE`, so a device with
+# four legs in the air window makes one call a minute rather than four. The
+# watch store is read once for all of them -- see store.watched_by_device.
+#
+# ── AUTHENTICATED AS /alternatives IS, WITH ONE DIFFERENCE ─────────────────
+#
+# THE SECRET AND THE DEVICE ID, and the same honest limit: this is
+# enumeration-resistant rather than secure. See the note on /alternatives.
+#
+# MEETERS INCLUDED. /alternatives returns owned flights only, because rebooking
+# options are a passenger's. A flight's status is exactly what somebody at
+# arrivals is watching for, and the device already holds the record.
+#
+# A PAIR THE DEVICE DOES NOT WATCH IS OMITTED, NOT REFUSED, for the same reason
+# not-owned and not-found answer alike there: a distinguishable refusal would
+# tell a caller which flights a device watches.
+#
+# ── AND THE AGE IS CORRECTED, OR EVERY READ WOULD LIE ──────────────────────
+#
+# THE STORED DTO SAYS data_age_seconds 0, because it was fresh when the poller
+# fetched it. The device turns that into updatedAt = now - age, and updatedAt
+# gates whether a live countdown is trusted -- see COUNTDOWN_MAX_AGE_MS in
+# lib/flightstatus.tsx. Served as stored, a copy fetched fourteen minutes ago
+# would arrive claiming to be brand new, and would claim it again every minute.
+# So the time since the poll is added before it leaves: the device's own
+# arithmetic then lands on the provider's time, unchanged and correct.
+WATCHED_MAX_FLIGHTS = 12
+
+
+def _aged_dto(dto, polled_at, now):
+    """The stored DTO with data_age_seconds made true as of now, or None."""
+    if not isinstance(dto, dict):
+        return None
+    out = dict(dto)
+    try:
+        polled = datetime.fromisoformat(str(polled_at).replace("Z", "+00:00"))
+        if polled.tzinfo is None:
+            polled = polled.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return out
+    since = max(0, int((now - polled).total_seconds()))
+    base = dto.get("data_age_seconds")
+    out["data_age_seconds"] = (base if isinstance(base, (int, float)) else 0) + since
+    return out
+
+
+@app.get("/watched")
+def get_watched(device_id: str | None = None,
+                f: list[str] = Query(default=[]),
+                x_watch_secret: str | None = Header(default=None)):
+    if not _secret_ok(x_watch_secret, WATCH_SECRET):
+        logger.warning("watched rejected: bad or missing %s", WATCH_SECRET_HEADER)
+        return _alert_not_found()
+    wanted = []
+    for item in (f or [])[:WATCHED_MAX_FLIGHTS]:
+        num, _, day = str(item or "").partition(":")
+        num, day = num.strip().upper(), day.strip()
+        if num and _ISO_DAY_RE.match(day):
+            wanted.append((num, day))
+    if not wanted:
+        return {"flights": []}
+    mine = store.watched_by_device(device_id)
+    now = datetime.now(timezone.utc)
+    out = []
+    for num, day in wanted:
+        if (num, day) not in mine:
+            continue
+        try:
+            doc, _gen = pollstate.read_state(num, day)
+        except Exception:  # noqa: BLE001
+            # ONE UNREADABLE FLIGHT IS ONE OMITTED FLIGHT. The device keeps what
+            # it has for that one and updates the rest.
+            logger.warning("watched: state unreadable for %s/%s", num, day)
+            continue
+        if not doc or not doc.get("dto"):
+            continue
+        out.append({
+            "flight_number": num,
+            "flight_date": day,
+            "dto": _aged_dto(doc.get("dto"), doc.get("last_adb_at"), now),
+            # WHEN THE SERVER LAST ASKED THE PROVIDER, which is not when this was
+            # read. The device needs both apart: this one to refuse a stored copy
+            # older than a manual refresh it already holds.
+            "polled_at": doc.get("last_adb_at"),
+            # THE LANDING TOO, so the device need not ask FR24 itself for a
+            # flight the server is already watching. See saved.tsx's sweep.
+            "landing": doc.get("landing"),
+            "landing_checked_at": doc.get("last_fr24_at"),
+        })
+    return {"flights": out}
 
 
 # The same secret, the same 404, and the same narrowed gap as /watch above.

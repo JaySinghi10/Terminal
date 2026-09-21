@@ -428,6 +428,46 @@ def owns_watch(device_id, flight_number, flight_date) -> bool:
     return False
 
 
+def watched_by_device(device_id) -> set:
+    """Every (flight_number, flight_date) this device watches, on it or meeting it.
+
+    ONE READ FOR THE WHOLE REQUEST. owns_watch above reads the store once per
+    question, which is right for one flight and wrong for the /watched endpoint,
+    which asks about every live flight on a device once a minute. Six flights
+    would be six reads of the same object inside one request.
+
+    ANY owned VALUE, NOT ONLY True -- and that is the difference from owns_watch
+    worth stating. Alternatives are a passenger's itinerary and are not a
+    meeter's to read; a flight's STATUS is exactly what somebody at arrivals is
+    watching for, and the device already holds the record. Nothing new is
+    exposed by returning it.
+
+    EMPTY ON ANY FAILURE, for owns_watch's reason: this is an authorisation
+    check, and the only safe answer to a question that went wrong is no. An
+    empty set makes /watched return nothing, which the device reads as "no
+    update this minute" -- the display simply keeps what it has.
+    """
+    did, err = _clean_device_id(device_id)
+    if err is not None:
+        return set()
+    bucket = _bucket()
+    if bucket is None:
+        return set()
+    try:
+        rows, _ = _read_watches(bucket)
+    except Exception:  # noqa: BLE001 -- see the note above: any failure is "no"
+        return set()
+    out = set()
+    for r in rows or []:
+        if str((r or {}).get("device_id") or "") != did:
+            continue
+        num = str((r or {}).get("flight_number") or "").strip().upper()
+        day = str((r or {}).get("flight_date") or "").strip()
+        if num and _ISO_DAY_RE.match(day):
+            out.add((num, day))
+    return out
+
+
 def register_watch(device_id, push_token, platform, flight_number, flight_date, owned=None):
     """Upsert on (device_id, flight_number, flight_date)."""
     did, err = _clean_device_id(device_id)

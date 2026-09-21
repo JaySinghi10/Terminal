@@ -19,11 +19,23 @@ had walked to the old one.
 
   DISTANT   > 48h to departure     once every 12 hours
   FAR       6h .. 48h               once every 6 hours
-  DAY       6h .. 90m              every 30 minutes
-  NEAR      90m before departure   every 5 minutes   (+ FR24, see below)
-  AIRBORNE  departed, not landed   every 15 minutes  (FR24 only, see below)
-  ARRIVAL   30m before arrival     every 2 minutes
+  DAY       6h .. 90m              every 10 minutes
+  NEAR      90m before departure   every 2 minutes   (+ FR24, see below)
+  AIRBORNE  departed, not landed   every 5 minutes   (+ FR24, see below)
+  ARRIVAL   30m before arrival     every 2 minutes   (+ FR24, see below)
   DONE      landed and at a gate   never again
+
+THE THREE MIDDLE RATES WERE 30, 5 AND 15, and they came down together because
+the app now reads this state every minute while it is open -- see /watched in
+api.py. Before that, how often the server looked only mattered to a push; now
+it is also the ceiling on how current a screen can be, and a fifteen-minute
+airborne tier meant an estimate the app displayed as current could be a quarter
+of an hour old. What it costs is in docs and in the tier's own entry below.
+
+AIRBORNE USED TO SAY "FR24 ONLY" IN THIS TABLE, and it never was. poll_one asks
+AeroDataBox in every tier, subject to _due and the budget floor, and asks FR24
+as well in the three tiers FR24_TIERS names. The table now says what the code
+does.
 
 THE ARRIVAL TIER IS THE EXPENSIVE ONE AND IT IS THE ONE WORTH PAYING FOR. Gate,
 belt and stand are all published in that window, and it is the only window where
@@ -64,6 +76,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+import diag
 import dispatch
 import fr24
 import pollstate
@@ -85,9 +98,29 @@ DONE = "done"
 TIER_INTERVAL = {
     DISTANT: timedelta(hours=12),
     FAR: timedelta(hours=6),
-    DAY: timedelta(minutes=30),
-    NEAR: timedelta(minutes=5),
-    AIRBORNE: timedelta(minutes=15),
+    # ── THE SIX HOURS BEFORE, THE NINETY MINUTES BEFORE, AND THE FLIGHT ──────
+    #
+    # 10, 2 AND 5, DOWN FROM 30, 5 AND 15. Each is what one of these costs per
+    # ten-hour flight, both currencies, since NEAR and AIRBORNE ask both
+    # providers every time they are due:
+    #
+    #            window    old          new           a poll costs
+    #   DAY      270 min   9 polls      27 polls      2 AeroDataBox units
+    #   NEAR      90 min   18           45            2 units + 1 FR24 credit
+    #   AIRBORNE 570 min   38           114           2 units + 1 FR24 credit
+    #
+    # THE TWO-MINUTE POKE IS THE FLOOR UNDER ALL OF IT. NEAR's two minutes is
+    # every poke, and Cloud Scheduler does not fire on the second -- a poke 1m
+    # 59s after the last one finds NEAR not yet due and it waits four. So two is
+    # a ceiling on the rate, never a promise of it, and it cannot go lower
+    # without the poke going lower first.
+    #
+    # THE BUDGET FLOOR STILL GOVERNS THE FIRST TWO. Below it DAY and NEAR stop
+    # asking AeroDataBox and only AIRBORNE and ARRIVAL spend units, which is
+    # what stops these rates finishing a month early.
+    DAY: timedelta(minutes=10),
+    NEAR: timedelta(minutes=2),
+    AIRBORNE: timedelta(minutes=5),
     ARRIVAL: timedelta(minutes=2),
 }
 
@@ -104,9 +137,10 @@ TIER_INTERVAL = {
 # and is marked DONE three hours past its scheduled arrival having told nobody
 # anything.
 #
-# IT IS THE EXPENSIVE TIER IN CREDITS, and that is the trade being made: five
-# minutes over a ninety-minute window is eighteen queries per departure, and
-# fr24 bills per returned record.
+# IT IS THE EXPENSIVE TIER IN CREDITS, and that is the trade being made: two
+# minutes over a ninety-minute window is forty-five queries per departure, and
+# fr24 bills per returned record -- one each, since every query here sends the
+# departure instant and so narrows to a single leg.
 FR24_TIERS = {NEAR, AIRBORNE, ARRIVAL}
 
 # Which tiers survive the budget floor. See the note at the top.
@@ -770,6 +804,9 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
     current_landing = landing if landing is not None else (doc or {}).get("landing")
     prior_ns = (doc or {}).get("notify")
     new_ns, messages = prior_ns, []
+    # WHAT decide CHOSE NOT TO SEND, collected only for a flight diag is watching
+    # and handed to it below. None elsewhere, so decide behaves exactly as before.
+    suppressed = [] if diag.watching(number, day) else None
     # BOUND BEFORE THE BRANCH, NOT INSIDE IT. The state write below is a closure
     # that reads this, and it runs on EVERY poll -- including the ones that skip
     # the block under it, where a prior poll's stored search would otherwise
@@ -801,7 +838,8 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
         onward = _next_leg(current_dto, candidates)
         try:
             new_ns, messages = notify.decide(prior_ns, current_dto, current_landing, now,
-                                             lookup_next=lookup_next, connection=onward)
+                                             lookup_next=lookup_next, connection=onward,
+                                             trace=suppressed)
         except Exception as exc:  # noqa: BLE001
             logger.exception("poll: notify decision failed for %s/%s", number, day)
             record["notify_error"] = str(exc)[:200]
@@ -883,6 +921,9 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
         return d
 
     pollstate.mutate_state(number, day, apply)
+    # AFTER THE STATE WRITE, so the diagnostic records what was actually kept.
+    # Cheap for every flight it is not watching -- a set lookup and a return.
+    diag.note_poll(number, day, now, record, changes, messages, suppressed)
     return record
 
 
@@ -1064,6 +1105,14 @@ def run_once(now=None):
                             idle_after=DELETE_AFTER_DONE,
                             undelivered=lambda doc: _undelivered(doc, now))
     swept = sweep["dated"]
+    # AND THE DIAGNOSTIC'S OWN SWEEP, which pollstate's cannot do: it walks
+    # state/ only, and diag/ lives outside it precisely so that it survives.
+    # Strips provider values at six days, deletes the rest at thirty. Its
+    # failures are its own -- see diag.sweep -- and never fail the pass.
+    try:
+        diag.sweep(now)
+    except Exception:  # noqa: BLE001
+        logger.exception("poll: diag sweep failed")
 
     tiers = {}
     for r in records:
