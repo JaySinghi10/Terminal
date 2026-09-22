@@ -74,6 +74,21 @@ export type Airport = {
 // discarded municipality tail, or a diacritic. Where a row has diacritics the
 // folded ASCII copy is appended, so "Sao Paulo" and "São Paulo" both hit and
 // the device never has to normalize Unicode at runtime.
+//
+// NINE INDIAN ROWS CARRY A HAND-ADDED ALTERNATE NAME, found by auditing the
+// Indian rows against the names people actually type: the official name where
+// the display name is the colonial one (Kozhikode for Calicut, Cannanore the
+// other way round for Kannur), the older romanisation (Baroda, Gauhati, Banaras,
+// Panjim), the local-language name (Dilli, Amdavad, Kashi), and the locality an
+// airport is known by (Shamshabad, Secunderabad). These are NAMES, not typos:
+// a typo is the fuzzy tier's job below, and the audit deliberately left
+// "kolkatta" and "bhubaneshwar" out of the data so the tests can prove that
+// tier catches them without help.
+//
+//     GOI +panjim panaji         BDQ +baroda        GAU +gauhati
+//     DEL +dilli                 HYD +shamshabad secunderabad
+//     AMD +amdavad               VNS +banaras kashi CCJ +kozhikode
+//     CNN +cannanore
 type Row = [string, string, string, string, string, number, number, string?];
 
 const AIRPORT_ROWS: Row[] = [
@@ -120,7 +135,7 @@ const AIRPORT_ROWS: Row[] = [
   ["ALC", "Alicante-Elche Miguel Hernández Airport", "Alicante", "Spain", "Europe/Madrid", 38.2822, -0.5582, "alicante elche miguel hernández airport alicante alicante elche miguel hernandez airport alicante"],
   ["ALG", "Houari Boumediene Airport", "Algiers", "Algeria", "Africa/Algiers", 36.6939, 3.2145],
   ["ALP", "Aleppo International Airport", "Aleppo", "Syria", "Asia/Damascus", 36.1813, 37.2269],
-  ["AMD", "Sardar Vallabh Patel International Airport", "Ahmedabad", "India", "Asia/Kolkata", 23.0772, 72.6347],
+  ["AMD", "Sardar Vallabh Patel International Airport", "Ahmedabad", "India", "Asia/Kolkata", 23.0772, 72.6347, "sardar vallabh patel international airport ahmedabad amdavad"],
   ["AMM", "Queen Alia International Airport", "Amman", "Jordan", "Asia/Amman", 31.7226, 35.9932],
   ["AMQ", "Pattimura International Airport", "Ambon", "Indonesia", "Asia/Jayapura", -3.7103, 128.0890],
   ["AMS", "Amsterdam Airport Schiphol", "Amsterdam", "Netherlands", "Europe/Amsterdam", 52.3086, 4.7639],
@@ -167,7 +182,7 @@ const AIRPORT_ROWS: Row[] = [
   ["BDA", "L.F. Wade International Airport", "Hamilton", "Bermuda", "Atlantic/Bermuda", 32.3638, -64.6782],
   ["BDJ", "Syamsudin Noor International Airport", "Banjarbaru", "Indonesia", "Asia/Makassar", -3.4401, 114.7612],
   ["BDL", "Bradley International Airport", "Hartford", "United States", "America/New_York", 41.9386, -72.6880],
-  ["BDQ", "Vadodara International Airport", "Vadodara", "India", "Asia/Kolkata", 22.3362, 73.2263],
+  ["BDQ", "Vadodara International Airport", "Vadodara", "India", "Asia/Kolkata", 22.3362, 73.2263, "vadodara international airport vadodara baroda"],
   ["BDS", "Brindisi Airport", "Brindisi", "Italy", "Europe/Rome", 40.6576, 17.9470],
   ["BEG", "Belgrade Nikola Tesla Airport", "Belgrade", "Serbia", "Europe/Belgrade", 44.8184, 20.3091],
   ["BEK", "Bareilly Air Force Station", "Bareilly", "India", "Asia/Kolkata", 28.4221, 79.4508],
@@ -261,7 +276,7 @@ const AIRPORT_ROWS: Row[] = [
   ["CAP", "Cap Haitien International Airport", "Cap Haitien", "Haiti", "America/Port-au-Prince", 19.7255, -72.2007],
   ["CAY", "Cayenne – Félix Eboué Airport", "Matoury", "French Guiana", "America/Cayenne", 4.8200, -52.3613, "cayenne félix eboué airport matoury cayenne felix eboue airport matoury"],
   ["CBB", "Jorge Wilsterman International Airport", "Cochabamba", "Bolivia", "America/La_Paz", -17.4211, -66.1771],
-  ["CCJ", "Calicut International Airport", "Calicut", "India", "Asia/Kolkata", 11.1360, 75.9552],
+  ["CCJ", "Calicut International Airport", "Calicut", "India", "Asia/Kolkata", 11.1360, 75.9552, "calicut international airport calicut kozhikode"],
   ["CCK", "Cocos (Keeling) Islands Airport", "West Island", "Cocos (Keeling) Islands", "Indian/Cocos", -12.1922, 96.8341],
   ["CCP", "Carriel Sur International Airport", "Concepcion", "Chile", "America/Santiago", -36.7724, -73.0628],
   ["CCS", "Maiquetía Simón Bolívar International Airport", "Maiquetía", "Venezuela", "America/Caracas", 10.6022, -66.9912, "maiquetía simón bolívar international airport maiquetía maiquetia simon bolivar international airport maiquetia"],
@@ -304,7 +319,7 @@ const AIRPORT_ROWS: Row[] = [
   ["CMW", "Ignacio Agramonte International Airport", "Camaguey", "Cuba", "America/Havana", 21.4199, -77.8480],
   ["CND", "Mihail Kogălniceanu International Airport", "Constanța", "Romania", "Europe/Bucharest", 44.3622, 28.4883, "mihail kogălniceanu international airport constanța mihail kogalniceanu international airport constanta"],
   ["CNF", "Tancredo Neves International Airport", "Belo Horizonte", "Brazil", "America/Sao_Paulo", -19.6357, -43.9669],
-  ["CNN", "Kannur International Airport", "Kannur", "India", "Asia/Kolkata", 11.9163, 75.5450],
+  ["CNN", "Kannur International Airport", "Kannur", "India", "Asia/Kolkata", 11.9163, 75.5450, "kannur international airport kannur cannanore"],
   ["CNS", "Cairns International Airport", "Cairns", "Australia", "Australia/Brisbane", -16.8789, 145.7495],
   ["CNX", "Chiang Mai International Airport", "Chiang Mai", "Thailand", "Asia/Bangkok", 18.7668, 98.9626],
   ["COK", "Cochin International Airport", "Kochi", "India", "Asia/Kolkata", 10.1510, 76.4008],
@@ -348,7 +363,7 @@ const AIRPORT_ROWS: Row[] = [
   ["DCA", "Ronald Reagan Washington National Airport", "Washington", "United States", "America/New_York", 38.8521, -77.0377],
   ["DEB", "Debrecen International Airport", "Debrecen", "Hungary", "Europe/Budapest", 47.4895, 21.6163],
   ["DED", "Dehradun Jolly Grant Airport", "Dehradun", "India", "Asia/Kolkata", 30.1892, 78.1767, "dehradun jolly grant airport dehradun jauligrant"],
-  ["DEL", "Indira Gandhi International Airport", "New Delhi", "India", "Asia/Kolkata", 28.5556, 77.0952, "indira gandhi international airport new delhi deli"],
+  ["DEL", "Indira Gandhi International Airport", "New Delhi", "India", "Asia/Kolkata", 28.5556, 77.0952, "indira gandhi international airport new delhi deli dilli"],
   ["DEN", "Denver International Airport", "Denver", "United States", "America/Denver", 39.8600, -104.6738],
   ["DFW", "Dallas Fort Worth International Airport", "Dallas-Fort Worth", "United States", "America/Chicago", 32.8968, -97.0380],
   ["DGH", "Deoghar Airport", "Deoghar", "India", "Asia/Kolkata", 24.4468, 86.7050],
@@ -448,7 +463,7 @@ const AIRPORT_ROWS: Row[] = [
   ["FUE", "Fuerteventura Airport", "El Matorral", "Spain", "Atlantic/Canary", 28.4527, -13.8638],
   ["FUK", "Fukuoka Airport", "Fukuoka", "Japan", "Asia/Tokyo", 33.5859, 130.4510],
   ["GAN", "Gan International Airport", "Gan", "Maldives", "Indian/Maldives", -0.6930, 73.1526],
-  ["GAU", "Lokpriya Gopinath Bordoloi International Airport", "Guwahati", "India", "Asia/Kolkata", 26.1067, 91.5852],
+  ["GAU", "Lokpriya Gopinath Bordoloi International Airport", "Guwahati", "India", "Asia/Kolkata", 26.1067, 91.5852, "lokpriya gopinath bordoloi international airport guwahati gauhati"],
   ["GAY", "Gaya Airport", "Gaya", "India", "Asia/Kolkata", 24.7443, 84.9512, "gaya airport gaya gayya"],
   ["GBE", "Sir Seretse Khama International Airport", "Gaborone", "Botswana", "Africa/Gaborone", -24.5552, 25.9182],
   ["GBI", "Kalaburagi Airport", "Kalaburagi", "India", "Asia/Kolkata", 17.3082, 76.9652, "kalaburagi airport kalaburagi gulbarga"],
@@ -470,7 +485,7 @@ const AIRPORT_ROWS: Row[] = [
   ["GNY", "Şanlıurfa GAP Airport", "Şanlıurfa", "Turkey", "Europe/Istanbul", 37.4457, 38.8956, "şanlıurfa gap airport şanlıurfa sanlıurfa gap airport sanlıurfa"],
   ["GOA", "Genoa Cristoforo Colombo Airport", "Genoa", "Italy", "Europe/Rome", 44.4120, 8.8407, "genoa cristoforo colombo airport genoa ge genova"],
   ["GOH", "Nuuk International Airport", "Nuuk", "Greenland", "America/Nuuk", 64.1911, -51.6791],
-  ["GOI", "Goa Dabolim International Airport", "Goa", "India", "Asia/Kolkata", 15.3801, 73.8333, "goa dabolim international airport goa vasco da gama"],
+  ["GOI", "Goa Dabolim International Airport", "Goa", "India", "Asia/Kolkata", 15.3801, 73.8333, "goa dabolim international airport goa vasco da gama panjim panaji"],
   ["GOJ", "Nizhny Novgorod / Strigino International Airport", "Nizhny Novgorod", "Russia", "Europe/Moscow", 56.2274, 43.7852],
   ["GOM", "Goma International Airport", "Goma", "Democratic Republic of the Congo", "Africa/Kigali", -1.6668, 29.2380],
   ["GOP", "Gorakhpur Airport", "Gorakhpur", "India", "Asia/Kolkata", 26.7397, 83.4497],
@@ -550,7 +565,7 @@ const AIRPORT_ROWS: Row[] = [
   ["HUN", "Hualien Chiashan Airport", "Hualien City", "Taiwan", "Asia/Taipei", 24.0232, 121.6180],
   ["HUX", "Bahías de Huatulco International Airport", "Huatulco", "Mexico", "America/Mexico_City", 15.7754, -96.2605, "bahías de huatulco international airport huatulco bahias de huatulco international airport huatulco"],
   ["HWR", "Halwara International Airport", "Halwara", "India", "Asia/Kolkata", 30.7485, 75.6298],
-  ["HYD", "Rajiv Gandhi International Airport", "Hyderabad", "India", "Asia/Kolkata", 17.2313, 78.4299],
+  ["HYD", "Rajiv Gandhi International Airport", "Hyderabad", "India", "Asia/Kolkata", 17.2313, 78.4299, "rajiv gandhi international airport hyderabad shamshabad secunderabad"],
   ["IAD", "Washington Dulles International Airport", "Washington", "United States", "America/New_York", 38.9445, -77.4558],
   ["IAH", "George Bush Intercontinental Airport", "Houston", "United States", "America/Chicago", 29.9844, -95.3414],
   ["IAR", "Golden Ring Yaroslavl International Airport", "Tunoshna", "Russia", "Europe/Moscow", 57.5607, 40.1574],
@@ -1234,7 +1249,7 @@ const AIRPORT_ROWS: Row[] = [
   ["VLI", "Bauerfield International Airport", "Port Vila", "Vanuatu", "Pacific/Efate", -17.6993, 168.3200],
   ["VLN", "Arturo Michelena International Airport", "Valencia", "Venezuela", "America/Caracas", 10.1497, -67.9284],
   ["VNO", "Vilnius International Airport", "Vilnius", "Lithuania", "Europe/Vilnius", 54.6341, 25.2858],
-  ["VNS", "Lal Bahadur Shastri International Airport", "Varanasi", "India", "Asia/Kolkata", 25.4522, 82.8625, "lal bahadur shastri international airport varanasi benares"],
+  ["VNS", "Lal Bahadur Shastri International Airport", "Varanasi", "India", "Asia/Kolkata", 25.4522, 82.8625, "lal bahadur shastri international airport varanasi benares banaras kashi"],
   ["VOG", "Volgograd International Airport", "Volgograd", "Russia", "Europe/Volgograd", 48.7813, 44.3392],
   ["VRA", "Juan Gualberto Gomez International Airport", "Matanzas", "Cuba", "America/Havana", 23.0344, -81.4353],
   ["VRN", "Verona Villafranca Valerio Catullo Airport", "Caselle", "Italy", "Europe/Rome", 45.3950, 10.8873, "verona villafranca valerio catullo airport caselle vr"],
@@ -1425,11 +1440,66 @@ function build() {
     // too or "O'Hare" would be one word to the data and two to the device.
     const s = r[7] ?? normalizeTerm(`${a.name} ${a.city}`);
     PLACES!.add(normalizeTerm(a.city));
+    // AND EVERY WHOLE WORD OF THE HAYSTACK, minus the generic ones. See
+    // isKnownPlace for why the set used to be city names alone and what that
+    // cost. Words under MIN_TERM are out for the reason the resolver keeps them
+    // out; numbers are out because a haystack word that is a number is a
+    // runway or a year, never a place.
+    for (const w of s.split(' ')) {
+      if (w.length >= MIN_TERM && !HAYSTACK_STOPWORDS.has(w) && !/^\d+$/.test(w)) PLACES!.add(w);
+    }
     return { a, s };
   });
 }
 
+// ── THE WORDS OF A HAYSTACK THAT NAME NO PLACE ──────────────────────────────
+//
+// Every haystack is "name city aliases", and the name is full of words that
+// belong to every airport and to none: airport, international, regional, the
+// particles of Romance and Germanic names. Two readers strip them:
+//
+//   isKnownPlace, so that "the international flight" does not contain a place;
+//   fuzzyRank, so that "airprot" is not one edit from every row in the file.
+//
+// PARTS OF NAMES ARE HERE TOO -- san, santa, new, port, bay -- and that is
+// deliberate. "San Francisco" is a place and "san" alone is not, and the
+// question both readers ask is about the bare word. The full city is in PLACES
+// as a whole string regardless, so nothing multi-word is lost.
+//
+// A LIST, NOT A RULE, and it is expected to grow. Anything that turns up as a
+// false "place" in a sentence belongs here; anything here that is a real
+// single-word city in the dataset is a bug.
+const HAYSTACK_STOPWORDS = new Set([
+  'airport', 'airports', 'international', 'intl', 'regional', 'municipal',
+  'metropolitan', 'national', 'domestic', 'field', 'airfield', 'aerodrome',
+  'aeropuerto', 'aeroporto', 'aeroport', 'flughafen', 'lufthavn', 'airbase',
+  'base', 'city', 'station', 'terminal', 'island', 'islands', 'isle', 'county',
+  'memorial', 'executive', 'general', 'governor', 'president', 'king', 'queen',
+  'prince', 'saint', 'sant', 'san', 'santa', 'santo', 'sao', 'new', 'old',
+  'north', 'south', 'east', 'west', 'central', 'upper', 'lower', 'port', 'bay',
+  'lake', 'mount', 'and', 'the', 'of', 'de', 'del', 'della', 'di', 'da', 'do',
+  'dos', 'das', 'la', 'le', 'les', 'el', 'los', 'van', 'von', 'der', 'den',
+]);
+
 // IS THIS SPAN A PLACE, exactly?
+//
+// ── BUILT FROM THE HAYSTACK NOW, AND "DELHI" IS THE REASON ──────────────────
+//
+// THE SET WAS CITY NAMES AND CURATED KEYS, AND IT DISAGREED WITH THE RESOLVER.
+// DEL's city is "New Delhi", there is no curated "delhi" key, and so
+// isKnownPlace("delhi") was FALSE while resolveAirportName("delhi") found DEL at
+// rank 2 through the alias string. The most-searched city in this app's market
+// was a place to one function and not to the other, and every sentence whose
+// only place was "delhi" went to the rung that cannot search a route.
+//
+// SO THE SET IS EVERY WHOLE WORD OF EVERY HAYSTACK, minus HAYSTACK_STOPWORDS,
+// plus the cities and the curated keys as whole strings. That is the same
+// material the resolver's whole-word tier (rank 2) reads, so the two now agree
+// on exactly the words that agree; a term this says is a place, the resolver
+// will match at rank 2 or better.
+//
+// STILL EXACT. It is a set lookup and nothing else; the substring tier the
+// note below warns about is as far away as it ever was.
 //
 // An accessor rather than an export of CITY_AIRPORTS: handing out the map
 // invites callers to reimplement matching against it, and every reimplementation
@@ -1541,16 +1611,30 @@ function hasWord(s: string, q: string): boolean {
 
 // MATCH QUALITY, in the order it is preferred. Lower is better.
 //
-//   0  the term IS the city                  "mumbai" -> Mumbai
-//   1  a whole word of the haystack          "bali" -> Denpasar, "bombay" -> Mumbai
-//   2  the city starts with the term         "mumb" -> Mumbai
-//   3  the airport name starts with it       "heathrow" -> Heathrow
-//   4  a word of the haystack starts with it "bengal" -> Bengaluru
-//   5  the haystack merely contains it       "alur" -> Bengaluru
+//   0  the term IS the code                  "blr" -> Bengaluru
+//   1  the term IS the city                  "mumbai" -> Mumbai
+//   2  a whole word of the haystack          "bali" -> Denpasar, "bombay" -> Mumbai
+//   3  the city starts with the term         "mumb" -> Mumbai
+//   4  the airport name starts with it       "heathrow" -> Heathrow
+//   5  a word of the haystack starts with it "bengal" -> Bengaluru
+//   6  the haystack merely contains it       "alur" -> Bengaluru
+//   7  one edit from the CITY                "mumbi" -> Mumbai       (fuzzyRank)
+//   8  one edit from a haystack WORD         "dehli" -> New Delhi    (fuzzyRank)
+//   9  two edits from the city               "hydrabd" -> Hyderabad  (fuzzyRank)
+//  10  two edits from a word                 "banglor" -> Bengaluru  (fuzzyRank)
 //
 // A whole word outranks a prefix deliberately: "bali" is an exact alias of
 // Denpasar and only a prefix of Balice, and the exact one is what was meant.
-// Substring matching is last so a short term can never outrank a real name.
+// Substring matching is last of the exact tiers so a short term can never
+// outrank a real name. The four fuzzy tiers sit under all of them and are only
+// consulted when none of them matched anything -- see scoreAll.
+//
+// THE FUZZY TIERS KEEP THE CITY-BEFORE-WORD ORDER, and the first test run is
+// why. With one tier per distance, "mumbi" tied three ways: one edit from
+// Mumbai's CITY and one edit from the word "mumbai" in Navi Mumbai's haystack
+// were the same rank, so the term that plainly means Mumbai came back
+// ambiguous. The exact ladder never had that problem because rank 1 beats rank
+// 2; the fuzzy ladder now says the same thing at each distance.
 function rankOf(a: Airport, s: string, q: string): number {
   const city = a.city.toLowerCase();
   // AN AIRPORT'S OWN CODE OUTRANKS EVERYTHING, AND IT WAS NOT CHECKED AT ALL.
@@ -1589,11 +1673,120 @@ function rankOf(a: Airport, s: string, q: string): number {
 // part of the file and mean nothing to a reader.
 const MIN_TERM = 3;
 
+// ── TYPO TOLERANCE, BELOW EVERY EXACT TIER ──────────────────────────────────
+//
+// THE RESOLVER WAS EXACT AT EVERY TIER, and so "dehli" matched nothing at all
+// while "delhi" matched at rank 2. A transposed pair of letters -- the commonest
+// typo there is -- sent a route the free rungs could have run straight to a
+// model call, and the two presses that came with it.
+//
+// OPTIMAL STRING ALIGNMENT DISTANCE, which is Levenshtein plus an adjacent
+// transposition counted as ONE edit. That last part is the whole point: under
+// plain Levenshtein "dehli" is two edits from "delhi" and would be as far away
+// as "banglor" is from "bangalore". Capped at `max`, with an early exit on the
+// row minimum, so a hopeless pair costs a fraction of the full table.
+function editDistance(a: string, b: string, max: number): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const m = a.length;
+  const n = b.length;
+  let prev2: number[] | null = null;
+  let prev: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur: number[] = [i];
+    let rowMin = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2![j - 2] + 1);
+      }
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[n];
+}
+
+// HOW LONG A TERM MUST BE BEFORE AN EDIT IS ALLOWED. One edit on a five-letter
+// word is a typo; one edit on a three-letter word is a different word, and
+// "goa" is one edit from "gao", "boa" and "gol". Two edits need seven letters
+// for the same reason at twice the distance. And the WORD being compared
+// against must have four letters of its own, so a typo can never land on a
+// particle the stoplist happened to miss.
+const FUZZY_MIN_1 = 5;
+const FUZZY_MIN_2 = 7;
+const FUZZY_TARGET_MIN = 4;
+
+// THE FUZZY RANK OF ONE ROW: 7 or 9 for the city at one or two edits, 8 or
+// 10 for a haystack word at one or two, -1 for none of those.
+//
+// COMPARED AGAINST THE CITY AND AGAINST EACH WORD OF THE HAYSTACK, not against
+// the haystack as one string -- a whole string is never one edit from a typo.
+// The city goes in as a whole so that a two-word term like "new dehli" has
+// something the right shape to land on. Stopwords are skipped as targets for
+// the reason the constant above gives.
+//
+// A MISS IS A VALUE NO DISTANCE CAN BE, and it took two tries to get there.
+// editDistance answers max + 1 for "further than max", which is a fine answer
+// for a comparison and a trap for an equality: when the term earns ONE edit,
+// max + 1 is 2, and a tier test that asks "is it two?" reads every miss as a
+// two-edit hit. The first version did exactly that and reported "bnglor" --
+// six letters, nothing within one edit of it -- as Diu, whose three-letter
+// city had been SKIPPED and so sat at the sentinel. `none` is 3, which is
+// past both allowed distances whatever `max` is, and every comparison below
+// goes through `dist`, which maps a miss to it.
+const FUZZY_NONE = 3;
+
+function fuzzyRank(a: Airport, s: string, q: string): number {
+  const max = q.length >= FUZZY_MIN_2 ? 2 : q.length >= FUZZY_MIN_1 ? 1 : 0;
+  if (max === 0) return -1;
+  const dist = (t: string): number => {
+    const d = editDistance(q, t, max);
+    return d > max ? FUZZY_NONE : d;
+  };
+  const city = normalizeTerm(a.city);
+  const dc = city.length >= FUZZY_TARGET_MIN ? dist(city) : FUZZY_NONE;
+  if (dc === 1) return 7;
+  let dw = FUZZY_NONE;
+  for (const w of s.split(' ')) {
+    if (w.length < FUZZY_TARGET_MIN || HAYSTACK_STOPWORDS.has(w)) continue;
+    dw = Math.min(dw, dist(w));
+    if (dw === 1) break;
+  }
+  if (dw === 1) return 8;
+  if (dc === 2) return 9;
+  if (dw === 2) return 10;
+  return -1;
+}
+
 function scoreAll(q: string): { a: Airport; rank: number }[] {
   const out: { a: Airport; rank: number }[] = [];
   for (const { a, s } of HAYSTACK) {
     const rank = rankOf(a, s, q);
     if (rank >= 0) out.push({ a, rank });
+  }
+  // ── THE FUZZY PASS RUNS ONLY WHEN NOTHING MATCHED ─────────────────────────
+  //
+  // A SECOND PASS, NOT A SEVENTH TIER IN THE FIRST. If any exact tier found
+  // anything -- a city, a word, even a bare substring -- that answer stands and
+  // no edit distance is computed at all. Two reasons. It is what keeps the cost
+  // off every ordinary lookup: a term with an exact hit pays nothing new. And
+  // it is what stops a typo from OUTRANKING a real name it happens to be one
+  // edit from: "mumbi" resolves to Mumbai because nothing else contains it, not
+  // because a distance beat a substring.
+  //
+  // THE TRADE IS STATED RATHER THAN HIDDEN: a typo that happens to be a
+  // substring of some unrelated haystack loses to that substring. The tests
+  // check the common Indian typos are not, and if a real case turns up the
+  // ordering between 6 and 7 is where to look.
+  if (out.length === 0) {
+    for (const { a, s } of HAYSTACK) {
+      const rank = fuzzyRank(a, s, q);
+      if (rank >= 0) out.push({ a, rank });
+    }
   }
   // Ties break on the shorter city name, then the code, so a result never
   // depends on the order the source file happened to be in.
@@ -1626,10 +1819,12 @@ export function findAirports(term: string, limit = 8): Airport[] {
 // also matches, because Navi Mumbai is a worse match, not an alternative
 // reading. "London" and "Portland" both return several.
 // `rank` is the match quality that scoreAll already computed and used to throw
-// away: 0 the term IS the city, 1 a whole word, up through 5 a bare substring.
-// Returned rather than discarded so a caller can tell a confident hit from a
-// coincidence — which is what decides whether a model's reading is trusted
-// enough to spend units on.
+// away: 0 the code, 1 the city, 2 a whole word, up through 6 a bare substring,
+// then 7 to 10 for one and two edits. Returned rather than discarded so a caller
+// can tell a confident hit from a coincidence — which is what decides whether a
+// reading is trusted enough to spend units on. A fuzzy hit with `options` of
+// length one is unique at its distance, which is the shape the free route rung
+// accepts; a longer list is a guess and belongs to the model.
 export function resolveAirportName(term: string): { airport: Airport; options: Airport[]; rank: number } | null {
   const q = normalizeTerm(term);
   if (q.length < MIN_TERM) return null;
