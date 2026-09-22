@@ -1740,6 +1740,16 @@ const FUZZY_TARGET_MIN = 4;
 // goes through `dist`, which maps a miss to it.
 const FUZZY_NONE = 3;
 
+// THE TWO LINES A CALLER DRAWS ACROSS THE RANKS. Up to RANK_LAST_EXACT the term
+// was FOUND -- code, city, whole word, prefix, substring -- and a caller that
+// accepted those ranks before the fuzzy tiers existed goes on accepting them.
+// Above it the term was GUESSED: 7 and 8 are one edit away (the city, then any
+// haystack word), 9 and 10 are two. A one-edit guess with exactly one option is
+// the only guess worth acting on without asking; two edits is where typos
+// collide -- see the note above -- and is always offered as a list.
+export const RANK_LAST_EXACT = 6;
+export const RANK_LAST_ONE_EDIT = 8;
+
 function fuzzyRank(a: Airport, s: string, q: string): number {
   const max = q.length >= FUZZY_MIN_2 ? 2 : q.length >= FUZZY_MIN_1 ? 1 : 0;
   if (max === 0) return -1;

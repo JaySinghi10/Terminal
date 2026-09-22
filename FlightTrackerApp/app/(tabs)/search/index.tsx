@@ -138,7 +138,7 @@ import {
   type HomeView,
 } from '../../../lib/home';
 import * as Location from 'expo-location';
-// THE GMAIL TOKEN, for the /chat request below. It is written on home, by the
+// THE GMAIL TOKEN, for the /intent request below. It is written on home, by the
 // sign-in and the logout in the profile modal, and read here. See lib/account.tsx.
 import { useAccount } from '../../../lib/account';
 // ── A GMAIL IMPORT, ASKED FOR IN WORDS ────────────────────────────────────────
@@ -158,6 +158,7 @@ import {
   resolveAirportName,
   isKnownPlace,
   normalizeTerm,
+  RANK_LAST_EXACT, RANK_LAST_ONE_EDIT,
 } from '../../../lib/airports';
 // THE RESULTS, FROM THE PROVIDER ABOVE THIS ROUTE'S STACK. See lib/routeResults
 // for what lives there and why. What this screen still reads is the parser's
@@ -170,7 +171,7 @@ import {
   // first leg's departure, the last leg's arrival, and the leg's own origin for
   // the lookup. On a direct option all three are the row's own.
   optFirst, optLast, legOrigin,
-  type RouteSort, type RouteBand,
+  type RouteSort, type RouteBand, type RouteQuestion,
 } from '../../../lib/routeResults';
 // THE SHEET ITSELF, mounted at the end of this screen's tree while the
 // provider says it is up. See the note at its mount.
@@ -250,9 +251,11 @@ const SANS = 'Inter_400Regular';
 const SANS_SEMI = 'Inter_600SemiBold';
 
 // Three letters, an optional single separator, three letters. "BLR DEL",
-// "BLR>DEL", "BLR-DEL", "BLR\u2192DEL" and "BLRDEL" all match. Tested after
-// isFlightNumber, which needs digits, so the two can never both match.
-const ROUTE_REGEX = /^([A-Z]{3})[\s>\-\u2192]?([A-Z]{3})$/;
+// "BLR>DEL", "BLR-DEL", "BLR\u2192DEL" and "BLRDEL" all match, and so do
+// "DEL/IDR", "DEL,IDR", "DEL.IDR" and "DEL_IDR": every character a thumb lands
+// on between two codes. Tested after isFlightNumber, which needs digits, so
+// the two can never both match.
+const ROUTE_REGEX = /^([A-Z]{3})[\s>\-\u2192\/,._]?([A-Z]{3})$/;
 
 // ── PLAIN ENGLISH ────────────────────────────────────────────────────────────
 //
@@ -265,12 +268,17 @@ const ROUTE_REGEX = /^([A-Z]{3})[\s>\-\u2192]?([A-Z]{3})$/;
 //
 //   1  parseRouteQuery on the raw string. A hit returns immediately and this
 //      whole file might as well not exist — see parseSearchQuery.
-//   2  peel the modifier phrases off, hand the remainder to the SAME parser.
+//   2  peel the modifier phrases off, then the filler, and hand what is left
+//      to the SAME parser -- whether or not a modifier was found. "delhi to
+//      indore flights" has no modifier and used to skip this step entirely,
+//      which is why it reached the model.
 //   3  no hit either way: return step 1's answer verbatim, so what falls
-//      through to /chat is exactly what fell through before.
+//      through to the model rung is exactly what fell through before.
 //
 // THE SAFETY PROPERTY, and everything else rests on it: a peel is only accepted
-// if the REMAINDER STILL RESOLVES TO TWO AIRPORTS. A wrong strip cannot turn a
+// if the REMAINDER STILL RESOLVES TO TWO AIRPORTS, and at the exact ranks --
+// see freeRungTakes, which holds a string the user did not type to a higher
+// bar than one they did. A wrong strip cannot turn a
 // working route into a broken one; it can only fail to help. That is what makes
 // it safe to guess aggressively — an over-reach costs a fallthrough, which is
 // where the input was going anyway.
@@ -456,7 +464,9 @@ type NlPeel = {
 };
 
 // Walk the words once, longest phrase first, and take out what is recognised.
-// Returns null when there is nothing to peel or the sentence contradicts itself.
+// Returns null when the sentence contradicts itself, or when neither a
+// modifier nor a filler word came off -- there is nothing left to try that
+// step 1 has not already refused.
 function nlPeel(q: string): NlPeel | null {
   // Commas and semicolons separate a spoken list and are never inside a name
   // this dataset can match. Other punctuation is left alone.
@@ -549,16 +559,22 @@ function nlPeel(q: string): NlPeel | null {
     }
   }
 
-  if (clash || !found) return null;
+  if (clash) return null;
 
   const kept = words.filter((_, i) => keep[i]);
   // Two candidates, tried in order. The first keeps every word that is not a
   // modifier, so a place containing a filler word survives it; the second drops
   // the filler, which is what turns "Flight from San Francisco to Abu Dhabi"
   // into something the route parser's six-word limit will look at.
+  //
+  // THE FILLER COMES OFF WHETHER OR NOT A MODIFIER DID. The first candidate is
+  // only offered when something was peeled: with nothing peeled it is the raw
+  // string, which step 1 has already refused. The second is offered whenever it
+  // differs, which is what finally lets "delhi to indore flights" resolve
+  // without a model call.
   const a = kept.join(' ').trim();
   const b = kept.filter(w => !NL_FILLER.has(w.toLowerCase())).join(' ').trim();
-  const candidates = [a];
+  const candidates: string[] = found ? [a] : [];
   if (b !== a && b !== '') candidates.push(b);
   // "between X and Y" is the one phrasing worth rewriting, because `and` cannot
   // join ROUTE_SEPARATORS without changing what the existing parser does to
@@ -567,6 +583,7 @@ function nlPeel(q: string): NlPeel | null {
     const c = b.replace(/^between\s+/i, '').replace(/\s+and\s+/i, ' to ').trim();
     if (c !== '' && !candidates.includes(c)) candidates.push(c);
   }
+  if (!found && candidates.length === 0) return null;
 
   let dateError: string | null = null;
   let iso: string | null = null;
@@ -593,7 +610,7 @@ function nlPeel(q: string): NlPeel | null {
 //   - route resolves, a date parsed but is out of the window
 //                                                 DO NOT SEARCH. Say so, free
 //   - anything else in the sentence               it stays in the string, the
-//                                                 route fails, /chat gets it
+//                                                 route fails, the model gets it
 //
 // The third case is the one worth defending. "SFO to AUH on 3 October 2027"
 // resolves both ends and names a real date the backend will not serve. Running
@@ -614,7 +631,9 @@ function parseSearchQuery(q: string): SearchParse {
   const peeled = nlPeel(q);
   if (peeled !== null) {
     for (const cand of peeled.candidates) {
-      const r = parseRouteQuery(cand);
+      // STRIPPED, so the parser holds both ends to the higher bar: a candidate
+      // is a string the user did not type. See freeRungTakes.
+      const r = parseRouteQuery(cand, true);
       // ok only. A peeled candidate that produces an ERROR is not trusted: the
       // error was computed from a string the user did not type.
       if (r !== null && r.kind === 'ok') {
@@ -624,7 +643,7 @@ function parseSearchQuery(q: string): SearchParse {
     }
   }
   // STEP 3. Whatever the raw parse said, unchanged — including null, which is
-  // what sends a sentence to /chat.
+  // what sends a sentence to the model rung.
   return raw;
 }
 
@@ -703,39 +722,30 @@ function nlBandOnly(b: RouteBand): Record<RouteBand, boolean> {
 // ── THE MODEL RUNG ───────────────────────────────────────────────────────────
 //
 // Everything above this is free. This is the one rung that costs a model call,
-// and it exists for the sentences the peeler cannot reach: a misspelt place, a
-// numeric date, a range, a time word outside the four bands, an origin the user
-// never named.
+// and it exists for the sentences the peeler cannot reach: a misspelt place the
+// resolver cannot fix alone, a numeric date, a range, a time word outside the
+// four bands, an origin the user never named, a question.
 //
-// THE GATE, and it is the whole reason this is affordable.
+// ONE PRESS, ONE ENDPOINT. There used to be two paid rungs with different
+// contracts -- /parse extracted a route and asked for a second press, /chat
+// talked -- and a gate between them that guessed which one a sentence
+// deserved. /intent replaces both: the model reads the line and returns a
+// STRUCTURED INTENT (a route, a flight) or an answer in words, and nothing is
+// executed on the server. The device resolves the names, checks the date and
+// runs the board or the lookup through the same code the free rungs use. See
+// runRouteIntent.
 //
-// The obvious gate — "the peeler found a modifier but nothing resolved" — was
-// measured and rejected. It fires on "flights tomorrow", "morning flights" and
-// "fastest", none of which name a place, and it MISSES the cases it exists for,
-// because the peeler only recognises vocabulary it already knows: "on 3/10",
-// "this weekend" and "at dawn" peel nothing at all.
-//
-// This gate asks a different question: does the sentence contain a place, EXACTLY
-// spelt? Measured over eleven non-search inputs — "is my flight on time", "what
-// time does my flight land", "how do I get to the airport", "when does my plane
-// land", "what is my gate", "cancel my booking" and the rest — it fired zero
-// times, and it fired on seven of nine intended ones.
-//
-// It has to be an EXACT test. resolveAirportName's lowest tier matches any
-// haystack containing the term, which answers "time" with Nice, "land" with
-// Gothenburg and "sfo" with Sydney. A gate built on it would send every
-// question to the model. isKnownPlace exists for this and nothing else.
-//
-// The two it misses are sentences where EVERY place is misspelt. Nothing free
-// can tell those from noise, and paying a model call to find out is the cost
-// this gate exists to avoid.
+// THE GATE IS GONE, AND WHAT IT MEASURED IS SENT INSTEAD. namesAPlace asks
+// whether the sentence contains a place, EXACTLY spelt -- and it has to be
+// exact, because resolveAirportName's lowest tiers match any haystack
+// containing the term and would answer "time" with Nice. The endpoint records
+// it; a forced second reading built on it was measured by tools/eval_intent.py
+// and retired -- see the note above /intent in api.py. The device never
+// withholds a call on it.
 const NL_GATE_MAX_SPAN = 3;
 
-function nlLooksLikeSearch(q: string): boolean {
+function namesAPlace(q: string): boolean {
   const w = normalizeTerm(q).split(' ').filter(Boolean);
-  // One word is a place name, not a sentence, and the free rungs have already
-  // had it. Two is the shortest thing that can be a search this rung improves.
-  if (w.length < 2) return false;
   for (let i = 0; i < w.length; i++) {
     for (let n = NL_GATE_MAX_SPAN; n >= 1; n--) {
       if (i + n > w.length) continue;
@@ -745,40 +755,49 @@ function nlLooksLikeSearch(q: string): boolean {
   return false;
 }
 
-// What the endpoint sends back, before the device has looked at any of it.
-type ParseReply = {
+// ── WHAT /intent SENDS BACK ──────────────────────────────────────────────────
+//
+// ONE OF THREE THINGS, and the device shows one of them every time: a route to
+// search, a flight to look up, or words. `error` is the server's own failure
+// line.
+type IntentRoute = {
+  kind: 'route';
+  // Names, not airports, spelling corrected. The device resolves them.
   origin: string | null;
-  destination: string | null;
+  destination: string;
+  // Resolved against the calendar this device sent, and re-checked below.
   date: string | null;
   date_kind: 'single' | 'range' | null;
+  // The user's words for a range the model cut to its first day.
+  range_label: string | null;
   band: 'morning' | 'afternoon' | 'evening' | 'overnight' | null;
   sort: 'fastest' | 'earliest' | null;
+  // Set only when the line ASKED something. See RouteQuestion.
+  question: RouteQuestion | null;
+  // A date the server refused, kept so the device can say why rather than
+  // quietly searching today.
+  date_error: string | null;
   confidence: number;
+};
+type IntentFlight = {
+  kind: 'flight';
+  flight_number: string;
+  date: string | null;
+  date_error: string | null;
+};
+type IntentReply = {
+  intent: IntentRoute | IntentFlight | null;
+  response: string | null;
+  flight: unknown;
   error: string | null;
 };
 
-// What the device made of it.
-//
-// `armed` is the only field that decides whether the next press spends units.
-// `note` is the line the user reads. A reading can be shown and not armed, which
-// is the point: an extraction the app is unsure of is still worth showing,
-// because the user can see in one glance whether it read them correctly.
-type NlRead = {
-  from: RouteEnd | null;
-  to: RouteEnd | null;
-  fromName: string | null;
-  toName: string | null;
-  mods: SearchMods;
-  armed: boolean;
-  note: string;
-};
-
-// Below this the reading is shown but the next press does not search. 0.7 rather
-// than a half: the cost of being wrong is four units and a board for the wrong
-// day, and the cost of being cautious is one more press.
-const NL_ARM_AT = 0.7;
-// A rank above this came from the substring tier and is a coincidence as often
-// as a match. See resolveAirportName.
+// A rank above this came from the prefix and substring tiers and is a
+// coincidence as often as a match. It is the bar for a NAME THE MODEL RETURNED
+// and for a STRING THE DEVICE STRIPPED -- text the user did not type, which
+// earns no benefit of the doubt -- and the bar a tapped city label has to
+// clear; see handleCity. A string the user typed is held to RANK_LAST_EXACT
+// instead, as the free rung always was. See resolveAirportName.
 const NL_TRUST_RANK = 2;
 
 // How far an airport may be from the city label that resolved to it before the
@@ -792,61 +811,19 @@ const NL_BAND_OF: Record<string, RouteBand> = {
 const NL_SORT_OF: Record<string, RouteSort> = {
   fastest: 'duration', earliest: 'departure',
 };
-
-// The reply, checked again. The endpoint already validated the date against the
-// same window and the vocabularies against the same enums; this is the second
-// of the two cheap checks, and it is here because a field that reaches the
-// search has to have been agreed by both sides.
-function nlReadReply(r: ParseReply): NlRead {
-  const none: SearchMods = { date: null, band: null, sort: null };
-  const dead = (note: string): NlRead =>
-    ({ from: null, to: null, fromName: r.origin, toName: r.destination, mods: none, armed: false, note });
-
-  if (r.error !== null) return dead(r.error);
-
-  // A RANGE IS REFUSED, never narrowed. "This weekend" is two days and the board
-  // is one; picking Saturday would be a wrong answer that costs four units and
-  // looks right. The endpoint is told never to collapse one, and this is what
-  // happens when it says so.
-  if (r.date_kind === 'range') {
-    return dead('I can only search one day at a time — which date?');
-  }
-  if (r.origin === null || r.destination === null) {
-    const missing = r.origin === null ? 'where you are flying from' : 'where you are flying to';
-    return dead(`I did not catch ${missing}`);
-  }
-
-  // NAMES, resolved HERE. The model never picked an airport; it read two words
-  // out of a sentence. Everything that decides which airport those words mean —
-  // including the refusal of anything not in the dataset — happens on the
-  // device, exactly as it does for a typed route.
-  const from = resolveRouteEnd(r.origin);
-  const to = resolveRouteEnd(r.destination);
-  if (from === null || to === null) {
-    const bad = from === null ? r.origin : r.destination;
-    return dead(`no airport matches "${bad}"`);
-  }
-  if (from.airport.iata === to.airport.iata) {
-    return dead('origin and destination must be different airports');
-  }
-
-  const mods: SearchMods = {
-    date: r.date,
-    band: r.band !== null ? NL_BAND_OF[r.band] ?? null : null,
-    sort: r.sort !== null ? NL_SORT_OF[r.sort] ?? null : null,
-  };
-
-  // Two ways to be unsure, and either is enough to withhold the search: the
-  // model said so, or the names it returned only matched something loosely.
-  const loose = from.rank > NL_TRUST_RANK || to.rank > NL_TRUST_RANK;
-  const armed = r.confidence >= NL_ARM_AT && !loose;
-  return {
-    from, to, fromName: r.origin, toName: r.destination, mods, armed,
-    note: armed
-      ? 'read from your words — press again to search'
-      : 'I am not sure I read that right — check it, then press again',
-  };
-}
+// THE ORDERING A QUESTION IMPLIES, so the first row of the list IS the answer
+// the line above it gives. A count is a fact about the whole board and leaves
+// the ordering to the sentence.
+const QUESTION_SORT: Record<RouteQuestion, RouteSort | null> = {
+  next: 'departure', first: 'departure', last: 'latest',
+  fastest: 'duration', arrival: 'arrival', count: null, airlines: 'airline',
+};
+// WHEN THE LINE NAMED NO ORIGIN AND THERE IS NO PIN TO TAKE ONE FROM. Said
+// rather than guessed: an origin the app invented is a board nobody asked for.
+const INTENT_NO_ORIGIN = 'location is off, so say where from: "delhi to indore"';
+// A reply with neither an intent nor a line of text, which the server does not
+// send; the device still has to say something rather than nothing.
+const INTENT_BLANK = 'I did not understand that. Try a route like "delhi to indore", a flight number, or a question';
 
 // The affordance under the command line and the routing branch in handleSearch
 // must test the IDENTICAL string, or the affordance shows for input the search
@@ -908,6 +885,40 @@ function resolveRouteEnd(text: string): RouteEnd | null {
   return hit === null ? null : { airport: hit.airport, options: hit.options, rank: hit.rank };
 }
 
+// ── WHAT THE FREE RUNG MAY ACT ON ───────────────────────────────────────────
+//
+// THE RESOLVER NOW GUESSES, AND A GUESS IS NOT A MATCH. Above RANK_LAST_EXACT
+// the term was not found anywhere; it was one or two edits from something.
+// "dehli" is one edit from exactly one city and that is worth taking. "banglor"
+// is two edits from Bangkok's city and two from a word in Bengaluru's haystack,
+// and the resolver puts Bangkok first -- so the free rung spending four units
+// on it would fetch the wrong board and call it an answer. That case goes to
+// the model, which corrects spelling instead of guessing at it.
+//
+// TWO BARS FOR THE EXACT LADDER. A string the USER TYPED keeps every rank the
+// free rung ever accepted, RANK_LAST_EXACT, so nothing that worked stops
+// working. A string the DEVICE MADE by stripping words -- or a name the MODEL
+// returned -- is held to NL_TRUST_RANK: a prefix or substring coincidence in a
+// sentence the user never wrote is likelier than in one they did.
+//
+// AND AT MOST ONE TYPO END. Two independent one-edit guesses on one line is a
+// board the app is guessing at twice; one press more, through the model, is
+// the cheaper mistake.
+type EndTrust = 'exact' | 'typo' | null;
+
+function endTrust(e: RouteEnd, bar: number): EndTrust {
+  if (e.rank <= bar) return 'exact';
+  if (e.rank <= RANK_LAST_ONE_EDIT && e.options.length === 1) return 'typo';
+  return null;
+}
+
+function freeRungTakes(from: RouteEnd, to: RouteEnd, stripped: boolean): boolean {
+  const bar = stripped ? NL_TRUST_RANK : RANK_LAST_EXACT;
+  const f = endTrust(from, bar);
+  const t = endTrust(to, bar);
+  return f !== null && t !== null && !(f === 'typo' && t === 'typo');
+}
+
 // Every way the command line could be cut into two places, best candidate
 // first: the explicit separator if there is one, then whitespace splits with
 // the LONGEST left-hand side first — which is what makes "New York London"
@@ -945,7 +956,9 @@ type RouteParse =
   | { kind: 'error'; message: string; soft?: boolean }
   | null;
 
-function parseRouteQuery(q: string): RouteParse {
+// `stripped` says the string is the device's, not the user's -- a peel
+// candidate -- and raises the bar both ends must clear. See freeRungTakes.
+function parseRouteQuery(q: string, stripped = false): RouteParse {
   // ── ONE PLACE IS NOT A ROUTE, AND IT IS ASKED FIRST ─────────────────────
   //
   // TWO SEPARATE FALSE READINGS SENT CITY NAMES TO AN ERROR, and both are cut
@@ -980,10 +993,14 @@ function parseRouteQuery(q: string): RouteParse {
   // has said the word "route" out loud, and a line that says so is parsed as
   // one even if the whole of it happens to resolve. That also keeps "delhi to
   // delhi" reporting equal ends rather than silently becoming one airport.
+  //
+  // AT A RANK WORTH ACTING ON. A whole line that is merely two edits from some
+  // city is not a place; refusing it here lets the split below have its turn.
   const whole = q.trim().replace(/\s+/g, ' ');
   const wl = whole.toLowerCase();
-  if (!ROUTE_SEPARATORS.some(sep => wl.includes(sep)) && resolveRouteEnd(whole) !== null) {
-    return null;
+  if (!ROUTE_SEPARATORS.some(sep => wl.includes(sep))) {
+    const one = resolveRouteEnd(whole);
+    if (one !== null && endTrust(one, RANK_LAST_EXACT) !== null) return null;
   }
 
   // Codes first, on the whole string, exactly as this has always worked. Three
@@ -1020,7 +1037,10 @@ function parseRouteQuery(q: string): RouteParse {
       if (from.airport.iata === to.airport.iata) {
         return { kind: 'error', message: 'origin and destination must be different airports' };
       }
-      return { kind: 'ok', from, to };
+      // THE BEST SPLIT DECIDES. Both ends resolved; if either is a guess the
+      // free rung may not act on, the line goes to the model rather than to a
+      // worse cut further down the list.
+      return freeRungTakes(from, to, stripped) ? { kind: 'ok', from, to } : null;
     }
     // One end is a place and the other is short and says nothing else it could
     // be. That is a route with a name this app does not know, and saying so is
@@ -1080,8 +1100,10 @@ function singleAirportQuery(q: string): Airport | null {
   // Paz / El Alto" and one malformed dataset entry -- and both are reachable by
   // code.
   if (words.length > SINGLE_MAX_WORDS || words.some(w => NOT_A_PLACE.has(w))) return null;
+  // A typed place, so the user's bar -- and a lone one-edit typo opens the map
+  // on the city meant, while "banglor", which is Bangkok first, does not.
   const end = resolveRouteEnd(t);
-  return end === null ? null : end.airport;
+  return end === null || endTrust(end, RANK_LAST_EXACT) === null ? null : end.airport;
 }
 
 // ── WHERE A SEARCHED ROUTE HAS TO FIT ───────────────────────────────────────
@@ -1234,10 +1256,6 @@ export default function Search() {
     setError, setErrorCounter, setSaveError, setFlight, setFlightRecord,
     setChatResponse, setLoading, showResult, loading,
   });
-  // The model's reading, and the exact query it was read from. Keyed on the
-  // query so an edit invalidates it: a reading of a sentence the user has since
-  // changed must never be what the next press spends units on.
-  const [nlRead, setNlRead] = useState<{ q: string; v: NlRead } | null>(null);
   // ── WHERE THE BUBBLE HAS TO POINT ─────────────────────────────────────────
   //
   // THE MIDDLE OF THE SEARCHED ARC, IN SCREEN PIXELS, posted by the page on
@@ -1354,6 +1372,78 @@ export default function Search() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkParams.from, linkParams.to, linkParams.date, linkParams.tap]);
 
+  // ── A ROUTE THE MODEL READ, RUN ON THE DEVICE ─────────────────────────────
+  //
+  // THE SAME CODE THE FREE RUNG RUNS, with three things the free rung never has
+  // to do. The names are resolved here, at NL_TRUST_RANK, because the model
+  // returned corrected spellings and a loose match on a corrected spelling
+  // means the dataset does not have the place. An origin the line never named
+  // is taken from the position pin, and the note under the pill says so; with
+  // no pin there is no origin, and the app says that rather than inventing one.
+  // And the date, which the model resolved against the calendar this device
+  // sent, is checked against the same window the free rung's date is.
+  //
+  // A QUESTION SETS THE ORDERING IT IMPLIES and is carried to the sheet, where
+  // the line under the pill answers it from the board. See routeNotes.
+  const failSearch = (message: string) => {
+    setError(message);
+    setErrorCounter(c => c + 1);
+  };
+  const resolveIntentEnd = (name: string): RouteEnd | null => {
+    const end = resolveRouteEnd(name);
+    return end !== null && end.rank <= NL_TRUST_RANK ? end : null;
+  };
+  const runRouteIntent = async (i: IntentRoute) => {
+    if (i.date_error !== null) { failSearch(i.date_error); return; }
+    const to = resolveIntentEnd(i.destination);
+    if (to === null) { failSearch(`no airport matches "${i.destination}"`); return; }
+    let from: RouteEnd;
+    let assumed: string | null = null;
+    if (i.origin !== null) {
+      const named = resolveIntentEnd(i.origin);
+      if (named === null) { failSearch(`no airport matches "${i.origin}"`); return; }
+      from = named;
+    } else {
+      // panelOrigin is the airport nearest the PIN, and null for a guest, a
+      // refusal or a timezone view -- see its declaration for why a country's
+      // centroid is not an origin.
+      if (panelOrigin === null) { failSearch(INTENT_NO_ORIGIN); return; }
+      from = { airport: panelOrigin, options: [panelOrigin], rank: 0 };
+      assumed = panelOrigin.iata;
+    }
+    if (from.airport.iata === to.airport.iata) {
+      failSearch('origin and destination must be different airports');
+      return;
+    }
+    if (i.date !== null) {
+      const [y, m, d] = i.date.split('-').map(Number);
+      const off = nlOffset(new Date(y, m - 1, d));
+      if (off < 0) { failSearch('that date has already gone'); return; }
+      if (off > ROUTE_MAX_DATE_DAYS) {
+        failSearch(`route search reaches ${ROUTE_MAX_DATE_DAYS} days ahead at most`);
+        return;
+      }
+    }
+    // A NEW SEARCH STARTS CLEAN, as the typed route's branch below explains,
+    // then only what the sentence said.
+    routeResetControls_forSearch();
+    const band = i.band !== null ? NL_BAND_OF[i.band] ?? null : null;
+    const asked = i.sort !== null ? NL_SORT_OF[i.sort] ?? null : null;
+    const sort = i.question !== null ? QUESTION_SORT[i.question] ?? asked : asked;
+    if (band !== null) {
+      setRouteDepBands(nlBandOnly(band));
+      setRouteArrBands(ALL_BANDS_ON);
+    }
+    if (sort !== null) setRouteSort(sort);
+    if (i.date !== null) setRouteDate(i.date);
+    setRoutePick({ from: from.options, to: to.options });
+    await runRouteLookup(from.airport.iata, to.airport.iata, i.date ?? routeDate, {
+      question: i.question,
+      assumedOrigin: assumed,
+      rangeLabel: i.date_kind === 'range' ? i.range_label : null,
+    });
+  };
+
   const handleSearch = async () => {
     // FIRST, and before the empty-query guard: the keyboard should go whether or
     // not there was anything to search for. Pressing enter already dismisses it
@@ -1468,35 +1558,9 @@ export default function Search() {
       return;
     }
 
-    // ── the model rung ──────────────────────────────────────────────────
-    //
-    // TWO PRESSES, and the split is deliberate. The reading cannot exist before
-    // the first press, because producing it as the user types would be a model
-    // call per keystroke. So the first press buys the READING and the second
-    // spends the UNITS — which is what "see the extraction before Execute
-    // fires" has to mean when the extraction costs something to make.
-    //
-    // A reading already in hand for this exact query is not re-fetched: press
-    // two searches, or, if it was not armed, does nothing further. Editing the
-    // query clears it, so a stale reading can never be the thing that runs.
-    if (nlRead !== null && nlRead.q === query) {
-      const v = nlRead.v;
-      if (!v.armed || v.from === null || v.to === null) return;
-      routeResetControls_forSearch();
-      if (v.mods.band !== null) {
-        setRouteDepBands(nlBandOnly(v.mods.band));
-        setRouteArrBands(ALL_BANDS_ON);
-      }
-      if (v.mods.sort !== null) setRouteSort(v.mods.sort);
-      if (v.mods.date !== null) setRouteDate(v.mods.date);
-      setRoutePick({ from: v.from.options, to: v.to.options });
-      await runRouteLookup(v.from.airport.iata, v.to.airport.iata, v.mods.date ?? routeDate);
-      return;
-    }
-
     // ── A GMAIL IMPORT, AND IT COSTS NOTHING TO RECOGNISE ───────────────
     //
-    // ABOVE BOTH PAID RUNGS AND BELOW EVERY FREE ONE. "pull my flights from
+    // ABOVE THE PAID RUNG AND BELOW EVERY FREE ONE. "pull my flights from
     // gmail" used to reach /parse, which is built to find two airports in a
     // sentence: it found none and answered "I did not catch where you are
     // flying from", which is a unit spent to misread an instruction this app
@@ -1506,7 +1570,7 @@ export default function Search() {
     // meaning -- a real route resolves before this is asked, and
     // looksLikeGmailImport needs a mail source word that no route contains.
     //
-    // THE ANSWER GOES WHERE /chat'S GOES, because to the user it is the same
+    // THE ANSWER GOES WHERE THE MODEL'S WORDS GO, because to the user it is the same
     // kind of thing: a sentence asked in words, answered in words. The pull
     // raises its own toast and its own undo banner on the way -- the banner is
     // the only way to undo an add -- and this is the line that stays on screen
@@ -1523,61 +1587,66 @@ export default function Search() {
       return;
     }
 
-    if (nlLooksLikeSearch(query)) {
-      setLoading(true);
-      try {
-        const response = await fetch(`${API_BASE}/parse`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: query }),
-        });
-        const data = await response.json();
-        if (!response.ok) {
-          setError(data.error || "Something went wrong. Please try again.");
-          setErrorCounter(c => c + 1);
-          return;
-        }
-        // Nothing is searched on this press. The reading goes on screen and the
-        // user decides whether it is right.
-        setNlRead({ q: query, v: nlReadReply(data as ParseReply) });
-        return;
-      } catch {
-        setError("Could not reach the server. Please check your connection and try again.");
-        setErrorCounter(c => c + 1);
-        return;
-      } finally {
-        setLoading(false);
-      }
-    }
-
+    // ── THE MODEL RUNG, ONE PRESS ──────────────────────────────────────
+    //
+    // EVERYTHING THE FREE RUNGS REFUSED ARRIVES HERE, and every reply is shown:
+    // a route intent runs the board, a flight intent runs the lookup, words go
+    // where the assistant's words always went, and a failure is a line in the
+    // error channel. Nothing returns to a blank screen.
+    //
+    // THE DEVICE SENDS ITS OWN DATE, because "tomorrow" is the user's tomorrow
+    // and at 23:30 in Mumbai that is not the server's. And whether the sentence
+    // names a place, which the server cannot know for itself.
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`${API_BASE}/chat`, {
+      const response = await fetch(`${API_BASE}/intent`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           // The session, when there is one; the server turns it into Gmail
-          // access for the assistant's next-flight tools. See lib/account.tsx.
+          // access for the assistant's next-flight tool. See lib/account.tsx.
           ...(session !== null ? { Authorization: `Bearer ${session}` } : {}),
         },
-        body: JSON.stringify({ message: query }),
+        body: JSON.stringify({
+          message: query,
+          today: localIsoDate(new Date()),
+          has_place: namesAPlace(query),
+        }),
       });
       const data = await response.json();
+      const reply = data as IntentReply;
 
-      // data.error as well as the status, which is what every other fetch in
-      // this file already does — see runRouteLookup, runFlightLookup and the
-      // refresh loop. /chat returns its failures as a 200 carrying an error
-      // key, so a status-only check swallowed them: the credit error was being
-      // reported correctly by the backend and discarded here, which is why
-      // "is my flight on time" appeared to do nothing at all.
-      if (data.error || !response.ok) {
-        setError(data.error || "Something went wrong. Please try again.");
+      // data.error as well as the status: the endpoint returns its failures as
+      // a 200 carrying an error key, as /chat did, so a status-only check
+      // would swallow them.
+      if (reply.error || !response.ok) {
+        setError(reply.error || "Something went wrong. Please try again.");
         setErrorCounter(c => c + 1);
         return;
       }
 
-      setChatResponse(data.response);
+      if (reply.intent !== null && reply.intent.kind === 'route') {
+        // `question` is absent from a server that predates it; read as none.
+        await runRouteIntent({ ...reply.intent, question: reply.intent.question ?? null });
+        return;
+      }
+      if (reply.intent !== null && reply.intent.kind === 'flight') {
+        if (reply.intent.date_error !== null) {
+          setError(reply.intent.date_error);
+          setErrorCounter(c => c + 1);
+          return;
+        }
+        await runFlightLookup(reply.intent.flight_number, false, reply.intent.date);
+        return;
+      }
+
+      if (!reply.response) {
+        setError(INTENT_BLANK);
+        setErrorCounter(c => c + 1);
+        return;
+      }
+      setChatResponse(reply.response);
       if (data.flight) {
         // THE RECORD FIRST, as in runFlightLookup, so one clock check serves both
         // it and the card. This was the last flightDataFromApi call site passing
@@ -1639,10 +1708,6 @@ export default function Search() {
   //
   // Parsed once per distinct query and cached: the parser scans the dataset,
   // and this runs on every keystroke.
-  // An edit throws the model's reading away. Doing it here rather than in the
-  // TextInput handler means it cannot be forgotten by a second input path.
-  if (nlRead !== null && nlRead.q !== query) setNlRead(null);
-
   const routeParseCache = useRef<{ q: string; v: SearchParse }>({ q: '\u0000', v: null });
   if (routeParseCache.current.q !== query) {
     routeParseCache.current = { q: query, v: parseSearchQuery(query) };
@@ -3295,30 +3360,7 @@ export default function Search() {
               time to change it. Nothing else belongs under the command line
               while typing — the date control moved up with the other view
               controls above the results. */}
-          {/* THE MODEL'S READING, in the same block and the same styles as the
-              free one. Three lines rather than two: the route, its settings, and
-              a line saying where the reading came from and whether pressing
-              again will spend anything. It replaces the free affordance rather
-              than joining it, because both cannot be true of one query. */}
-          {nlRead !== null && nlRead.q === query && (
-            <View style={{ marginTop: 4, marginBottom: 10, paddingLeft: 18 }}>
-              {nlRead.v.from !== null && nlRead.v.to !== null && (
-                <Text style={s.routeEcho} numberOfLines={2}>
-                  {`${nlRead.v.from.airport.city} (${nlRead.v.from.airport.iata})`}
-                  {' → '}
-                  {`${nlRead.v.to.airport.city} (${nlRead.v.to.airport.iata})`}
-                </Text>
-              )}
-              {nlModsLabel(nlRead.v.mods) !== '' && (
-                <Text style={s.routeEchoMods} numberOfLines={1}>
-                  {nlModsLabel(nlRead.v.mods)}
-                </Text>
-              )}
-              <Text style={s.routeEchoNote} numberOfLines={2}>{nlRead.v.note}</Text>
-            </View>
-          )}
-
-          {routeAffordance && nlRead === null && (
+          {routeAffordance && (
             <View style={{ marginTop: 4, marginBottom: 10, paddingLeft: 18 }}>
               <Text style={s.routeEcho} numberOfLines={2}>
                 {`${routeAffordance.from.airport.city} (${routeAffordance.from.airport.iata})`}
@@ -4565,12 +4607,6 @@ const s = StyleSheet.create({
   // route is what will be searched, these are its settings.
   routeEchoMods: {
     fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS, marginTop: 3,
-  },
-  // Where the reading came from, and whether the next press spends anything.
-  // One step further down the same ramp than the settings above it: this is the
-  // app talking about itself, which is the least important thing in the block.
-  routeEchoNote: {
-    fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: SANS, marginTop: 4,
   },
 });
 

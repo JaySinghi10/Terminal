@@ -38,6 +38,10 @@ import { airportByCode, resolveAirportName } from './airports';
 import type { Airport } from './airports';
 // THE DETENT ARITHMETIC, which no sheet owns. See its note.
 import { sheetDetents } from './sheet';
+// FOR THE LINE UNDER THE PILL: a row's clock as the row prints it, and the day
+// as the date pill prints it, so an answer reads in the list's own words.
+import { clock24 } from './time';
+import { routeDateLabel } from './flightstatus';
 
 // Decoration the provider puts on board names that the airport dataset does
 // not carry: "Bengaluru Intl Airport", "Dubai Intl (Terminal 3)", "Khorog
@@ -126,6 +130,23 @@ export const SHEET_HEAD_HEIGHT =
   SHEET_GRABBER_CLEARANCE + SHEET_PILL_PAD * 2 + SHEET_PILL_LINE + SHEET_HEAD_PAD;
 const SHEET_SMALL_TOLERANCE = 2;
 const SHEET_SMALL_HEIGHT = SHEET_HEAD_HEIGHT - SHEET_SMALL_TOLERANCE;
+
+// A NOTE UNDER THE PILL, when a search has one: the answer to a question, the
+// origin the app assumed, the day a range was cut to. Thirteen of text on a
+// sixteen line, at most two lines each, under a gap of eight -- and the small
+// detent GROWS BY EXACTLY THAT, because an answer nobody can read without
+// raising the sheet is not an answer. The line count is estimated from the
+// window's width at SHEET_NOTE_CHAR points a character, a little wider than
+// Inter's average advance at 13 so the estimate errs toward a spare line rather
+// than a clipped one; the Text caps at the same count, so the cut never lands
+// inside a note. Declared here for the reason the head's numbers are: the
+// detent is computed from them.
+export const SHEET_NOTE_LINE = 16;
+export const SHEET_NOTE_GAP = 8;
+export const SHEET_NOTE_MAX_LINES = 2;
+export const SHEET_NOTE_CHAR = 7;
+// The sheet's side padding, which the estimate above has to subtract.
+export const SHEET_SIDE_PAD = 20;
 
 // Local-only view controls. Nothing here re-fetches: every option reorders or
 // hides rows already in state.
@@ -532,6 +553,22 @@ export const optLegsWithOrigin = (
       { leg: o.legs[1], origin: legOrigin(o.legs[1], o.hub) },
     ];
 
+// ── WHAT A SENTENCE ASKED, BEYOND THE ROUTE ─────────────────────────────────
+//
+// SET BY THE MODEL RUNG ON THE SEARCH SCREEN and read by the note under the
+// pill. Every OTHER way of fetching a board -- the date pill, the end pickers,
+// Reset, the pin -- passes nothing and so clears it: the question was about the
+// board that was searched, and a person who has since picked an origin by hand
+// no longer needs telling which one was assumed.
+export type RouteQuestion = 'next' | 'first' | 'last' | 'fastest' | 'arrival' | 'count' | 'airlines';
+export type RouteAsk = {
+  question: RouteQuestion | null;
+  // The origin nobody named, taken from the position pin. An IATA code.
+  assumedOrigin: string | null;
+  // A range the model cut to its first day: the user's own words for it.
+  rangeLabel: string | null;
+};
+
 // ── THE HOST ────────────────────────────────────────────────────────────────
 //
 // WHAT A FETCH NEEDS FROM THE SCREEN THAT OWNS THE FLIGHT CARD. Every field is
@@ -589,6 +626,8 @@ function useRouteResultsState() {
   // set, so an empty array means "all on" without having to seed state for
   // carriers we have not seen yet.
   const [routeAirlinesOff, setRouteAirlinesOff] = useState<string[]>([]);
+  // See RouteAsk. Written by runRouteLookup and by nothing else.
+  const [routeAsk, setRouteAsk] = useState<RouteAsk | null>(null);
 
   // ── THE SHEET, BETWEEN THE MAP SCREEN AND THE SHELL ───────────────────────
   //
@@ -605,17 +644,23 @@ function useRouteResultsState() {
   // inset -- this provider is inside the tab, so its bottom inset IS the bar's.
   // Hooks, not Dimensions.get, so rotation re-derives them. The shell springs
   // between these and the map screen's bubble clears them.
-  const { height: sheetWinHeight } = useWindowDimensions();
+  const { height: sheetWinHeight, width: sheetWinWidth } = useWindowDimensions();
   const sheetInsets = useSafeAreaInsets();
-  const sheetHeights = sheetDetents(sheetWinHeight, sheetInsets.bottom, SHEET_SMALL_HEIGHT);
+  // sheetHeights is computed below routeNotes, whose lines the small detent
+  // has to include.
 
   // THE HOST'S `loading`, FOR THE SHEET'S PICKERS. A date pick or an end pick
   // must not fire a second fetch over one in flight, and the flag that says so
   // is the host's. Read through the ref so the sheet needs nothing bound.
   const hostLoading = () => host.current?.loading ?? false;
 
-  const runRouteLookup = async (origin: string, destination: string, day: string | null) => {
+  // `ask` is what the sentence asked beyond the route -- see RouteAsk -- and
+  // only the model rung passes one. Every other caller clears it by omission.
+  const runRouteLookup = async (
+    origin: string, destination: string, day: string | null, ask: RouteAsk | null = null,
+  ) => {
     const h = host.current;
+    setRouteAsk(ask);
     h?.setError("");
     h?.setSaveError("");
     // The three result kinds are mutually exclusive; a route answer replaces
@@ -1145,6 +1190,111 @@ function useRouteResultsState() {
   const routeControlsDirty =
     routeFiltersDirty || routeSort !== ROUTE_SORT_DEFAULT || routeDate !== null;
 
+  // ── THE LINE UNDER THE PILL ───────────────────────────────────────────────
+  //
+  // A QUESTION IS ANSWERED FROM THE BOARD, ON THE DEVICE, from the same rows
+  // and the same filters the list draws, so the answer and the list cannot
+  // disagree. Each shape reads one row: the extreme of the OPEN group under the
+  // key the question names. Not routeSorted[0], because the person may re-sort
+  // the list afterwards and "next" has to go on meaning next; and the open
+  // group, never the closed one, because a flight nobody can board is not the
+  // next flight anywhere.
+  //
+  // NEVER SILENT. A board with nothing to answer from says so in the same
+  // line. An origin the app assumed and a range it cut are said whether or not
+  // there was a question, because both are things the person did not type.
+  const routeNotes: string[] = (() => {
+    if (routeAsk === null || routeResult === null) return [];
+    const out: string[] = [];
+    const cityOf = (iata: string) => airportByCode(iata)?.city ?? iata;
+    const fromCity = cityOf(routeResult.origin);
+    const toCity = cityOf(routeResult.destination);
+    // The board's own span, in words: a dated board is its day, the rolling
+    // one is its window, which may run past midnight and so is not "today".
+    const when = routeResult.date === null
+      ? `in the next ${routeResult.window_hours} hours`
+      : `on ${routeDateLabel(routeResult.date)}`;
+    const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    const open = routeVisible.filter(o => routeCatchOf(o) !== 'uncatchable');
+    // The row at the extreme of a key, skipping rows the key cannot place.
+    const extreme = (
+      rows: RouteOption[], key: (o: RouteOption) => number, largest = false,
+    ): RouteOption | null => {
+      let best: RouteOption | null = null;
+      let bestKey = 0;
+      for (const o of rows) {
+        const k = key(o);
+        if (k === NO_TIME) continue;
+        if (best === null || (largest ? k > bestKey : k < bestKey)) { best = o; bestKey = k; }
+      }
+      return best;
+    };
+    const describe = (o: RouteOption): string => {
+      const leg = optFirst(o);
+      return `${legCarrier(leg)} ${leg.flight_number} at `
+        + `${clock24(leg.departure_scheduled_iso, leg.departure_scheduled)} `
+        + `from ${cityOf(legOrigin(leg, routeResult.origin))}`;
+    };
+    const q = routeAsk.question;
+    if (q !== null) {
+      if (routeShown === 0) {
+        out.push(`No flights from ${fromCity} to ${toCity} ${when}`);
+      } else if (q === 'count') {
+        out.push(`${plural(routeShown, 'flight')} from ${fromCity} to ${toCity} ${when}`
+          + (open.length < routeShown ? `, ${open.length} still to catch` : ''));
+      } else if (q === 'airlines') {
+        const names = Array.from(new Set(routeRows.flatMap(optCarriers))).sort();
+        out.push(`${plural(names.length, 'airline')} ${names.length === 1 ? 'flies' : 'fly'} `
+          + `${fromCity} to ${toCity}: ${names.join(', ')}`);
+      } else if (routeVisible.length === 0) {
+        out.push('Every flight is hidden by a filter');
+      } else if (open.length === 0) {
+        out.push(`No more flights to ${toCity} ${when} can be caught`);
+      } else if (q === 'next' || q === 'first') {
+        const o = extreme(open, routeDepartureTs);
+        out.push(o === null
+          ? `No timed flight to ${toCity} ${when}`
+          : q === 'next'
+            ? `Next flight to ${toCity} is ${describe(o)}`
+            : `First flight to ${toCity} ${when} is ${describe(o)}`);
+      } else if (q === 'last') {
+        const o = extreme(open, routeDepartureTs, true);
+        out.push(o === null
+          ? `No timed flight to ${toCity} ${when}`
+          : `Last flight to ${toCity} ${when} is ${describe(o)}`);
+      } else if (q === 'fastest') {
+        const o = extreme(open, x => optDurationMs(x) ?? NO_TIME);
+        out.push(o === null
+          ? `No flight to ${toCity} ${when} has a known duration`
+          : `Fastest flight to ${toCity} is ${describe(o)}, ${routeDurLabel(optDurationMs(o))}`);
+      } else {
+        const o = extreme(open, routeArrivalTs);
+        if (o === null) {
+          out.push(`No flight to ${toCity} ${when} has a known arrival time`);
+        } else {
+          const last = optLast(o);
+          out.push(`Earliest arrival in ${toCity} is `
+            + `${clock24(last.arrival_scheduled_iso, last.arrival_scheduled ?? ROUTE_NO_TIME)}, `
+            + describe(o));
+        }
+      }
+    }
+    if (routeAsk.assumedOrigin !== null) {
+      out.push(`From ${cityOf(routeAsk.assumedOrigin)}, assumed from your location`);
+    }
+    if (routeAsk.rangeLabel !== null && routeResult.date !== null) {
+      out.push(`Searching ${routeDateLabel(routeResult.date)}, the first day of ${routeAsk.rangeLabel}`);
+    }
+    return out;
+  })();
+
+  // THE SMALL DETENT, WITH THE NOTES' LINES IN IT. See SHEET_NOTE_LINE.
+  const noteChars = Math.max(20, Math.floor((sheetWinWidth - SHEET_SIDE_PAD * 2) / SHEET_NOTE_CHAR));
+  const noteLines = routeNotes.reduce(
+    (n, t) => n + Math.min(SHEET_NOTE_MAX_LINES, Math.max(1, Math.ceil(t.length / noteChars))), 0);
+  const noteHeight = routeNotes.length === 0 ? 0 : SHEET_NOTE_GAP + noteLines * SHEET_NOTE_LINE;
+  const sheetHeights = sheetDetents(sheetWinHeight, sheetInsets.bottom, SHEET_SMALL_HEIGHT + noteHeight);
+
   // The view-control half of a reset, without the re-fetch. Both search paths
   // call it so that "a search typed from scratch starts clean" is one rule in
   // one place rather than two lists that drift.
@@ -1179,6 +1329,7 @@ function useRouteResultsState() {
     bindHost,
     savedFlights,
     routeResult, setRouteResult,
+    routeAsk, routeNotes,
     routeDate, setRouteDate,
     routeSort, setRouteSort,
     routeDepBands, setRouteDepBands,

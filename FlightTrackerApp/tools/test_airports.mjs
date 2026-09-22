@@ -121,6 +121,13 @@ check('a typo is NOT a known place -- the set is exact, the resolver is what for
   A.isKnownPlace('dehli') === false);
 
 console.log();
+console.log('-- the two lines the search rung draws across the ranks --');
+check('RANK_LAST_EXACT is 6 and RANK_LAST_ONE_EDIT is 8', A.RANK_LAST_EXACT === 6 && A.RANK_LAST_ONE_EDIT === 8);
+check('a one-edit hit sits between them', res('dehli').rank > A.RANK_LAST_EXACT && res('dehli').rank <= A.RANK_LAST_ONE_EDIT, res('dehli').rank);
+check('a two-edit hit sits above the second', res('banglor').rank > A.RANK_LAST_ONE_EDIT, res('banglor').rank);
+check('every exact lookup sits at or below the first', ['BLR', 'mumbai', 'delhi', 'mumb'].every(t => res(t).rank <= A.RANK_LAST_EXACT));
+
+console.log();
 console.log('-- cost --');
 const t0 = performance.now();
 for (let i = 0; i < 200; i++) res(i % 2 ? 'dehli' : 'banglor');

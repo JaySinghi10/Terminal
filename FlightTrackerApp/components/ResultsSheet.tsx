@@ -95,6 +95,7 @@ import {
   SHEET_GRABBER_CLEARANCE, SHEET_PILL_PAD, SHEET_PILL_LINE, SHEET_HEAD_PAD,
   ROUTE_MAX_DATE_DAYS, ROUTE_SORT_LABELS, ROUTE_SORT_PILLS, ROUTE_SORT_CAPSULE,
   ROUTE_BANDS,
+  SHEET_NOTE_LINE, SHEET_NOTE_GAP, SHEET_NOTE_MAX_LINES, SHEET_SIDE_PAD,
   type RouteBand, type RouteOption,
 } from '../lib/routeResults';
 
@@ -137,7 +138,8 @@ const BUBBLE_TINT = `rgba(${PAGE_RGB},0.5)`;
 // "duration" and "Filters 3", all of which render today. Trimming the pill's
 // horizontal padding from 10 to 8 and the chevron's left margin from 8 to 4
 // buys 9 characters and keeps every existing label intact.
-const ROUTE_SCROLL_PAD = 20;    // sh.controls paddingHorizontal
+// THE PROVIDER'S, because the notes under the pill are measured against it there.
+const ROUTE_SCROLL_PAD = SHEET_SIDE_PAD;    // sh.controls paddingHorizontal
 const ROUTE_PILL_CHROME = 28;   // 16 padding + 2 border + 4 chevron margin + 6 chevron
 const ROUTE_PILL_GAP = 8;       // s.routePillRow gap
 const ROUTE_MONO_ADVANCE = 6.6; // JetBrains Mono, fontSize 11
@@ -222,7 +224,7 @@ export function ResultsSheet() {
   // labels would keep the width they were built for.
   const { width: routeWinWidth } = useWindowDimensions();
   const {
-    routeResult,
+    routeResult, routeNotes,
     routeDate, setRouteDate,
     routeSort, setRouteSort,
     routeDepBands, setRouteDepBands,
@@ -825,6 +827,17 @@ export function ResultsSheet() {
             </TouchableOpacity>
           </View>
         )}
+        {/* THE LINE THAT ANSWERS, OR SAYS WHAT WAS ASSUMED. In the head with
+            the pill, so it is on screen at the small detent; the detent was
+            cut to include it -- see SHEET_NOTE_LINE. Capped at the lines the
+            detent counted. */}
+        {routeNotes.length > 0 && (
+          <View style={sh.notes}>
+            {routeNotes.map((t, i) => (
+              <Text key={i} style={sh.note} numberOfLines={SHEET_NOTE_MAX_LINES}>{t}</Text>
+            ))}
+          </View>
+        )}
       </View>
 
       {/* ── THE CONTROLS, ON ONE ROW ───────────────────────────────────────
@@ -1205,6 +1218,13 @@ const sh = StyleSheet.create({
   sortHeadTxt: {
     fontFamily: MONO_BOLD, fontSize: 13, lineHeight: SHEET_PILL_LINE,
     color: PAGE_BG, letterSpacing: 0.5,
+  },
+  // THE NOTES UNDER THE PILL. Thirteen on a sixteen line in the ink the empty
+  // line uses; the gap and the line height are the detent's, from lib/routeResults.
+  notes: { marginTop: SHEET_NOTE_GAP },
+  note: {
+    fontFamily: SANS, fontSize: 13, lineHeight: SHEET_NOTE_LINE,
+    color: 'rgba(226,226,226,0.6)',
   },
   controls: { paddingHorizontal: ROUTE_SCROLL_PAD, marginBottom: 4 },
   list: { flex: 1, paddingHorizontal: ROUTE_SCROLL_PAD },
