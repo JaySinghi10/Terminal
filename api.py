@@ -318,6 +318,20 @@ class ChatRequest(BaseModel):
     gmail_token: str | None = None
 
 
+class IntentRequest(BaseModel):
+    message: str
+    gmail_token: str | None = None
+    # THE DEVICE'S OWN CALENDAR DATE, YYYY-MM-DD. "Tomorrow" is the user's
+    # tomorrow, and at 23:30 in Mumbai that is not the server's. Omitted, the
+    # server's UTC date stands in, which is what /parse always used.
+    today: str | None = None
+    # WHETHER THE DEVICE FOUND A PLACE IN THE SENTENCE -- lib/airports.ts's
+    # isKnownPlace, which the server cannot run. It decides one thing: whether a
+    # prose answer earns a second, forced attempt at reading a route. See the
+    # retry in /intent.
+    has_place: bool = False
+
+
 class GmailFlightsRequest(BaseModel):
     gmail_token: str | None = None
 
@@ -859,6 +873,356 @@ def chat(req: ChatRequest, request: Request):
         "response": None,
         "flight": captured_flight,
     }
+
+
+# ──────────────────────────────────────────────
+# INTENT: ONE CALL, WHATEVER WAS TYPED
+# ──────────────────────────────────────────────
+#
+# THE COMMAND LINE HAD TWO PAID RUNGS WITH DIFFERENT CONTRACTS -- /parse
+# extracted fields and made the user press twice, /chat talked -- and a gate
+# between them that guessed which one a sentence deserved. The gate guessed
+# wrong in both directions: a sentence whose only place was "delhi" never
+# reached the extractor, and one with no origin reached it and stopped dead.
+#
+# THIS IS THE ONE RUNG THAT REPLACES BOTH. The model reads the line and either
+# calls search_route or lookup_flight -- a STRUCTURED INTENT, which is returned
+# to the device and NOT executed here -- or runs the Gmail tool and answers, or
+# simply answers. Whatever it does, something comes back that the screen can
+# show. Nothing here spends a provider unit on a search: the device runs every
+# intent through the same code its free rungs use, against its own dataset.
+#
+# THE MODEL STILL NEVER CHOOSES AN AIRPORT. It returns place NAMES with the
+# spelling corrected, and the device resolves them against the bundled data,
+# exactly as /parse did. That is what stops it inventing an airport, and it is
+# kept on purpose. The one relaxation: a 3-letter code the USER typed comes back
+# as typed, because the device resolves codes at rank 0 and a code somebody
+# wrote is not an invention.
+#
+# ── THE FORCED RETRY, AND WHY IT IS GUARDED TWICE ──────────────────────────
+#
+# On tool choice "auto", Gemini sometimes answers a route request in prose. If
+# the first turn is prose and the DEVICE said the sentence contains a place, the
+# model is asked once more with search_route forced. Two guards, because a
+# forced call always produces one: the retry runs only when has_place is set,
+# and its answer is taken only if the model's own confidence in it clears
+# INTENT_FORCED_MIN. Below that, the prose it gave first is the answer. The
+# eval in tools/eval_intent.py measures how often this fires and how often it
+# is right; that number is what decides whether it stays.
+INTENT_FORCED_MIN = 0.5
+INTENT_EMPTY = "type a flight number, a route like delhi to indore, or a question"
+INTENT_NO_DESTINATION = "I could not tell where you are flying to. Try: delhi to indore"
+INTENT_BAD_NUMBER = "I could not read a flight number in that. Try: 6E5071"
+
+INTENT_ROUTE_TOOL = {
+    "name": "search_route",
+    "description": (
+        "The user wants to see flights between two places. Call this for ANY "
+        "request to see, list, find or compare flights from one place to "
+        "another, however it is phrased or misspelt, including bare codes like "
+        "'DEL IDR' or 'del/idr'. Do not answer such a request in words."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "origin": {
+                "type": "string",
+                "description": (
+                    "Where the flight leaves from: the city or airport NAME in "
+                    "English with spelling corrected (Delhi, Indore), or the "
+                    "3-letter code if the user typed a code. OMIT ENTIRELY if the "
+                    "sentence does not say -- never guess; the app knows the "
+                    "user's location."
+                ),
+            },
+            "destination": {
+                "type": "string",
+                "description": "Where the flight goes, same rules as origin. Required.",
+            },
+            "date": {
+                "type": "string",
+                "description": (
+                    "YYYY-MM-DD, resolved against today's date in the system "
+                    "prompt. For a RANGE ('this weekend', 'next week', 'early "
+                    "October') give the FIRST day of the range and set date_kind "
+                    "to 'range'. Omit if no day is mentioned."
+                ),
+            },
+            "date_kind": {"type": "string", "enum": ["single", "range"]},
+            "range_label": {
+                "type": "string",
+                "description": "The user's own words for the range, e.g. 'this weekend'. Only with date_kind 'range'.",
+            },
+            "band": {
+                "type": "string",
+                "enum": ["morning", "afternoon", "evening", "overnight"],
+                "description": "Departure time of day, if named. Red-eye, late night and early morning are 'overnight'.",
+            },
+            "sort": {
+                "type": "string",
+                "enum": ["fastest", "earliest"],
+                "description": "fastest/quickest/shortest -> fastest; earliest/first/soonest/next -> earliest.",
+            },
+            "confidence": {
+                "type": "number",
+                "description": "0 to 1: how sure you are that this sentence asks for flights between places.",
+            },
+        },
+        "required": ["destination", "confidence"],
+    },
+}
+
+INTENT_FLIGHT_TOOL = {
+    "name": "lookup_flight",
+    "description": (
+        "The user names ONE specific flight and wants to know about it: its "
+        "status, times, gate, terminal, whether it is on time, delayed, landed. "
+        "Call this whenever a flight number appears in any form -- '6E5071', "
+        "'6e 5071', '6E-5071', 'AI 2630', 'indigo 5071', 'is SK936 on time', "
+        "'when does EK500 land'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "flight_number": {
+                "type": "string",
+                "description": (
+                    "IATA form, no spaces: two-character airline code then the "
+                    "digits, e.g. 6E5071, AI2630, SK936. Convert airline names to "
+                    "codes: IndiGo 6E, Air India AI, Akasa QP, SpiceJet SG, "
+                    "Vistara UK, Air India Express IX, Emirates EK, Qatar QR, "
+                    "Etihad EY, KLM KL, Lufthansa LH, British Airways BA, SAS SK, "
+                    "Singapore SQ."
+                ),
+            },
+            "date": {
+                "type": "string",
+                "description": "YYYY-MM-DD, only if the sentence names a day. Otherwise omit.",
+            },
+        },
+        "required": ["flight_number"],
+    },
+}
+
+# THE GMAIL TOOL STAYS AND THE OTHER TWO DO NOT. get_flight_status and
+# check_my_flight both ran a flight lookup on the SERVER, undated and without an
+# origin; lookup_flight above hands the same question to the device, which runs
+# it on the flight's own date and origin and guards the storage write. Keeping
+# both would give the model two tools for one question and let it pick the
+# worse one. find_flight_from_gmail has no device equivalent -- the mailbox is
+# read here -- so it stays.
+INTENT_TOOLS = [INTENT_ROUTE_TOOL, INTENT_FLIGHT_TOOL, TOOLS[2]]
+
+INTENT_SYSTEM = (
+    "You are the command line of a flight-tracking app. The user typed ONE line. "
+    "Today is {today}. Work out what they want and act:\n"
+    "\n"
+    "FLIGHTS BETWEEN PLACES -> call search_route. Any phrasing counts: "
+    "'delhi to indore flights', 'flights delhi indore', 'dilli se indore ki "
+    "flight', 'flights to bombay', 'IDR DEL', 'del/blr tomorrow morning', "
+    "'indore flights' (destination only). Return place NAMES in English with the "
+    "spelling corrected. Old names map to current ones: Bombay->Mumbai, "
+    "Madras->Chennai, Calcutta->Kolkata, Bangalore->Bengaluru, Poona->Pune, "
+    "Baroda->Vadodara, Trivandrum->Thiruvananthapuram, Cochin->Kochi, "
+    "Calicut->Kozhikode. Hindi and local names too: Dilli->Delhi, "
+    "Bambai->Mumbai, Amdavad->Ahmedabad, Kashi->Varanasi. Airport names name "
+    "their city: Indira Gandhi->Delhi, Kempegowda->Bengaluru, Sahar or "
+    "Chhatrapati Shivaji->Mumbai, Rajiv Gandhi->Hyderabad, Dabolim->Goa. If the "
+    "user typed a 3-letter code, return the code. A city with several airports "
+    "(London, New York, Goa) is returned as the city; the app offers the "
+    "choice. If the sentence does not say where the flight LEAVES FROM, omit "
+    "origin -- never guess one.\n"
+    "\n"
+    "DATES resolve against today: tomorrow, day after tomorrow, this friday, "
+    "next monday, 'the 24th' (the next 24th), '24 sep', '3/10' (day/month). "
+    "A RANGE -- this weekend, next week, early October -- is the FIRST day of "
+    "the range with date_kind 'range' and range_label in the user's words. "
+    "Time of day: morning, afternoon, evening; red-eye, late night and early "
+    "morning are 'overnight'. Ordering: fastest/quickest/shortest -> fastest; "
+    "earliest/first/soonest/next -> earliest. 'Cheapest' is not something this "
+    "app knows; ignore it and search anyway.\n"
+    "\n"
+    "ONE SPECIFIC FLIGHT -> call lookup_flight, whenever a flight number appears "
+    "in any form, including inside a question ('is 6E5071 on time', 'what gate "
+    "is EK500', 'when does SK936 land', 'track ai2630', 'indigo 5071').\n"
+    "\n"
+    "THE USER'S OWN FLIGHT WITH NO NUMBER ('is my flight on time', 'what is my "
+    "gate', 'when does my plane land') -> call find_flight_from_gmail.\n"
+    "\n"
+    "ANYTHING ELSE -> answer in plain text, briefly. If you could not read the "
+    "line as any of the above, say in one short line what was missing and give "
+    "an example that would work. Never invent flight data.\n"
+    "\n"
+    "Text answers are plain terminal output: no emojis, no markdown, no bold, "
+    "no headers, no tables, each fact on its own line, lowercase labels with a "
+    "colon. Reproduce every timezone label and '(predicted)' qualifier exactly "
+    "as a tool returns it."
+)
+
+_FLIGHT_NUMBER_RE = re.compile(r"^([A-Z0-9]{2})(\d{1,4})([A-Z]?)$")
+
+
+def _device_today(raw):
+    """The device's date if it sent a well-formed one, else the server's UTC date."""
+    text = str(raw or "").strip()
+    if _ISO_DAY_RE.match(text):
+        try:
+            return datetime.fromisoformat(text).date()
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).date()
+
+
+def _intent_str(raw, key):
+    v = raw.get(key)
+    v = str(v).strip() if isinstance(v, str) else ""
+    return v or None
+
+
+def _intent_route(raw: dict, today) -> tuple[dict | None, str | None]:
+    """(intent, error). The model's fields, re-checked before they leave.
+
+    NOTHING IS TRUSTED, for /parse's reason: the enums are re-tested and the
+    date is re-parsed and re-bounded here, and the device resolves the names
+    itself. A DATE THAT FAILS IS KEPT AS AN ERROR RATHER THAN DROPPED: /parse
+    silently nulled a bad date and searched today, which answers a different
+    question for four units. The device reads date_error and says so instead.
+    """
+    destination = _intent_str(raw, "destination")
+    if destination is None:
+        return None, INTENT_NO_DESTINATION
+    band = _intent_str(raw, "band")
+    if band not in ("morning", "afternoon", "evening", "overnight"):
+        band = None
+    sort = _intent_str(raw, "sort")
+    if sort not in ("fastest", "earliest"):
+        sort = None
+    kind = _intent_str(raw, "date_kind")
+    if kind not in ("single", "range"):
+        kind = None
+    date = _intent_str(raw, "date")
+    date_error = None
+    if date is not None:
+        day, err = _validate_route_date(date)
+        if err is not None:
+            date, date_error = None, err
+        else:
+            date = day
+    try:
+        conf = max(0.0, min(1.0, float(raw.get("confidence", 1.0))))
+    except (TypeError, ValueError):
+        conf = 1.0
+    return {
+        "kind": "route",
+        "origin": _intent_str(raw, "origin"),
+        "destination": destination,
+        "date": date,
+        "date_kind": kind if date is not None or kind == "range" else None,
+        "range_label": _intent_str(raw, "range_label") if kind == "range" else None,
+        "band": band,
+        "sort": sort,
+        "date_error": date_error,
+        "confidence": conf,
+    }, None
+
+
+def _intent_flight(raw: dict) -> tuple[dict | None, str | None]:
+    """(intent, error). The number normalised, or a reason it could not be."""
+    number = re.sub(r"[\s\-.]", "", str(raw.get("flight_number") or "")).upper()
+    m = _FLIGHT_NUMBER_RE.match(number)
+    # A CARRIER CODE HAS A LETTER IN IT. "12345" is not a flight and "6E5071" is;
+    # the digits-only prefix is the one shape the regex above cannot refuse.
+    if not m or not re.search(r"[A-Z]", m.group(1)):
+        return None, INTENT_BAD_NUMBER
+    date = _intent_str(raw, "date")
+    date_error = None
+    if date is not None:
+        day, err = _validate_route_date(date, max_future=FLIGHT_MAX_FUTURE_DAYS)
+        if err is not None:
+            date, date_error = None, err
+        else:
+            date = day
+    return {"kind": "flight", "flight_number": number, "date": date, "date_error": date_error}, None
+
+
+def _intent_reply(intent=None, response=None, flight=None, error=None, retried=False):
+    return {"intent": intent, "response": response, "flight": flight,
+            "error": error, "retried": retried}
+
+
+def _intent_from_calls(calls, today):
+    """The first intent among a turn's calls, as (intent, error), or None."""
+    for call in calls:
+        if call.name == "search_route":
+            return _intent_route(call.args or {}, today)
+        if call.name == "lookup_flight":
+            return _intent_flight(call.args or {})
+    return None
+
+
+@app.post("/intent")
+def intent(req: IntentRequest, request: Request):
+    text = str(req.message or "").strip()
+    if not text:
+        return _intent_reply(response=INTENT_EMPTY)
+    today = _device_today(req.today)
+    gmail_access, _gmail_code = _gmail_access(request, req.gmail_token)
+    system = INTENT_SYSTEM.format(today=today.isoformat())
+    messages = [llm.user_text(text)]
+    captured_flight = None
+    retried = False
+
+    for _round in range(CHAT_MAX_TOOL_ROUNDS):
+        try:
+            turn = llm.generate(model=llm.CHAT_MODEL, system=system, messages=messages,
+                                tools=INTENT_TOOLS, max_tokens=CHAT_MAX_TOKENS)
+        except Exception as exc:  # noqa: BLE001
+            return _intent_reply(error=_chat_error(exc), flight=captured_flight, retried=retried)
+
+        # AN INTENT ENDS THE CALL. It is returned, not run: the board and the
+        # flight lookup happen on the device, on its own dataset and its own
+        # date, through the code the free rungs use.
+        found = _intent_from_calls(turn.tool_calls, today)
+        if found is not None:
+            intent_, err = found
+            if intent_ is not None:
+                return _intent_reply(intent=intent_, flight=captured_flight, retried=retried)
+            return _intent_reply(response=err, flight=captured_flight, retried=retried)
+
+        if turn.tool_calls:
+            # The Gmail tool, run here as /chat runs it, and the answer next round.
+            results = []
+            for call in turn.tool_calls:
+                result_text, flight_data = run_tool(call.name, call.args, gmail_access)
+                if flight_data is not None:
+                    captured_flight = flight_data
+                results.append((call, result_text))
+            messages.append(llm.model_turn(turn))
+            messages.append(llm.tool_results(results))
+            continue
+
+        # PROSE. Once, on the first turn, and only when the device found a place
+        # in the sentence, a route reading is forced -- see the note at the top.
+        if _round == 0 and req.has_place and not retried:
+            retried = True
+            try:
+                forced = llm.generate(model=llm.CHAT_MODEL, system=system, messages=messages,
+                                      tools=INTENT_TOOLS, forced_tool="search_route",
+                                      max_tokens=CHAT_MAX_TOKENS)
+                found = _intent_from_calls(forced.tool_calls, today)
+                if found is not None and found[0] is not None \
+                        and found[0].get("confidence", 0) >= INTENT_FORCED_MIN:
+                    return _intent_reply(intent=found[0], flight=captured_flight, retried=True)
+            except Exception as exc:  # noqa: BLE001
+                # The forced attempt failing is not the user's problem: the
+                # prose below is a real answer and it goes back.
+                logger.warning("intent: forced retry failed: %s", llm.failure_kind(exc)[1])
+
+        if turn.text:
+            return _intent_reply(response=turn.text, flight=captured_flight, retried=retried)
+        return _intent_reply(error=CHAT_ERROR_GENERIC, flight=captured_flight, retried=retried)
+
+    return _intent_reply(error=CHAT_ERROR_TOO_MANY_STEPS, flight=captured_flight, retried=retried)
 
 
 # ──────────────────────────────────────────────
