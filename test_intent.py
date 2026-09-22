@@ -11,8 +11,8 @@ that raise.
 SECOND: is nothing the model says trusted? Dates re-bounded, enums re-tested,
 flight numbers normalised and refused when they are not one.
 
-THIRD: does the forced retry fire only when it should -- prose, first turn,
-device found a place -- and is its answer taken only above the confidence bar?
+THIRD: is prose the answer, with no second call? The forced retry was measured
+by tools/eval_intent.py and retired; see the note above /intent in api.py.
 
 FOURTH: never blank. Every path returns an intent, prose, or a named error.
 
@@ -89,8 +89,8 @@ r = ask("delhi to indore flights", "2026-09-22", False,
         turn("", call("search_route", origin="Delhi", destination="Indore", confidence=0.98)))
 check("kind route, names as given", r["intent"] and r["intent"]["kind"] == "route"
       and (r["intent"]["origin"], r["intent"]["destination"]) == ("Delhi", "Indore"), r)
-check("no prose, no error, no flight, not retried",
-      r["response"] is None and r["error"] is None and r["flight"] is None and r["retried"] is False, r)
+check("no prose, no error, no flight, no retry flag",
+      r["response"] is None and r["error"] is None and r["flight"] is None and "retried" not in r, r)
 check("one model call, tool choice auto", len(CALLS) == 1 and CALLS[0].get("forced_tool") is None, CALLS)
 check("the device's date reached the prompt", "Today is 2026-09-22" in CALLS[0]["system"])
 check("the three tools were offered", [t["name"] for t in CALLS[0]["tools"]]
@@ -116,6 +116,15 @@ i = r["intent"]
 check("an out-of-vocabulary band, sort and kind are dropped, not passed through",
       (i["band"], i["sort"], i["date_kind"]) == (None, None, None), i)
 check("confidence is clamped to 1", i["confidence"] == 1.0, i["confidence"])
+
+r = ask("x", "2026-09-22", False,
+        turn("", call("search_route", destination="Indore", question="next", confidence=0.9)))
+check("a question in vocabulary passes", r["intent"]["question"] == "next", r["intent"])
+r = ask("x", "2026-09-22", False,
+        turn("", call("search_route", destination="Indore", question="cheapest", confidence=0.9)))
+check("a question out of vocabulary is dropped", r["intent"]["question"] is None, r["intent"])
+r = ask("x", "2026-09-22", False, turn("", call("search_route", destination="Indore", confidence=0.9)))
+check("no question is None, not absent", "question" in r["intent"] and r["intent"]["question"] is None, r["intent"])
 
 r = ask("x", "2026-09-22", False,
         turn("", call("search_route", destination="Goa", date="2020-01-01", confidence=0.9)))
@@ -145,27 +154,14 @@ r = ask("x", "2026-09-22", False, turn("", call("lookup_flight", flight_number="
 check("a past date on a flight is an error, not a silent today", r["intent"]["date"] is None and r["intent"]["date_error"], r["intent"])
 
 print()
-print("-- the forced retry --")
-r = ask("what about delhi", "2026-09-22", True,
-        turn("I am not sure what you mean."),
-        turn("", call("search_route", destination="Delhi", confidence=0.9)))
-check("prose + a place on the device -> one forced retry, and its intent is taken",
-      r["intent"] and r["intent"]["destination"] == "Delhi" and r["retried"] is True, r)
-check("the second call forced search_route", len(CALLS) == 2 and CALLS[1].get("forced_tool") == "search_route", [c.get("forced_tool") for c in CALLS])
-
-r = ask("weather in delhi", "2026-09-22", True,
-        turn("I cannot help with weather."),
-        turn("", call("search_route", destination="Delhi", confidence=0.2)))
-check("a forced reading below the confidence bar is discarded and the prose stands",
-      r["intent"] is None and r["response"] == "I cannot help with weather." and r["retried"] is True, r)
-
+print("-- prose is the answer: the forced retry was measured and retired --")
+r = ask("what about delhi", "2026-09-22", True, turn("I am not sure what you mean."))
+check("prose + a place on the device -> ONE call, and the prose comes back",
+      r["intent"] is None and r["response"] == "I am not sure what you mean." and len(CALLS) == 1, r)
+check("nothing was forced", all(c.get("forced_tool") is None for c in CALLS), [c.get("forced_tool") for c in CALLS])
 r = ask("hello", "2026-09-22", False, turn("Hello. Type a flight number or a route."))
-check("prose with NO place on the device -> no retry, prose returned",
-      r["intent"] is None and r["response"].startswith("Hello") and len(CALLS) == 1 and r["retried"] is False, r)
-
-r = ask("what about delhi", "2026-09-22", True,
-        turn("Not sure."), RuntimeError("provider down"))
-check("a forced retry that fails still returns the first prose", r["response"] == "Not sure." and r["error"] is None, r)
+check("prose with NO place on the device -> the same one call",
+      r["intent"] is None and r["response"].startswith("Hello") and len(CALLS) == 1, r)
 
 print()
 print("-- the gmail tool still runs here, as /chat ran it --")

@@ -5,10 +5,15 @@
 WHAT IT MEASURES. For each line: did the model pick the right KIND (route,
 flight, chat); for a route, did origin and destination resolve to the right
 airports and did the date come out as the right day; for a flight, the right
-number. A miss on any of those is a misread. The summary is misreads over
-forty, by group, and how often the forced retry fired and whether it helped.
+number -- and, for a route, whether the model called it a question when it was
+one and only then. A miss on any of those is a misread. The summary is misreads
+over forty, by group.
 
-WHAT IT COSTS. One model call per line, two where the retry fires. No
+THE QUESTION SHAPES ARE SCORED SEPARATELY, after the forty: ten lines over the
+seven shapes the line above the board can answer, plus one that must not be read
+as a question. Their own count, so the forty stay comparable run to run.
+
+WHAT IT COSTS. One model call per line. No
 AeroDataBox unit: the endpoint never runs a board, and the Gmail tool has no
 token here so it answers "sign in".
 
@@ -114,6 +119,27 @@ CASES = [
     ("what is the weather in delhi", C, None, None, None, None),
 ]
 assert len(CASES) == 40, len(CASES)
+# The one line among the forty that is a question, and what it asks.
+QUESTIONS = {"when is the next flight to indore": "next"}
+# A LINE THAT READS BOTH WAYS. "any flights X to Y tonight" is a request to see
+# the board and a question about whether there is one; the model returned each
+# reading on different runs, and both give a right board with, at most, a true
+# sentence over it. Either is accepted.
+QUESTION_EITHER = {"any flights kolkatta to guwahati tonight": {None, "count"}}
+
+# (line, expected origin, expected destination, expected question)
+QUESTION_CASES = [
+    ("when is the next flight to indore", None, "IDR", "next"),
+    ("next flight to indore?", None, "IDR", "next"),
+    ("what is the first flight from delhi to mumbai tomorrow", "DEL", "BOM", "first"),
+    ("when is the last flight from bangalore to delhi tonight", "BLR", "DEL", "last"),
+    ("which is the fastest flight from mumbai to goa", "BOM", "GOA", "fastest"),
+    ("what is the earliest I can get to chennai from hyderabad", "HYD", "MAA", "arrival"),
+    ("how many flights are there from delhi to indore tomorrow", "DEL", "IDR", "count"),
+    ("is there a flight from pune to goa on sunday", "PNQ", "GOA", "count"),
+    ("which airlines fly delhi to indore", "DEL", "IDR", "airlines"),
+    ("show me the fastest flight delhi to mumbai", "DEL", "BOM", None),
+]
 
 
 def post(line):
@@ -137,6 +163,12 @@ def judge(case, reply):
             notes.append(f"dest {intent.get('destination')!r}")
         if day is not None and intent.get("date") != day:
             notes.append(f"date {intent.get('date')} not {day}")
+        got_q = intent.get("question")
+        if line in QUESTION_EITHER:
+            if got_q not in QUESTION_EITHER[line]:
+                notes.append(f"question {got_q}")
+        elif got_q != QUESTIONS.get(line):
+            notes.append(f"question {got_q}")
     if kind == F and intent:
         if intent.get("flight_number") != num:
             notes.append(f"number {intent.get('flight_number')}")
@@ -146,7 +178,6 @@ def judge(case, reply):
 
 
 totals = {R: [0, 0], F: [0, 0], C: [0, 0]}
-retries = [0, 0]   # fired, helped (kind right after a retry)
 rows = []
 for case in CASES:
     try:
@@ -157,22 +188,42 @@ for case in CASES:
     totals[case[1]][1] += 1
     if not notes:
         totals[case[1]][0] += 1
-    if reply.get("retried"):
-        retries[0] += 1
-        if not notes:
-            retries[1] += 1
     intent = reply.get("intent")
-    shown = (f"{intent['kind']}: {intent.get('origin')}->{intent.get('destination')} {intent.get('date') or ''} {intent.get('range_label') or ''}".strip()
+    shown = (f"{intent['kind']}: {intent.get('origin')}->{intent.get('destination')} {intent.get('date') or ''} {intent.get('range_label') or ''}"
+             f"{' ?' + intent['question'] if intent.get('question') else ''}".strip()
              if intent and intent["kind"] == "route" else
              f"flight: {intent.get('flight_number')} {intent.get('date') or ''}".strip() if intent else
              f"chat: {(reply.get('response') or reply.get('error') or '')[:60]!r}")
     flag = "  ok  " if not notes else "  MISS"
     rows.append(f"{flag} {case[0]:<52} {shown}" + (f"   <- {'; '.join(notes)}" if notes else "")
-                + ("  [retried]" if reply.get("retried") else ""))
+)
 
 print("\n".join(rows))
 print()
 right = sum(v[0] for v in totals.values())
 print(f"routes  {totals[R][0]}/{totals[R][1]}   flights {totals[F][0]}/{totals[F][1]}   chat {totals[C][0]}/{totals[C][1]}")
 print(f"MISREAD RATE: {40 - right}/40 = {(40 - right) / 40:.1%}")
-print(f"forced retry fired {retries[0]} times, and the result was right {retries[1]} of those")
+
+print()
+qright = 0
+for line, o, dst, q in QUESTION_CASES:
+    try:
+        reply = post(line)
+    except Exception as exc:  # noqa: BLE001
+        reply = {"error": f"transport: {exc}"}
+    intent = reply.get("intent")
+    notes = []
+    if not intent or intent.get("kind") != "route":
+        notes.append("not a route")
+    else:
+        if code(intent.get("origin")) != o:
+            notes.append(f"origin {intent.get('origin')!r}")
+        if code(intent.get("destination")) != dst:
+            notes.append(f"dest {intent.get('destination')!r}")
+        if intent.get("question") != q:
+            notes.append(f"question {intent.get('question')} not {q}")
+    if not notes:
+        qright += 1
+    got = intent.get("question") if intent else (reply.get("response") or reply.get("error") or "")[:40]
+    print(("  ok  " if not notes else "  MISS") + f" {line:<58} {got!s:<10}" + (f"   <- {'; '.join(notes)}" if notes else ""))
+print(f"QUESTION SHAPES: {qright}/{len(QUESTION_CASES)} read as intended")

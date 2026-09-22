@@ -326,9 +326,9 @@ class IntentRequest(BaseModel):
     # server's UTC date stands in, which is what /parse always used.
     today: str | None = None
     # WHETHER THE DEVICE FOUND A PLACE IN THE SENTENCE -- lib/airports.ts's
-    # isKnownPlace, which the server cannot run. It decides one thing: whether a
-    # prose answer earns a second, forced attempt at reading a route. See the
-    # retry in /intent.
+    # isKnownPlace, which the server cannot run. Measured for a forced second
+    # reading that was retired (see the note above /intent) and kept in the
+    # contract so the device need not change when the server next wants it.
     has_place: bool = False
 
 
@@ -899,17 +899,22 @@ def chat(req: ChatRequest, request: Request):
 # as typed, because the device resolves codes at rank 0 and a code somebody
 # wrote is not an invention.
 #
-# ── THE FORCED RETRY, AND WHY IT IS GUARDED TWICE ──────────────────────────
+# ── THE FORCED RETRY, MEASURED AND RETIRED ─────────────────────────────────
 #
-# On tool choice "auto", Gemini sometimes answers a route request in prose. If
-# the first turn is prose and the DEVICE said the sentence contains a place, the
-# model is asked once more with search_route forced. Two guards, because a
-# forced call always produces one: the retry runs only when has_place is set,
-# and its answer is taken only if the model's own confidence in it clears
-# INTENT_FORCED_MIN. Below that, the prose it gave first is the answer. The
-# eval in tools/eval_intent.py measures how often this fires and how often it
-# is right; that number is what decides whether it stays.
-INTENT_FORCED_MIN = 0.5
+# The first build asked once more, with search_route forced, whenever the first
+# turn was prose and the device said the sentence named a place -- against the
+# day Gemini answers a route request in words. tools/eval_intent.py measured it
+# over two runs of the forty: it fired twice, both times on "what is the weather
+# in delhi", never on a route, and the second time it returned a confident
+# route to Delhi that nobody asked for. A forced call always produces a call,
+# and the model's confidence in one is not evidence. The prose the model gave
+# first was the right answer both times, so the prose is the answer, and
+# has_place stays in the request as a measured fact the server may yet want.
+# WHAT A LINE CAN ASK ABOUT A BOARD, beyond wanting to see it. The device answers
+# each from the board it fetched, on the line above the results: the extreme row
+# under the key the question names, or a count, or the carriers. A shape not in
+# this tuple is dropped, like every other enum the model returns.
+INTENT_QUESTIONS = ("next", "first", "last", "fastest", "arrival", "count", "airlines")
 INTENT_EMPTY = "type a flight number, a route like delhi to indore, or a question"
 INTENT_NO_DESTINATION = "I could not tell where you are flying to. Try: delhi to indore"
 INTENT_BAD_NUMBER = "I could not read a flight number in that. Try: 6E5071"
@@ -962,6 +967,20 @@ INTENT_ROUTE_TOOL = {
                 "type": "string",
                 "enum": ["fastest", "earliest"],
                 "description": "fastest/quickest/shortest -> fastest; earliest/first/soonest/next -> earliest.",
+            },
+            "question": {
+                "type": "string",
+                "enum": ["next", "first", "last", "fastest", "arrival", "count", "airlines"],
+                "description": (
+                    "ONLY when the line ASKS something about the flights rather "
+                    "than asking to see them. next: when is the next flight. "
+                    "first: the first flight of the day. last: the last flight. "
+                    "fastest: which is the fastest or quickest. arrival: when is "
+                    "the earliest I can be there. count: how many flights, are "
+                    "there any, is there a flight. airlines: which airlines fly. "
+                    "Omit for 'show me flights', 'flights to X', 'fastest way "
+                    "to X' -- those are requests, not questions."
+                ),
             },
             "confidence": {
                 "type": "number",
@@ -1042,6 +1061,16 @@ INTENT_SYSTEM = (
     "earliest/first/soonest/next -> earliest. 'Cheapest' is not something this "
     "app knows; ignore it and search anyway.\n"
     "\n"
+    "A QUESTION ABOUT THE FLIGHTS is still search_route, with question set: "
+    "'when is the next flight to X' -> next; 'what is the first flight tomorrow' "
+    "-> first; 'when is the last flight' -> last; 'which is the fastest' -> "
+    "fastest; 'when is the earliest I can be in X' -> arrival; 'how many "
+    "flights', 'are there any flights', 'is there a flight' -> count; 'which "
+    "airlines fly' -> airlines. Set question ONLY when the line asks -- it "
+    "starts with when, what, which, how many, is there, are there, or ends in "
+    "a question mark. 'Show me the fastest flight' and 'fastest way to X' are "
+    "requests: set sort, leave question unset.\n"
+    "\n"
     "ONE SPECIFIC FLIGHT -> call lookup_flight, whenever a flight number appears "
     "in any form, including inside a question ('is 6E5071 on time', 'what gate "
     "is EK500', 'when does SK936 land', 'track ai2630', 'indigo 5071').\n"
@@ -1100,6 +1129,9 @@ def _intent_route(raw: dict, today) -> tuple[dict | None, str | None]:
     kind = _intent_str(raw, "date_kind")
     if kind not in ("single", "range"):
         kind = None
+    question = _intent_str(raw, "question")
+    if question not in INTENT_QUESTIONS:
+        question = None
     date = _intent_str(raw, "date")
     date_error = None
     if date is not None:
@@ -1121,6 +1153,7 @@ def _intent_route(raw: dict, today) -> tuple[dict | None, str | None]:
         "range_label": _intent_str(raw, "range_label") if kind == "range" else None,
         "band": band,
         "sort": sort,
+        "question": question,
         "date_error": date_error,
         "confidence": conf,
     }, None
@@ -1145,9 +1178,8 @@ def _intent_flight(raw: dict) -> tuple[dict | None, str | None]:
     return {"kind": "flight", "flight_number": number, "date": date, "date_error": date_error}, None
 
 
-def _intent_reply(intent=None, response=None, flight=None, error=None, retried=False):
-    return {"intent": intent, "response": response, "flight": flight,
-            "error": error, "retried": retried}
+def _intent_reply(intent=None, response=None, flight=None, error=None):
+    return {"intent": intent, "response": response, "flight": flight, "error": error}
 
 
 def _intent_from_calls(calls, today):
@@ -1170,14 +1202,13 @@ def intent(req: IntentRequest, request: Request):
     system = INTENT_SYSTEM.format(today=today.isoformat())
     messages = [llm.user_text(text)]
     captured_flight = None
-    retried = False
 
     for _round in range(CHAT_MAX_TOOL_ROUNDS):
         try:
             turn = llm.generate(model=llm.CHAT_MODEL, system=system, messages=messages,
                                 tools=INTENT_TOOLS, max_tokens=CHAT_MAX_TOKENS)
         except Exception as exc:  # noqa: BLE001
-            return _intent_reply(error=_chat_error(exc), flight=captured_flight, retried=retried)
+            return _intent_reply(error=_chat_error(exc), flight=captured_flight)
 
         # AN INTENT ENDS THE CALL. It is returned, not run: the board and the
         # flight lookup happen on the device, on its own dataset and its own
@@ -1186,8 +1217,8 @@ def intent(req: IntentRequest, request: Request):
         if found is not None:
             intent_, err = found
             if intent_ is not None:
-                return _intent_reply(intent=intent_, flight=captured_flight, retried=retried)
-            return _intent_reply(response=err, flight=captured_flight, retried=retried)
+                return _intent_reply(intent=intent_, flight=captured_flight)
+            return _intent_reply(response=err, flight=captured_flight)
 
         if turn.tool_calls:
             # The Gmail tool, run here as /chat runs it, and the answer next round.
@@ -1201,28 +1232,12 @@ def intent(req: IntentRequest, request: Request):
             messages.append(llm.tool_results(results))
             continue
 
-        # PROSE. Once, on the first turn, and only when the device found a place
-        # in the sentence, a route reading is forced -- see the note at the top.
-        if _round == 0 and req.has_place and not retried:
-            retried = True
-            try:
-                forced = llm.generate(model=llm.CHAT_MODEL, system=system, messages=messages,
-                                      tools=INTENT_TOOLS, forced_tool="search_route",
-                                      max_tokens=CHAT_MAX_TOKENS)
-                found = _intent_from_calls(forced.tool_calls, today)
-                if found is not None and found[0] is not None \
-                        and found[0].get("confidence", 0) >= INTENT_FORCED_MIN:
-                    return _intent_reply(intent=found[0], flight=captured_flight, retried=True)
-            except Exception as exc:  # noqa: BLE001
-                # The forced attempt failing is not the user's problem: the
-                # prose below is a real answer and it goes back.
-                logger.warning("intent: forced retry failed: %s", llm.failure_kind(exc)[1])
-
+        # PROSE IS THE ANSWER. See the note on the retired retry above.
         if turn.text:
-            return _intent_reply(response=turn.text, flight=captured_flight, retried=retried)
-        return _intent_reply(error=CHAT_ERROR_GENERIC, flight=captured_flight, retried=retried)
+            return _intent_reply(response=turn.text, flight=captured_flight)
+        return _intent_reply(error=CHAT_ERROR_GENERIC, flight=captured_flight)
 
-    return _intent_reply(error=CHAT_ERROR_TOO_MANY_STEPS, flight=captured_flight, retried=retried)
+    return _intent_reply(error=CHAT_ERROR_TOO_MANY_STEPS, flight=captured_flight)
 
 
 # ──────────────────────────────────────────────
