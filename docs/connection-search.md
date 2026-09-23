@@ -1,6 +1,8 @@
 # Connection search — Stage 2 plan
 
-**Status:** Stage 1 is built and shipped (commit `f6175e4`). Stage 2 is not started.
+**Status:** Stage 1 is built and shipped (commit `f6175e4`). Stage 2, the server, is built
+(`connections.py`, `GET /connections`); see §12 for what changed from this plan while
+building it. Stage 3, the client, is not started.
 This document is the plan it will be built from, and it exists mainly so the
 licence constraint in §1 cannot be lost.
 
@@ -279,3 +281,37 @@ tie-break (§7), and whether a same-carrier itinerary carries a caveat (§8) —
 were decided on 2026-09-19 and are recorded above as decisions rather than
 proposals. The only wording still to settle is the two caveat strings, which
 Stage 3 fits to the row.
+
+---
+
+## 12. Decided while building Stage 2 (2026-09-23)
+
+These supersede the parts of §2 and §5 they name. Everything else above stands.
+
+- **No hub cap.** Every hub that survives the intersection and the detour prune is
+  examined, in rank order. A hub-day's board is skipped only when a lower bound
+  proves it cannot beat the fastest itinerary already found: the first leg's own
+  scheduled time, plus the minimum layover or the start of that local day at the
+  hub (whichever is later), plus the second leg's great-circle distance at
+  1,350 km/h, the record subsonic ground speed. "Fastest" therefore means fastest
+  among every one-stop journey the boards hold.
+- **The ceiling is a runaway guard at 100 units, not a 24-unit budget.** The first
+  live search, Indore to Kochi fully cold, spent 56. If the guard is ever reached
+  the reply names every unfetched hub-day, `complete` is false, and the client
+  must not label anything fastest.
+- **Spacing: 4 requests a second, not 1.3 s apart.** The 1.3 s was measured on
+  RapidAPI's BASIC plan (1 request/second). This service calls AeroDataBox
+  directly on the Starter plan, 40,000 units and 5 requests/second per the
+  provider's pricing page; a process-wide gate runs at 4. Boards are fetched
+  through a sliding window of 3 in parallel, and a dated board's two windows go
+  out together. The gate is per instance, so two busy instances could together
+  exceed 5; a 429 fails that board closed and the search reports it incomplete.
+- **Boards are cached in the bucket**, under `boards/`, shared by every instance,
+  with the same TTLs as §2 (30 minutes rolling, 12 hours dated). A bucket
+  lifecycle rule deletes `boards/` at one day and `routelists/` at six, so the
+  seven-day ceiling holds even if no code runs.
+- **Streaming.** `GET /connections/{o}/{d}?stream=1` returns newline-delimited
+  JSON: the direct flights first, then each hub's itineraries as its board lands,
+  then the whole ranked answer. Without `stream` the reply is the answer at once.
+- **One field beyond the Stage 1 shape:** `transfer`, `"self"` or
+  `"same_carrier"`, so every itinerary carries its §8 label.

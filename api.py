@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -23,7 +24,7 @@ import gmail_flights
 import auth
 import re
 from fastapi import FastAPI, Header, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -31,6 +32,7 @@ import dispatch
 import poller
 import pollstate
 import store
+import connections
 from mcp_server import (
     fetch_flight_full,
     extract_flight_number,
@@ -137,6 +139,30 @@ def get_flight(flight_number: str, date: str | None = None, origin: str | None =
 @app.get("/route/{origin}/{destination}")
 def get_route(origin: str, destination: str, hours: int = 12, date: str | None = None):
     return fetch_route(origin, destination, hours, date)
+
+
+# ONE-STOP CONNECTIONS, OPT-IN. A separate call from /route and never made by it:
+# most searches have a direct flight and must cost nothing extra. The date is the
+# one the direct search used, so both answer the same question. See
+# connections.py and docs/connection-search.md.
+#
+# stream=1 SENDS IT AS IT HAPPENS, one JSON object per line: the DIRECT flights
+# first -- the same body /route returns, as {"type": "direct", ...} -- then
+# {"type": "hub", ...} each time a hub's board lands, carrying every itinerary
+# through that hub so far, then {"type": "done", ...} with the whole ranked
+# answer. Nothing may be called fastest before "done", and not then unless it
+# says complete. Without stream the reply is the whole answer at once.
+@app.get("/connections/{origin}/{destination}")
+def get_connections(origin: str, destination: str, date: str | None = None, stream: bool = False):
+    if not stream:
+        return connections.search(origin, destination, date)
+
+    def lines():
+        yield json.dumps({"type": "direct", **fetch_route(origin, destination, 12, date)}) + "\n"
+        for event in connections.search_events(origin, destination, date):
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
 
 
 # ──────────────────────────────────────────────

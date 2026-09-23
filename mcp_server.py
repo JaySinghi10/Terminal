@@ -2,6 +2,9 @@ import requests
 import os
 import re
 import time
+import threading
+import json as _json
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -396,6 +399,45 @@ def quota_status() -> dict:
 #
 # IT RECORDS THE QUOTA FOR WHICHEVER CALL ACTUALLY HAPPENED, including the
 # refused one -- a refusal still carries the header and still spent nothing.
+# ── THE RATE GATE, IN FRONT OF EVERY PROVIDER CALL ──────────────────────────
+#
+# THE LIMIT IS THE PLAN'S, AND THE PLAN CHANGED. This service calls AeroDataBox
+# directly on the Starter plan: 40,000 units a month and "5 req/s", from the
+# provider's own pricing page (aerodatabox.com/pricing, read 2026-09-23). The
+# 1.3-second spacing below was measured on RapidAPI's BASIC plan, which allows
+# one request a second, and it is kept for that gateway only.
+#
+# FOUR A SECOND, NOT FIVE: a fifth of the limit is margin for clock jitter and
+# for the other calls this process makes while a search runs -- the poller's
+# lookups share the key.
+#
+# PER PROCESS, AND THAT IS A KNOWN GAP. Two instances each running at four a
+# second could together exceed five. A 429 costs nothing -- the provider bills
+# answered calls -- and fails the one board closed, which a connection search
+# reports as a failed hub-day and does not call complete.
+ADB_DIRECT_REQUESTS_PER_SECOND = 5
+ADB_SAFE_REQUESTS_PER_SECOND = 4
+_GATE_LOCK = threading.Lock()
+_GATE_NEXT = 0.0
+_gate_clock = time.monotonic
+_gate_sleep = time.sleep
+
+
+def _rate_gate() -> None:
+    """Wait until this process may start another provider request. Thread-safe:
+    each caller reserves the next free slot under the lock and sleeps outside it."""
+    global _GATE_NEXT
+    interval = (1.0 / ADB_SAFE_REQUESTS_PER_SECOND if active_gateway() == "direct"
+                else ROUTE_WINDOW_SPACING_SECONDS)
+    with _GATE_LOCK:
+        now = _gate_clock()
+        start = max(now, _GATE_NEXT)
+        _GATE_NEXT = start + interval
+    wait = start - now
+    if wait > 0:
+        _gate_sleep(wait)
+
+
 def _adb_get(path: str, params: dict | None = None):
     """A GET on the AeroDataBox path, e.g. "/flights/number/BA117".
 
@@ -404,6 +446,7 @@ def _adb_get(path: str, params: dict | None = None):
     """
     if _gateway() == "direct":
         if AERODATABOX_API_KEY:
+            _rate_gate()
             response = _SESSION.get(
                 DIRECT_BASE + path,
                 headers={"X-Api-Key": AERODATABOX_API_KEY},
@@ -428,6 +471,7 @@ def _adb_get(path: str, params: dict | None = None):
                        "AERODATABOX_GATEWAY=direct but AERODATABOX_API_KEY is not set; "
                        "using RapidAPI.")
 
+    _rate_gate()
     response = _SESSION.get(
         f"https://{RAPIDAPI_HOST}{path}",
         headers={
@@ -1011,6 +1055,9 @@ ROUTE_DAY_WINDOWS = (("00:00", "12:00"), ("12:00", "23:59"))
 # 429 diagnosis; a dated board is the first place the BACKEND makes two calls in
 # a row, so it needs the same treatment. Applied between windows only: never
 # before the first, never after the last.
+#
+# RAPIDAPI ONLY NOW. On the direct gateway the two windows are fetched at once
+# and _rate_gate spaces them; see the note there.
 ROUTE_WINDOW_SPACING_SECONDS = 1.3
 
 # The diagnostic verified 7, 30 and 60 days ahead on this plan. 60 is where the
@@ -1263,6 +1310,95 @@ def _fetch_board_window(code: str, day, start, end):
     return [r for r in (_build_route_row(it) for it in items) if r is not None]
 
 
+# ── BOARDS IN THE BUCKET, SO EVERY INSTANCE SHARES THEM ─────────────────────
+#
+# THE MEMORY CACHE WAS PER INSTANCE, and this service runs up to twenty, so a
+# board fetched on one was fetched again on the next. The bucket holds one
+# copy for all of them. Memory stays in front of it, so a warm instance never
+# pays a storage read.
+#
+# THE SEVEN-DAY LIMIT. A board is provider Contents like the route list. Its
+# TTLs are thirty minutes and twelve hours, far inside the limit, and a board
+# past its TTL is never served. The bucket's lifecycle rule deletes boards/ at
+# one day old, so nothing lingers whether or not it is read again.
+#
+# THE ROWS ARE STORED AS THEY ARE CACHED IN MEMORY, trimmed, never the raw
+# response. Their private instants are datetimes, so they travel tagged and
+# come back as datetimes.
+BOARD_STORE_PREFIX = "boards/"
+
+
+def _board_store_key(code, day):
+    return f"{BOARD_STORE_PREFIX}{code}/{day or 'rolling'}.json"
+
+
+def _encode_rows(rows):
+    return [{k: ({"__utc__": v.isoformat()} if isinstance(v, datetime) else v) for k, v in r.items()}
+            for r in rows]
+
+
+def _decode_rows(rows):
+    out = []
+    for r in rows:
+        out.append({k: (datetime.fromisoformat(v["__utc__"])
+                        if isinstance(v, dict) and "__utc__" in v else v)
+                    for k, v in r.items()})
+    return out
+
+
+def _store_bucket():
+    try:
+        import pollstate
+        return pollstate._bucket()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _board_from_store(code, day, ttl):
+    """(rows, fetched_at) for a board younger than ttl, or (None, None)."""
+    bucket = _store_bucket()
+    if bucket is None:
+        return None, None
+    try:
+        blob = bucket.get_blob(_board_store_key(code, day))
+        if blob is None:
+            return None, None
+        doc = _json.loads(blob.download_as_bytes().decode("utf-8"))
+        fetched = datetime.fromisoformat(doc["fetched_at"])
+        if datetime.now(timezone.utc) - fetched >= ttl:
+            return None, None
+        return _decode_rows(doc["rows"]), fetched
+    except Exception:  # noqa: BLE001 -- an unreadable copy is a miss, never a failure
+        return None, None
+
+
+def _board_to_store(code, day, rows, fetched_at):
+    bucket = _store_bucket()
+    if bucket is None:
+        return
+    try:
+        bucket.blob(_board_store_key(code, day)).upload_from_string(
+            _json.dumps({"fetched_at": fetched_at.isoformat(), "rows": _encode_rows(rows)},
+                        separators=(",", ":")),
+            content_type="application/json")
+    except Exception:  # noqa: BLE001 -- a lost write costs units later, not correctness now
+        pass
+
+
+def board_is_cached(code, day=None) -> bool:
+    """Whether a board can be served without a provider call: in this process's
+    memory, or in the bucket (which this then loads into memory)."""
+    ttl = ROUTE_CACHE_TTL if day is None else ROUTE_FUTURE_CACHE_TTL
+    hit = _ROUTE_CACHE.get((code, day))
+    if hit is not None and datetime.now(timezone.utc) - hit[0] < ttl:
+        return True
+    rows, fetched = _board_from_store(code, day, ttl)
+    if rows is None:
+        return False
+    _ROUTE_CACHE[(code, day)] = (fetched, rows)
+    return True
+
+
 def _fetch_board(code: str, day: str | None = None):
     """Trimmed departure board for one airport, cached.
 
@@ -1286,18 +1422,36 @@ def _fetch_board(code: str, day: str | None = None):
         if age < ttl:
             return rows, int(age.total_seconds()), True
 
+    # THE SHARED COPY, before any provider call. Its age is its own, so a board
+    # another instance fetched twenty minutes ago is twenty minutes old here too.
+    stored, fetched = _board_from_store(code, day, ttl)
+    if stored is not None:
+        _ROUTE_CACHE[key] = (fetched, stored)
+        return stored, int((datetime.now(timezone.utc) - fetched).total_seconds()), True
+
     if day is None:
         rows = _fetch_board_window(code, None, None, None)
         if rows is None:
             return None, None, False
     else:
+        if active_gateway() == "direct":
+            # BOTH WINDOWS AT ONCE. The gate spaces their starts a quarter of a
+            # second apart, inside the plan's five a second.
+            with ThreadPoolExecutor(max_workers=len(ROUTE_DAY_WINDOWS)) as pool:
+                parts = list(pool.map(lambda w: _fetch_board_window(code, day, w[0], w[1]),
+                                      ROUTE_DAY_WINDOWS))
+        else:
+            parts = []
+            for index, (start, end) in enumerate(ROUTE_DAY_WINDOWS):
+                # Between windows only, so a single-window day would wait no longer
+                # than it does today.
+                if index > 0:
+                    time.sleep(ROUTE_WINDOW_SPACING_SECONDS)
+                parts.append(_fetch_board_window(code, day, start, end))
+                if parts[-1] is None:
+                    break
         rows, seen = [], set()
-        for index, (start, end) in enumerate(ROUTE_DAY_WINDOWS):
-            # Between windows only, so a single-window day would wait no longer
-            # than it does today.
-            if index > 0:
-                time.sleep(ROUTE_WINDOW_SPACING_SECONDS)
-            part = _fetch_board_window(code, day, start, end)
+        for part in parts:
             if part is None:
                 # Fail closed. Half a day presented as a whole one is the same
                 # class of defect as serving the wrong day: wrong, and silent.
@@ -1310,7 +1464,9 @@ def _fetch_board(code: str, day: str | None = None):
                 seen.add(marker)
                 rows.append(r)
 
-    _ROUTE_CACHE[key] = (datetime.now(timezone.utc), rows)
+    fetched_at = datetime.now(timezone.utc)
+    _ROUTE_CACHE[key] = (fetched_at, rows)
+    _board_to_store(code, day, rows, fetched_at)
     return rows, 0, False
 
 
