@@ -1,6 +1,15 @@
 """Forty phrasings through /intent, scored. Live, against a URL you give it.
 
     python tools/eval_intent.py https://intent-eval---flight-tracker-....run.app
+    python tools/eval_intent.py https://... --set world
+
+THE WORLD SET is a second forty, phrased the way a local would type them:
+Spanish, French, German, Italian, Portuguese, Polish, Russian and Turkish for
+Europe and the Americas, Arabic and Persian for the Middle East, Japanese,
+Chinese and Korean for East Asia, Thai and Indonesian for Southeast Asia, and
+the English a local types in Africa, with codes, nicknames and native
+separators throughout. Scored like the first forty, plus the country hint on
+the two lines that imply one. The question lines are not run with it.
 
 WHAT IT MEASURES. For each line: did the model pick the right KIND (route,
 flight, chat); for a route, did origin and destination resolve to the right
@@ -27,7 +36,9 @@ import sys
 import urllib.request
 from datetime import date, timedelta
 
-BASE = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else "https://flight-tracker-970706733452.asia-south1.run.app"
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+WORLD = "--set" in sys.argv and sys.argv[sys.argv.index("--set") + 1:][:1] == ["world"]
+BASE = ARGS[0].rstrip("/") if ARGS else "https://flight-tracker-z2b3mixjea-el.a.run.app"
 TODAY = date.today()
 
 
@@ -45,6 +56,30 @@ def weekday(name, allow_today=False):
 
 
 NAME_TO_CODE = {
+    # THE WORLD SET'S NAMES, as the model returns them in English. A metro is a
+    # pseudo-code (PAR, TYO) because the device offers its group, not one code.
+    "madrid": "MAD", "barcelona": "BCN", "paris": "PAR", "nice": "NCE", "munich": "MUC",
+    "berlin": "BER", "rome": "ROM", "milan": "MIL", "warsaw": "WAW", "krakow": "KRK",
+    "kraków": "KRK", "moscow": "MOW", "st petersburg": "LED", "st. petersburg": "LED",
+    "saint petersburg": "LED", "istanbul": "IST", "ankara": "ESB", "lisbon": "LIS",
+    "porto": "OPO", "los angeles": "LAX", "lax": "LAX", "jfk": "JFK", "las vegas": "LAS",
+    "san francisco": "SFO", "toronto": "YYZ", "yyz": "YYZ", "vancouver": "YVR",
+    "yvr": "YVR", "boston": "BOS", "washington": "WAS", "washington dc": "WAS",
+    "washington, d.c.": "WAS", "mexico city": "MEX", "cancun": "CUN", "cancún": "CUN",
+    "sao paulo": "SAO", "são paulo": "SAO", "rio de janeiro": "RIO", "rio": "RIO",
+    "buenos aires": "BUE", "cordoba": "COR", "córdoba": "COR", "bogota": "BOG",
+    "bogotá": "BOG", "medellin": "MDE", "medellín": "MDE", "santiago": "SCL",
+    "lima": "LIM", "cairo": "CAI", "riyadh": "RUH", "jeddah": "JED", "doha": "DOH",
+    "muscat": "MCT", "tel aviv": "TLV", "larnaca": "LCA", "tehran": "THR",
+    "mashhad": "MHD", "beirut": "BEY", "tokyo": "TYO", "osaka": "OSA", "beijing": "BJS",
+    "shanghai": "SHA", "seoul": "SEL", "busan": "PUS", "hong kong": "HKG",
+    "taipei": "TPE", "narita": "NRT", "incheon": "ICN", "sapporo": "CTS",
+    "bangkok": "BKK", "bkk": "BKK", "chiang mai": "CNX", "jakarta": "JKT", "bali": "DPS",
+    "denpasar": "DPS", "kuala lumpur": "KUL", "penang": "PEN", "manila": "MNL",
+    "cebu": "CEB", "hanoi": "HAN", "ho chi minh city": "SGN", "saigon": "SGN",
+    "singapore": "SIN", "lagos": "LOS", "abuja": "ABV", "nairobi": "NBO",
+    "mombasa": "MBA", "johannesburg": "JNB", "cape town": "CPT", "casablanca": "CMN",
+    "marrakech": "RAK", "marrakesh": "RAK", "addis ababa": "ADD",
     "delhi": "DEL", "new delhi": "DEL", "del": "DEL", "indore": "IDR", "idr": "IDR",
     "mumbai": "BOM", "bombay": "BOM", "bom": "BOM", "bengaluru": "BLR", "bangalore": "BLR",
     "blr": "BLR", "chennai": "MAA", "madras": "MAA", "kolkata": "CCU", "calcutta": "CCU",
@@ -119,6 +154,67 @@ CASES = [
     ("what is the weather in delhi", C, None, None, None, None),
 ]
 assert len(CASES) == 40, len(CASES)
+# ── THE WORLD SET ─────────────────────────────────────────────────────────────
+# (line, expected kind, expected origin, expected destination, expected date, expected number)
+WORLD_CASES = [
+    # Europe
+    ("vuelos de madrid a barcelona mañana", R, "MAD", "BCN", d(1), None),
+    ("vol paris nice demain matin", R, "PAR", "NCE", d(1), None),
+    ("flüge von münchen nach berlin am freitag", R, "MUC", "BER", weekday("friday"), None),
+    ("voli roma milano stasera", R, "ROM", "MIL", d(0), None),
+    ("lot warszawa kraków jutro", R, "WAW", "KRK", d(1), None),
+    ("москва питер завтра утром", R, "MOW", "LED", d(1), None),
+    ("istanbul'dan ankara'ya uçuşlar", R, "IST", "ESB", None, None),
+    ("lisboa porto sexta", R, "LIS", "OPO", weekday("friday"), None),
+    # the Americas
+    ("lax to jfk tomorrow", R, "LAX", "JFK", d(1), None),
+    ("vegas to sf red eye", R, "LAS", "SFO", None, None),
+    ("yyz yvr saturday", R, "YYZ", "YVR", weekday("saturday"), None),
+    ("boston to dc early morning", R, "BOS", "WAS", None, None),
+    ("vuelos cdmx a cancún", R, "MEX", "CUN", None, None),
+    ("voos são paulo rio amanhã cedo", R, "SAO", "RIO", d(1), None),
+    ("de buenos aires a córdoba el viernes", R, "BUE", "COR", weekday("friday"), None),
+    ("vuelos bogotá medellín hoy", R, "BOG", "MDE", d(0), None),
+    ("lima to santiago", R, "LIM", "SCL", None, None),
+    # the Middle East
+    ("رحلات من دبي إلى القاهرة غدا", R, "DXB", "CAI", d(1), None),
+    ("riyadh to jeddah tonight", R, "RUH", "JED", d(0), None),
+    ("doha muscat", R, "DOH", "MCT", None, None),
+    ("tel aviv to larnaca", R, "TLV", "LCA", None, None),
+    ("تهران به مشهد", R, "THR", "MHD", None, None),
+    ("beirut istanbul saturday", R, "BEY", "IST", weekday("saturday"), None),
+    # East Asia
+    ("東京から大阪 明日", R, "TYO", "OSA", d(1), None),
+    ("北京到上海的航班", R, "BJS", "SHA", None, None),
+    ("서울 부산 내일 아침", R, "SEL", "PUS", d(1), None),
+    ("hongkong taipei", R, "HKG", "TPE", None, None),
+    ("narita to incheon", R, "NRT", "ICN", None, None),
+    ("osaka sapporo", R, "OSA", "CTS", None, None),
+    # Southeast Asia
+    ("กรุงเทพ เชียงใหม่ พรุ่งนี้", R, "BKK", "CNX", d(1), None),
+    ("penerbangan jakarta ke bali besok", R, "JKT", "DPS", d(1), None),
+    ("kl to penang", R, "KUL", "PEN", None, None),
+    ("manila cebu", R, "MNL", "CEB", None, None),
+    ("hanoi saigon", R, "HAN", "SGN", None, None),
+    ("sg to bkk tonight", R, "SIN", "BKK", d(0), None),
+    # Africa
+    ("lagos to abuja", R, "LOS", "ABV", None, None),
+    ("nairobi mombasa tomorrow", R, "NBO", "MBA", d(1), None),
+    ("joburg cape town", R, "JNB", "CPT", None, None),
+    ("casablanca marrakech", R, "CMN", "RAK", None, None),
+    ("addis to dubai", R, "ADD", "DXB", None, None),
+]
+assert len(WORLD_CASES) == 40, len(WORLD_CASES)
+# THE COUNTRY HINT, where a line settles a name that exists in more than one
+# country. Checked on these lines; a hint on any other line is printed as a
+# guess and counted separately, because the prompt says never to guess one.
+COUNTRIES = {
+    "de buenos aires a córdoba el viernes": {"destination": "Argentina"},
+    "lima to santiago": {"destination": "Chile"},
+}
+if WORLD:
+    CASES = WORLD_CASES
+
 # The one line among the forty that is a question, and what it asks.
 QUESTIONS = {"when is the next flight to indore": "next"}
 # A LINE THAT READS BOTH WAYS. "any flights X to Y tonight" is a request to see
@@ -169,6 +265,13 @@ def judge(case, reply):
                 notes.append(f"question {got_q}")
         elif got_q != QUESTIONS.get(line):
             notes.append(f"question {got_q}")
+        for end in ("origin", "destination"):
+            want_c = COUNTRIES.get(line, {}).get(end)
+            got_c = (intent.get(f"{end}_country") or "").strip()
+            if want_c is not None and got_c.lower() != want_c.lower():
+                notes.append(f"{end}_country {got_c!r} not {want_c!r}")
+            elif want_c is None and got_c:
+                GUESSED.append(f"{line}: {end} {got_c}")
     if kind == F and intent:
         if intent.get("flight_number") != num:
             notes.append(f"number {intent.get('flight_number')}")
@@ -177,6 +280,7 @@ def judge(case, reply):
     return notes
 
 
+GUESSED = []
 totals = {R: [0, 0], F: [0, 0], C: [0, 0]}
 rows = []
 for case in CASES:
@@ -190,7 +294,8 @@ for case in CASES:
         totals[case[1]][0] += 1
     intent = reply.get("intent")
     shown = (f"{intent['kind']}: {intent.get('origin')}->{intent.get('destination')} {intent.get('date') or ''} {intent.get('range_label') or ''}"
-             f"{' ?' + intent['question'] if intent.get('question') else ''}".strip()
+             f"{' ?' + intent['question'] if intent.get('question') else ''}"
+             f"{' [' + ', '.join(c for c in (intent.get('origin_country'), intent.get('destination_country')) if c) + ']' if intent.get('origin_country') or intent.get('destination_country') else ''}".strip()
              if intent and intent["kind"] == "route" else
              f"flight: {intent.get('flight_number')} {intent.get('date') or ''}".strip() if intent else
              f"chat: {(reply.get('response') or reply.get('error') or '')[:60]!r}")
@@ -202,8 +307,14 @@ print("\n".join(rows))
 print()
 right = sum(v[0] for v in totals.values())
 print(f"routes  {totals[R][0]}/{totals[R][1]}   flights {totals[F][0]}/{totals[F][1]}   chat {totals[C][0]}/{totals[C][1]}")
-print(f"MISREAD RATE: {40 - right}/40 = {(40 - right) / 40:.1%}")
+print(f"MISREAD RATE ({'world' if WORLD else 'first'} forty): {40 - right}/40 = {(40 - right) / 40:.1%}")
+if GUESSED:
+    print(f"country guessed where no line settled it ({len(GUESSED)}):")
+    for g in GUESSED:
+        print("   ", g)
 
+if WORLD:
+    sys.exit(0)
 print()
 qright = 0
 for line, o, dst, q in QUESTION_CASES:

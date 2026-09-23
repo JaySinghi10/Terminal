@@ -127,6 +127,14 @@ r = ask("x", "2026-09-22", False, turn("", call("search_route", destination="Ind
 check("no question is None, not absent", "question" in r["intent"] and r["intent"]["question"] is None, r["intent"])
 
 r = ask("x", "2026-09-22", False,
+        turn("", call("search_route", origin="Lima", destination="Santiago", destination_country="Chile", confidence=0.9)))
+check("a country hint passes through, and the one not given is None",
+      r["intent"]["destination_country"] == "Chile" and r["intent"]["origin_country"] is None, r["intent"])
+r = ask("x", "2026-09-22", False,
+        turn("", call("search_route", destination="Goa", destination_country="   ", confidence=0.9)))
+check("a blank country is None", r["intent"]["destination_country"] is None, r["intent"])
+
+r = ask("x", "2026-09-22", False,
         turn("", call("search_route", destination="Goa", date="2020-01-01", confidence=0.9)))
 check("a past date is NOT silently dropped: it is kept as an error for the device to say",
       r["intent"]["date"] is None and r["intent"]["date_error"], r["intent"])

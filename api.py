@@ -944,6 +944,18 @@ INTENT_ROUTE_TOOL = {
                 "type": "string",
                 "description": "Where the flight goes, same rules as origin. Required.",
             },
+            "origin_country": {
+                "type": "string",
+                "description": (
+                    "The origin's country, in English (India, Chile, United States), "
+                    "ONLY when the city's name exists in more than one country AND "
+                    "the sentence says or implies which. Otherwise omit; never guess."
+                ),
+            },
+            "destination_country": {
+                "type": "string",
+                "description": "The destination's country, same rule as origin_country.",
+            },
             "date": {
                 "type": "string",
                 "description": (
@@ -1036,21 +1048,49 @@ INTENT_SYSTEM = (
     "You are the command line of a flight-tracking app. The user typed ONE line. "
     "Today is {today}. Work out what they want and act:\n"
     "\n"
-    "FLIGHTS BETWEEN PLACES -> call search_route. Any phrasing counts: "
-    "'delhi to indore flights', 'flights delhi indore', 'dilli se indore ki "
-    "flight', 'flights to bombay', 'IDR DEL', 'del/blr tomorrow morning', "
-    "'indore flights' (destination only). Return place NAMES in English with the "
-    "spelling corrected. Old names map to current ones: Bombay->Mumbai, "
-    "Madras->Chennai, Calcutta->Kolkata, Bangalore->Bengaluru, Poona->Pune, "
-    "Baroda->Vadodara, Trivandrum->Thiruvananthapuram, Cochin->Kochi, "
-    "Calicut->Kozhikode. Hindi and local names too: Dilli->Delhi, "
-    "Bambai->Mumbai, Amdavad->Ahmedabad, Kashi->Varanasi. Airport names name "
-    "their city: Indira Gandhi->Delhi, Kempegowda->Bengaluru, Sahar or "
-    "Chhatrapati Shivaji->Mumbai, Rajiv Gandhi->Hyderabad, Dabolim->Goa. If the "
-    "user typed a 3-letter code, return the code. A city with several airports "
-    "(London, New York, Goa) is returned as the city; the app offers the "
-    "choice. If the sentence does not say where the flight LEAVES FROM, omit "
-    "origin -- never guess one.\n"
+    "FLIGHTS BETWEEN PLACES -> call search_route. Any phrasing, any language, "
+    "any script: 'delhi to indore flights', 'flights delhi indore', 'dilli se "
+    "indore ki flight', 'vuelos de madrid a barcelona', 'vol paris nice', "
+    "'flüge von münchen nach berlin', 'voli roma milano', 'voos são paulo rio', "
+    "'lot warszawa kraków', 'москва питер', 'istanbul'dan ankara'ya', 'رحلات "
+    "من دبي إلى القاهرة', 'تهران به مشهد', '東京から大阪', '北京到上海', '서울에서 "
+    "부산', 'กรุงเทพไปเชียงใหม่', 'penerbangan jakarta ke bali', 'IDR DEL', "
+    "'lax-jfk', 'yyz to yvr', 'flights to bombay' (destination only).\n"
+    "\n"
+    "RETURN PLACE NAMES IN ENGLISH, spelling corrected, under the CURRENT name: "
+    "Bombay/Bambai/मुंबई->Mumbai, Dilli/दिल्ली->Delhi, Madras->Chennai, "
+    "Calcutta->Kolkata, Bangalore->Bengaluru, Peking->Beijing, "
+    "Canton->Guangzhou, Saigon->Ho Chi Minh City, Rangoon->Yangon, "
+    "Leningrad->St Petersburg, Constantinople->Istanbul, München->Munich, "
+    "Wien->Vienna, Praha->Prague, Warszawa->Warsaw, Moskva/Москва->Moscow, "
+    "Roma->Rome, Milano->Milan, Lisboa->Lisbon, Genève->Geneva, "
+    "Bruxelles->Brussels, København->Copenhagen, Athina->Athens, Krung "
+    "Thep/กรุงเทพ->Bangkok, 東京->Tokyo, 北京->Beijing, 上海->Shanghai, "
+    "서울->Seoul, القاهرة->Cairo, دبي->Dubai, الرياض->Riyadh, تهران->Tehran, "
+    "Kaapstad->Cape Town, Joburg/Jozi->Johannesburg, Sampa->São Paulo, "
+    "Baires/BsAs->Buenos Aires, CDMX->Mexico City, NYC->New York, LA->Los "
+    "Angeles, SF->San Francisco, DC->Washington, Vegas->Las Vegas, "
+    "Philly->Philadelphia, KL->Kuala Lumpur, HK->Hong Kong. If the user typed "
+    "a 3-letter airport code, return the code.\n"
+    "\n"
+    "A CITY WITH SEVERAL AIRPORTS -- London, New York, Paris, Tokyo, Moscow, "
+    "Milan, Washington, Buenos Aires, São Paulo, Shanghai, Seoul, Bangkok, "
+    "Istanbul, Goa -- is returned as the CITY; the app offers the choice. But "
+    "when the user names the AIRPORT -- Heathrow, Gatwick, JFK, Newark, Orly, "
+    "Haneda, Narita, Sheremetyevo, Domodedovo, Linate, Malpensa, Dulles, "
+    "Ezeiza, Congonhas, Guarulhos, Hongqiao, Gimpo, Don Mueang, Sabiha Gökçen "
+    "-- return that airport's name, not the city's.\n"
+    "\n"
+    "THE SAME NAME IN MORE THAN ONE COUNTRY -- Portland, San José, Santiago, "
+    "Valencia, Hyderabad, Birmingham, Victoria, Springfield -- is told apart by "
+    "origin_country / destination_country, in English, and ONLY when the "
+    "sentence settles it: the country is named, or the other end makes one "
+    "reading plain ('delhi to hyderabad' -> India; 'lima to santiago' -> Chile, "
+    "the capital next door, not Cuba). Otherwise leave the country out. Never "
+    "guess it.\n"
+    "\n"
+    "If the sentence does not say where the flight LEAVES FROM, omit origin -- "
+    "never guess one.\n"
     "\n"
     "DATES resolve against today: tomorrow, day after tomorrow, this friday, "
     "next monday, 'the 24th' (the next 24th), '24 sep', '3/10' (day/month). "
@@ -1059,7 +1099,15 @@ INTENT_SYSTEM = (
     "Time of day: morning, afternoon, evening; red-eye, late night and early "
     "morning are 'overnight'. Ordering: fastest/quickest/shortest -> fastest; "
     "earliest/first/soonest/next -> earliest. 'Cheapest' is not something this "
-    "app knows; ignore it and search anyway.\n"
+    "app knows; ignore it and search anyway. ALL OF THIS IN ANY LANGUAGE: "
+    "mañana, demain, morgen, domani, amanhã, jutro, завтра, yarın, 明日, 내일, "
+    "غدا, فردا, พรุ่งนี้, besok are tomorrow; hoy, aujourd'hui, heute, oggi, "
+    "hoje, сегодня, bugün, 今日, 오늘, اليوم, วันนี้, hari ini are today; "
+    "stasera, ce soir, heute abend, esta noche, hoje à noite, сегодня вечером, "
+    "bu akşam, 今晩, 오늘 밤, الليلة are tonight; weekday and month names "
+    "likewise; por la mañana, le matin, morgens, di mattina, de manhã, cedo, "
+    "утром, sabah, 朝, 아침, صباحا are morning, and the afternoon, evening and "
+    "night words likewise.\n"
     "\n"
     "A QUESTION ABOUT THE FLIGHTS is still search_route, with question set: "
     "'when is the next flight to X' -> next; 'what is the first flight tomorrow' "
@@ -1148,6 +1196,11 @@ def _intent_route(raw: dict, today) -> tuple[dict | None, str | None]:
         "kind": "route",
         "origin": _intent_str(raw, "origin"),
         "destination": destination,
+        # A hint for ORDERING the device's options, never for choosing one. See
+        # the prompt: set only when the sentence settles a name that exists in
+        # more than one country.
+        "origin_country": _intent_str(raw, "origin_country"),
+        "destination_country": _intent_str(raw, "destination_country"),
         "date": date,
         "date_kind": kind if date is not None or kind == "range" else None,
         "range_label": _intent_str(raw, "range_label") if kind == "range" else None,
