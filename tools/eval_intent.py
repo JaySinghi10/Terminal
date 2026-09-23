@@ -87,6 +87,20 @@ NAME_TO_CODE = {
     "cochin": "COK", "thiruvananthapuram": "TRV", "trivandrum": "TRV", "dubai": "DXB",
     "london": "LON", "new york": "NYC", "pune": "PNQ", "guwahati": "GAU", "lucknow": "LKO",
     "varanasi": "VNS",
+    # AIRPORT NAMES. The prompt tells the model to keep an airport's name when
+    # the line names one, and the device resolves it: "Kempegowda" is BLR at
+    # rank 2. Without these the eval scored a right answer as a miss.
+    "kempegowda": "BLR", "kempegowda international": "BLR", "indira gandhi": "DEL",
+    "indira gandhi international": "DEL", "chhatrapati shivaji": "BOM",
+    "chhatrapati shivaji maharaj": "BOM", "rajiv gandhi": "HYD", "dabolim": "GOA",
+    "mopa": "GOA", "heathrow": "LHR", "gatwick": "LGW", "stansted": "STN",
+    "newark": "EWR", "laguardia": "LGA", "orly": "ORY", "charles de gaulle": "CDG",
+    "haneda": "HND", "sheremetyevo": "SVO", "domodedovo": "DME", "vnukovo": "VKO",
+    "linate": "LIN", "malpensa": "MXP", "dulles": "IAD", "reagan": "DCA",
+    "ezeiza": "EZE", "aeroparque": "AEP", "congonhas": "CGH", "guarulhos": "GRU",
+    "hongqiao": "SHA", "pudong": "PVG", "gimpo": "GMP", "don mueang": "DMK",
+    "suvarnabhumi": "BKK", "sabiha gokcen": "SAW", "sabiha gökçen": "SAW",
+    "istanbul airport": "IST",
 }
 PLACE_WORDS = set(NAME_TO_CODE) | {"dehli", "dilli", "hyderbad", "chenai", "kolkatta", "banglore",
                                     "kempegowda", "indira gandhi"}

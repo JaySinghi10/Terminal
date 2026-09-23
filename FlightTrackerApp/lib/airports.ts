@@ -2161,6 +2161,75 @@ export function findAirports(term: string, limit = 8): Airport[] {
 // reading is trusted enough to spend units on. A fuzzy hit with `options` of
 // length one is unique at its distance, which is the shape the free route rung
 // accepts; a longer list is a guess and belongs to the model.
+// ── ONE NAME, SEVERAL CITIES ────────────────────────────────────────────────
+//
+// THE ORDER A PERSON WOULD EXPECT, WHERE NOTHING ELSE DECIDES. These are not
+// metros -- Portland, Maine is not another airport of Portland, Oregon, and must
+// never be offered on the airport panel as one -- so they stay out of
+// CITY_AIRPORTS and its reverse index. What they share with it is a name, and
+// without this the tie between them broke on the IATA code: the alphabet.
+//
+// EVERY NAME THE DATASET HOLDS IN MORE THAN ONE PLACE, measured, plus Portland,
+// whose two are in one country and so cannot be told apart by a country hint.
+// Ordered by traffic, the larger first. A country the sentence names, or the
+// country of the other end of the route, outranks this order -- see
+// orderByCountry and the search screen's orderEnds. Birmingham and Victoria
+// are curated in CITY_AIRPORTS already and keep their order there.
+const SAME_NAME: Record<string, string[]> = {
+  'barcelona': ['BCN', 'BLA'],
+  'brest': ['BES', 'BQT'],
+  'portland': ['PDX', 'PWM'],
+  'san jose': ['SJC', 'SJO'],
+  'san salvador': ['SAL', 'ZSA'],
+  'santiago': ['SCL', 'STI', 'SCU'],
+  'valencia': ['VLC', 'VLN'],
+};
+
+// THE OPTIONS OF ONE END, WITH A COUNTRY'S AIRPORTS FIRST. Never drops one: a
+// hint orders, and the picker still offers the rest. Unchanged when the hint is
+// null, when nothing is in that country, or when everything is.
+export function orderByCountry(options: Airport[], country: string | null): Airport[] {
+  if (country === null || options.length < 2) return options;
+  const first = options.filter(o => o.country === country);
+  if (first.length === 0 || first.length === options.length) return options;
+  return [...first, ...options.filter(o => o.country !== country)];
+}
+
+// ── A COUNTRY AS THE MODEL SAYS IT, AS THE DATASET SPELLS IT ─────────────────
+//
+// THE MODEL WRITES ENGLISH COUNTRY NAMES AND THE DATASET HAS ITS OWN. Most agree
+// once folded; the rest are the forms people and models actually use for the
+// dataset's longer or older names. Null for anything the dataset does not hold,
+// which the caller reads as "no hint" rather than as a country with no airports:
+// a hint the app cannot place must never refuse a search.
+const COUNTRY_SAYS: Record<string, string> = {
+  'usa': 'united states', 'us': 'united states', 'u s': 'united states', 'u s a': 'united states',
+  'america': 'united states', 'united states of america': 'united states',
+  'uk': 'united kingdom', 'u k': 'united kingdom', 'britain': 'united kingdom',
+  'great britain': 'united kingdom', 'england': 'united kingdom', 'scotland': 'united kingdom',
+  'wales': 'united kingdom', 'northern ireland': 'united kingdom',
+  'uae': 'united arab emirates', 'emirates': 'united arab emirates',
+  'korea': 'south korea', 'republic of korea': 'south korea',
+  'czechia': 'czech republic', 'ivory coast': 'cote d ivoire', 'turkiye': 'turkey',
+  'burma': 'myanmar', 'holland': 'netherlands', 'the netherlands': 'netherlands',
+  'russian federation': 'russia', 'viet nam': 'vietnam', 'macedonia': 'north macedonia',
+  'east timor': 'timor leste', 'drc': 'democratic republic of the congo',
+  'dr congo': 'democratic republic of the congo', 'congo kinshasa': 'democratic republic of the congo',
+  'congo brazzaville': 'republic of the congo',
+};
+let COUNTRIES: Map<string, string> | null = null;
+
+export function countryNamed(said: string | null | undefined): string | null {
+  if (!said) return null;
+  build();
+  if (COUNTRIES === null) {
+    COUNTRIES = new Map();
+    for (const h of HAYSTACK) COUNTRIES.set(normalizeTerm(h.a.country), h.a.country);
+  }
+  const q = normalizeTerm(said);
+  return COUNTRIES.get(q) ?? COUNTRIES.get(COUNTRY_SAYS[q] ?? '') ?? null;
+}
+
 export function resolveAirportName(term: string): { airport: Airport; options: Airport[]; rank: number } | null {
   const q = normalizeTerm(term);
   build();
@@ -2174,11 +2243,14 @@ export function resolveAirportName(term: string): { airport: Airport; options: A
   const scored = scoreAll(q);
   if (scored.length === 0) return null;
   const best = scored[0].rank;
-  return {
-    airport: scored[0].a,
-    options: scored.filter(v => v.rank === best).slice(0, 8).map(v => v.a),
-    rank: best,
-  };
+  let options = scored.filter(v => v.rank === best).slice(0, 8).map(v => v.a);
+  // A NAME SEVERAL CITIES SHARE takes the order written for it; see SAME_NAME.
+  const order = SAME_NAME[q];
+  if (order !== undefined) {
+    const at = (x: Airport) => { const i = order.indexOf(x.iata); return i < 0 ? order.length : i; };
+    options = [...options].sort((x, y) => at(x) - at(y));
+  }
+  return { airport: options[0], options, rank: best };
 }
 
 // THE AIRPORT NEAREST A POSITION.

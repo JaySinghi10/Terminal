@@ -207,8 +207,11 @@ function routeClip(text: string, room: number): string {
 //
 // No count. A "+3 more" beside one airport name reads as three things selected
 // rather than three available, and the chevron already says the control opens.
-function routeEndLabel(code: string, name: string, cap: number): string {
-  const short = routeAirportShort(name);
+// `country` IS SET ONLY WHEN THE END'S OPTIONS SPAN COUNTRIES, and then it is
+// the thing that tells Santiago from Santiago, so it outlasts the code when the
+// pill is short of room.
+function routeEndLabel(code: string, name: string, cap: number, country: string | null = null): string {
+  const short = country === null ? routeAirportShort(name) : `${routeAirportShort(name)}, ${country}`;
   const withCode = `${short} (${code})`;
   if (withCode.length <= cap) return withCode;
   if (short.length <= cap) return short;
@@ -667,9 +670,14 @@ export function ResultsSheet() {
     if (routeResult === null || routePick === null) return [];
     const list = which === 'orig' ? routePick.from : routePick.to;
     const current = which === 'orig' ? routeResult.origin : routeResult.destination;
+    // THE COUNTRY, WHEN THE CHOICE IS BETWEEN COUNTRIES. "Arturo Merino Benítez
+    // (SCL)" means nothing to someone choosing between Santiagos; ", Chile" does.
+    const spans = new Set(list.map(a => a.country)).size > 1;
     return list.map(a => ({
       key: a.iata,
-      label: `${trimAirportName(a.name)} (${a.iata})`,
+      label: spans
+        ? `${trimAirportName(a.name)}, ${a.country} (${a.iata})`
+        : `${trimAirportName(a.name)} (${a.iata})`,
       on: a.iata === current,
       press: () => {
         closeRouteDrop();
@@ -749,7 +757,8 @@ export function ResultsSheet() {
             {/* The NAME leads: a code names the airport only to someone who
                 already knows it. */}
             <Text style={s.routeDropTxt} numberOfLines={1}>
-              {routeEndLabel(code, airport?.name ?? code, routeEndCharBudget())}
+              {routeEndLabel(code, airport?.name ?? code, routeEndCharBudget(),
+                new Set(list.map(a => a.country)).size > 1 ? airport?.country ?? null : null)}
             </Text>
             <View style={[s.routeDropChev, { transform: [{ rotate: open ? '-135deg' : '45deg' }] }]} />
           </TouchableOpacity>

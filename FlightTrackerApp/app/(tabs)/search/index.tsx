@@ -162,6 +162,7 @@ import {
   isKnownPlace,
   normalizeTerm,
   RANK_LAST_EXACT, RANK_LAST_ONE_EDIT,
+  orderByCountry, countryNamed,
 } from '../../../lib/airports';
 // THE RESULTS, FROM THE PROVIDER ABOVE THIS ROUTE'S STACK. See lib/routeResults
 // for what lives there and why. What this screen still reads is the parser's
@@ -783,6 +784,11 @@ type IntentRoute = {
   sort: 'fastest' | 'earliest' | null;
   // Set only when the line ASKED something. See RouteQuestion.
   question: RouteQuestion | null;
+  // THE COUNTRY OF AN END WHOSE NAME EXISTS IN SEVERAL, in English, set only
+  // when the sentence settles it. Absent from a server that predates it. It
+  // ORDERS the options; see orderEnds.
+  origin_country?: string | null;
+  destination_country?: string | null;
   // A date the server refused, kept so the device can say why rather than
   // quietly searching today.
   date_error: string | null;
@@ -928,6 +934,40 @@ function freeRungTakes(from: RouteEnd, to: RouteEnd, stripped: boolean): boolean
   return f !== null && t !== null && !(f === 'typo' && t === 'typo');
 }
 
+// ── WHICH SANTIAGO ──────────────────────────────────────────────────────────
+//
+// A NAME SEVERAL CITIES SHARE IS SETTLED IN THIS ORDER, and only ever ORDERED:
+// the picker offers every option whatever wins.
+//
+//   1  a country the sentence named -- the model's hint, mapped to the
+//      dataset's own spelling by countryNamed
+//   2  the country of the OTHER end, when that end is settled to one country:
+//      "lima to santiago" is Chile, "caracas to valencia" is Venezuela. The
+//      commonest trip is inside one country or to a neighbour, and a board for
+//      the wrong continent is the worse mistake
+//   3  the written order in lib/airports.ts's SAME_NAME, by traffic
+//
+// A TYPED ROUTE GETS 2 AND 3, and a model-read one gets all three.
+function preferCountry(end: RouteEnd, country: string | null): RouteEnd {
+  const options = orderByCountry(end.options, country);
+  return options === end.options ? end : { ...end, airport: options[0], options };
+}
+
+function settledCountry(end: RouteEnd): string | null {
+  const c = end.airport.country;
+  return end.options.every(o => o.country === c) ? c : null;
+}
+
+function orderEnds(
+  from: RouteEnd, to: RouteEnd, fromHint: string | null, toHint: string | null,
+): { from: RouteEnd; to: RouteEnd } {
+  let f = preferCountry(from, fromHint);
+  let t = preferCountry(to, toHint);
+  if (fromHint === null) f = preferCountry(f, settledCountry(t));
+  if (toHint === null) t = preferCountry(t, settledCountry(f));
+  return { from: f, to: t };
+}
+
 // Every way the command line could be cut into two places, best candidate
 // first: the explicit separator if there is one, then whitespace splits with
 // the LONGEST left-hand side first — which is what makes "New York London"
@@ -1049,7 +1089,9 @@ function parseRouteQuery(q: string, stripped = false): RouteParse {
       // THE BEST SPLIT DECIDES. Both ends resolved; if either is a guess the
       // free rung may not act on, the line goes to the model rather than to a
       // worse cut further down the list.
-      return freeRungTakes(from, to, stripped) ? { kind: 'ok', from, to } : null;
+      // ORDERED BEFORE IT IS RETURNED, so the affordance under the command line
+      // and the search that runs name the same Valencia. See orderEnds.
+      return freeRungTakes(from, to, stripped) ? { kind: 'ok', ...orderEnds(from, to, null, null) } : null;
     }
     // One end is a place and the other is short and says nothing else it could
     // be. That is a route with a name this app does not know, and saying so is
@@ -1404,7 +1446,7 @@ export default function Search() {
   };
   const runRouteIntent = async (i: IntentRoute) => {
     if (i.date_error !== null) { failSearch(i.date_error); return; }
-    const to = resolveIntentEnd(i.destination);
+    let to = resolveIntentEnd(i.destination);
     if (to === null) { failSearch(`no airport matches "${i.destination}"`); return; }
     let from: RouteEnd;
     let assumed: string | null = null;
@@ -1420,6 +1462,22 @@ export default function Search() {
       from = { airport: panelOrigin, options: [panelOrigin], rank: 0 };
       assumed = panelOrigin.iata;
     }
+    // THE COUNTRY THE SENTENCE NAMED, WHERE IT NAMED ONE. A hint the dataset
+    // cannot place is no hint. A hint it CAN place that matches none of the
+    // options is said rather than searched: "hyderabad, pakistan" must not
+    // quietly become a board for Hyderabad, India. The dataset holds one
+    // Hyderabad, and saying which is the useful half of the refusal.
+    const fromHint = i.origin !== null ? countryNamed(i.origin_country) : null;
+    const toHint = countryNamed(i.destination_country);
+    const offCountry = (end: RouteEnd, hint: string | null, name: string): string | null =>
+      hint === null || end.options.some(o => o.country === hint)
+        ? null
+        : `no airport in ${hint} matches "${name}". The one I know is ${end.airport.city}, ${end.airport.country}`;
+    const offTo = offCountry(to, toHint, i.destination);
+    if (offTo !== null) { failSearch(offTo); return; }
+    const offFrom = i.origin !== null ? offCountry(from, fromHint, i.origin) : null;
+    if (offFrom !== null) { failSearch(offFrom); return; }
+    ({ from, to } = orderEnds(from, to, fromHint, toHint));
     if (from.airport.iata === to.airport.iata) {
       failSearch('origin and destination must be different airports');
       return;
