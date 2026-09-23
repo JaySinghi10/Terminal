@@ -244,7 +244,7 @@ got = run([(sched - timedelta(hours=6), dto(sched=sched), None), (sched - timede
 # means anything is whether they can still get there, which is NEXT_MIN_LEAD.
 check("the earliest reachable departure wins, even one leaving before the cancelled flight would have",
       kinds(got) == [N.CANCELLED] and got[0][1]["values"]["next"]["flight_number"] == "AI2812", got[0][1]["values"] if got else None)
-check("cancellation text", N.render(got[0][1]) == "Your flight to Bangalore is cancelled. The next one leaves today at 8:00 PM, Air India AI2812.", N.render(got[0][1]))
+check("cancellation text", N.render(got[0][1]) == "Your flight to Bangalore is cancelled. The next one leaves today at 8:00 PM IST, Air India AI2812.", N.render(got[0][1]))
 # ── BOTH EDGES OF THAT FLOOR, because a rule with only one test passes just as
 # happily when it is inverted. Ninety minutes is the line: a departure inside it
 # is unreachable and must not be offered, one outside it must.
@@ -274,7 +274,7 @@ ns, got = run(steps, lookup=lk)
 check("nothing for three days: cancelled now, next flight when found two polls later",
       kinds(got) == [N.CANCELLED, N.NEXT_FLIGHT], kinds(got))
 check("the first message admits the search honestly", N.render(got[0][1]) == "Your flight to Bangalore is cancelled. Terminal is looking for the next departure and will tell you.", N.render(got[0][1]))
-check("the follow-up names the day", N.render(got[1][1]) == "The next flight to Bangalore leaves Sunday at 6:05 AM, Air India AI2812.", N.render(got[1][1]))
+check("the follow-up names the day", N.render(got[1][1]) == "The next flight to Bangalore leaves Sunday at 6:05 AM IST, Air India AI2812.", N.render(got[1][1]))
 check("three days in the first pass, then two per poll: 09,10,11 | 12,13", lk.calls == ["2026-09-09", "2026-09-10", "2026-09-11", "2026-09-12", "2026-09-13"], lk.calls)
 check("the search is closed", ns["next_search"]["done"] is True)
 more = run([(c0 + timedelta(hours=2), dto("cancelled", sched=sched), None)], ns=ns, lookup=lk)[1]

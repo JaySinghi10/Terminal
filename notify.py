@@ -240,6 +240,15 @@ def _tz_label(dto_time_string):
     return parts[-1] if len(parts) >= 3 else ""
 
 
+def _tz_suffix(v):
+    """' CEST' from a rendered-values dict that carries one, else ''. The two
+    cancellation lines print a departure clock like every other push does, and
+    now label it like every other push does. The phone's own time cannot be
+    added here: the server does not know which zone the reader is in."""
+    tz = (v or {}).get("tz")
+    return " " + tz if tz else ""
+
+
 def _minutes(td):
     return int(round(td.total_seconds() / 60))
 
@@ -907,8 +916,9 @@ def render(msg, owned=True, same_city=1, same_time=1):
     if k == CANCELLED:
         nxt = v.get("next")
         if nxt:
-            return "%s is cancelled. The next one leaves %s at %s, %s %s." % (
-                s, nxt.get("day"), nxt.get("time"), nxt.get("airline") or "", nxt.get("flight_number") or "")
+            return "%s is cancelled. The next one leaves %s at %s%s, %s %s." % (
+                s, nxt.get("day"), nxt.get("time"), _tz_suffix(nxt),
+                nxt.get("airline") or "", nxt.get("flight_number") or "")
         if v.get("none_within_days"):
             # NOT "AS FAR AS THE SCHEDULE REACHES", WHICH STOPPED BEING TRUE.
             # That clause was honest while the search ran to the timetable's own
@@ -922,8 +932,9 @@ def render(msg, owned=True, same_city=1, same_time=1):
     if k == NEXT_FLIGHT:
         nxt = v.get("next")
         if nxt:
-            return "The next flight to %s leaves %s at %s, %s %s." % (
-                city_to, nxt.get("day"), nxt.get("time"), nxt.get("airline") or "", nxt.get("flight_number") or "")
+            return "The next flight to %s leaves %s at %s%s, %s %s." % (
+                city_to, nxt.get("day"), nxt.get("time"), _tz_suffix(nxt),
+                nxt.get("airline") or "", nxt.get("flight_number") or "")
         # THE SAME SENTENCE, PLUS THE CITY. This one arrives on its own, hours
         # after the cancellation it follows, so it cannot lean on a subject line
         # the reader is still looking at -- "this route" alone would not say

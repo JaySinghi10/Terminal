@@ -1513,6 +1513,8 @@ export default function Index() {
       depDelay: saved.from.delay,
       arrDelay: saved.to.delay,
       date: saved.flightDate === 'unknown' ? "N/A" : saved.flightDate,
+      depTz: saved.from.timezone,
+      arrTz: saved.to.timezone,
     });
     setLastUpdated(saved.updatedAt);
     showResult();

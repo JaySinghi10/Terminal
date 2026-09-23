@@ -24,7 +24,8 @@ import { airportByCode } from './airports';
 // The one implementation. See lib/time.ts: there are two kinds of ISO in this
 // app and only one may become an instant, so a copy of zonedIsoToTs anywhere
 // would be a uniform, silent time shift.
-import { zonedIsoToTs, clock24 } from './time';
+import { zonedIsoToTs } from './time';
+import { zonedClock, clockWithZone } from './flightstatus';
 
 // ── PLATFORM SETUP ───────────────────────────────────────────────────────────
 
@@ -165,8 +166,18 @@ function terminalClause(flight: SavedFlight): string {
   return t ? ` Terminal ${t}.` : '';
 }
 
+// THE AIRPORT'S CLOCK WITH ITS ZONE, and the phone's in brackets when they
+// differ: "11:45 CEST (02:45 your time)". Read when the reminder is SET, so the
+// phone's time is the phone's zone then; a reminder set in San Francisco for a
+// departure from Amsterdam says what 11:45 CEST is in San Francisco.
+function departureAt(flight: SavedFlight): string {
+  const z = zonedClock(flight.from.scheduledIso, flight.from.scheduled, flight.from.timezone);
+  const at = z.clock === '' ? '' : clockWithZone(z);
+  return z.yours === null ? at : `${at} (${z.yours})`;
+}
+
 function eveningCopy(flight: SavedFlight): { title: string; body: string } {
-  const at = clock24(flight.from.scheduledIso, '');
+  const at = departureAt(flight);
   return {
     title: `${flight.flightNumber} tomorrow`,
     body: `Departs ${flight.from.iata} at ${at}.${terminalClause(flight)} Scheduled time.`,
@@ -174,7 +185,7 @@ function eveningCopy(flight: SavedFlight): { title: string; body: string } {
 }
 
 function leaveCopy(flight: SavedFlight): { title: string; body: string } {
-  const at = clock24(flight.from.scheduledIso, '');
+  const at = departureAt(flight);
   return {
     title: `${flight.flightNumber} — time to leave`,
     body: `Head to ${flight.from.iata}. Scheduled departure ${at}.${terminalClause(flight)}`,

@@ -136,6 +136,42 @@ export function clock24(iso: string | null, fallback: string): string {
 // instant, a missing zone, a zone with no formatter, or a throw from
 // formatToParts. A caller that cannot be told the time renders nothing rather
 // than a time from somewhere else.
+// ── THE SAME INSTANT ON THE PHONE ───────────────────────────────────────────
+//
+// "02:45 your time", OR NULL WHEN IT WOULD SAY NOTHING. Every flight clock in
+// this app is the airport's own, and somebody in San Francisco reading
+// "11:45 CEST" should not have to subtract nine hours in their head. So a clock
+// can carry this beside it -- and only when the phone and the airport disagree
+// about that instant: same wall clock and same calendar day means same offset
+// at that moment, and a line restating the clock would be noise.
+//
+// THE PHONE'S ZONE IS WHAT `new Date` READS, deliberately, and this is the one
+// function in the file that reads it. Every other clock here names its zone.
+//
+// THE WEEKDAY JOINS WHEN THE DAY DIFFERS. KL877 lands in Mumbai at 00:01 on
+// the 25th, which is 11:31 on the 24th in San Francisco; "11:31 your time"
+// alone would be a time on the wrong day.
+const PHONE_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+export function yourTime(ts: number | null, timeZone: string | null): string | null {
+  if (ts === null || !timeZone) return null;
+  const fmt = tzFormatter(timeZone);
+  if (fmt === null) return null;
+  try {
+    const p: Record<string, string> = {};
+    for (const part of fmt.formatToParts(new Date(ts))) p[part.type] = part.value;
+    const d = new Date(ts);
+    const here = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const there = `${String(Number(p.hour) % 24).padStart(2, '0')}:${p.minute}`;
+    const sameDay = Number(p.year) === d.getFullYear()
+      && Number(p.month) === d.getMonth() + 1 && Number(p.day) === d.getDate();
+    if (sameDay && here === there) return null;
+    return sameDay ? `${here} your time` : `${here} ${PHONE_WEEKDAYS[d.getDay()]} your time`;
+  } catch {
+    return null;
+  }
+}
+
 export function clockInZone(ts: number | null, timeZone: string | null): string | null {
   if (ts === null || !timeZone) return null;
   const fmt = tzFormatter(timeZone);

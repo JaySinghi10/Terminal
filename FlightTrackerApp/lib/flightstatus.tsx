@@ -23,7 +23,7 @@ import { SavedFlight, SavedFlightEndpoint } from './storage';
 // The one implementation of each, exactly as index.tsx reached them. See
 // lib/time.ts: there are two kinds of ISO in this app and only one may become an
 // instant.
-import { zonedIsoToTs, clock24 } from './time';
+import { zonedIsoToTs, clock24, yourTime } from './time';
 // THE RULE ABOUT A STORED STATUS, imported rather than copied. It is the store's
 // because the refresh loop and the archive split read it too; this file is one
 // more reader.
@@ -134,13 +134,46 @@ export function zoneLabel(t: string | null | undefined): string | null {
   return m ? m[1].trim() : null;
 }
 
+// ── A FLIGHT CLOCK, WITH THE ZONE IT IS IN ──────────────────────────────────
+//
+// EVERY FLIGHT TIME IN THIS APP IS THE AIRPORT'S LOCAL CLOCK, and until now
+// most of them said so nowhere: "dep 11:45" on a row in San Francisco read as
+// 11:45 there, when it meant 11:45 in Amsterdam. This is the one place a clock
+// is given its label.
+//
+// `iso` IS THE TIME SHOWN -- actual, estimated or scheduled -- and `formatted`
+// is any of that endpoint's provider strings, because all three carry the same
+// zone (see zoneLabel). With no ISO the clock IS the formatted string, which
+// already ends in its label, so none is added a second time.
+//
+// `yours` IS THE SAME INSTANT ON THE PHONE, or null when the two agree. See
+// yourTime in lib/time.ts.
+export type ZonedClock = { clock: string; zone: string | null; yours: string | null };
+
+export function zonedClock(
+  iso: string | null, formatted: string | null | undefined, timeZone: string | null,
+): ZonedClock {
+  const clock = clock24(iso, formatted ?? '');
+  return {
+    clock,
+    zone: iso === null ? null : zoneLabel(formatted),
+    yours: yourTime(zonedIsoToTs(iso, timeZone), timeZone),
+  };
+}
+
+// "11:45 CEST". The clock and its label, the form a sentence takes.
+export function clockWithZone(z: ZonedClock): string {
+  return z.zone === null ? z.clock : `${z.clock} ${z.zone}`;
+}
+
 // --- Live-countdown helpers -------------------------------------------------
 export const CD_GREEN = '#4ade80';
 const CD_AGE = 'rgba(226,226,226,0.52)';
 export const CD_LATE = '#fbbf24';
 const CD_EARLY = 'rgba(226,226,226,0.52)';
 
-type LineSeg = { text: string; color: string };
+// `small` sets a segment a size down: the phone's time, beside the airport's.
+type LineSeg = { text: string; color: string; small?: boolean };
 
 // The backend's *_iso fields carry a bogus "+00:00"; the value is the airport's
 // LOCAL wall clock. Strip the offset, treat as naive, interpret in the IANA zone.
@@ -171,15 +204,18 @@ function delaySegment(ep: SavedFlightEndpoint, status: string): LineSeg | null {
 // The status is the CALLER'S, not f.status. Re-reading the record here would let
 // this pick the arrival endpoint for a row whose word says scheduled, which is
 // precisely the disagreement effectiveStatus exists to remove.
-function absoluteTime(f: SavedFlight, status: string): string {
+//
+// WITH ITS ZONE NOW. The scheduled string is the label source for either time
+// at that end: one airport, one zone.
+function absoluteTime(f: SavedFlight, status: string): ZonedClock {
   const s = status;
   if (s === 'landed') {
     return f.to.actual && f.to.actual !== 'N/A'
-      ? clock24(f.to.actualIso, f.to.actual)
-      : clock24(f.to.scheduledIso, f.to.scheduled);
+      ? zonedClock(f.to.actualIso, f.to.actualIso === null ? f.to.actual : f.to.scheduled, f.to.timezone)
+      : zonedClock(f.to.scheduledIso, f.to.scheduled, f.to.timezone);
   }
-  if (s === 'active') return clock24(f.to.scheduledIso, f.to.scheduled);
-  return clock24(f.from.scheduledIso, f.from.scheduled);
+  if (s === 'active') return zonedClock(f.to.scheduledIso, f.to.scheduled, f.to.timezone);
+  return zonedClock(f.from.scheduledIso, f.from.scheduled, f.from.timezone);
 }
 
 // Line-2 / card status line. Always leads with the coloured status word so the
@@ -270,10 +306,14 @@ function flightLineSegments(
   // Derived from the SAME branch absoluteTime takes, so the label can never name
   // an endpoint the time did not come from.
   const absLabel = s === 'landed' || s === 'active' ? 'arr' : 'dep';
-  const tail = abs && abs !== 'N/A' && hideAbsolute !== true
-    ? ` · updated ${timeAgo(shownAt, now)} · ${absLabel} ${abs}`
+  const shown = abs.clock !== '' && abs.clock !== 'N/A' && hideAbsolute !== true;
+  const tail = shown
+    ? ` · updated ${timeAgo(shownAt, now)} · ${absLabel} ${clockWithZone(abs)}`
     : ` · updated ${timeAgo(shownAt, now)}`;
-  return [statusSeg, { text: tail, color: CD_AGE }];
+  const segs: LineSeg[] = [statusSeg, { text: tail, color: CD_AGE }];
+  // LAST, SO A NARROW ROW LOSES THIS BEFORE IT LOSES THE AIRPORT'S OWN CLOCK.
+  if (shown && abs.yours !== null) segs.push({ text: ` · ${abs.yours}`, color: CD_AGE, small: true });
+  return segs;
 }
 
 // THE STATUS WORD ON ITS OWN, in the colour that segment carries.
@@ -302,7 +342,9 @@ export function StatusLine({ f, now, style, numberOfLines, hideStatus, hideAbsol
     : all;
   return (
     <Text style={[s.statusLineText, style]} numberOfLines={numberOfLines}>
-      {segs.map((seg, i) => <Text key={i} style={{ color: seg.color }}>{seg.text}</Text>)}
+      {segs.map((seg, i) => (
+        <Text key={i} style={[{ color: seg.color }, seg.small === true && s.statusLineSmall]}>{seg.text}</Text>
+      ))}
     </Text>
   );
 }
@@ -314,4 +356,6 @@ const s = StyleSheet.create({
   // StatusLine's own type, extracted because the stacked branch renders it on
   // two Texts and an inline object would have been the same literal twice.
   statusLineText: { fontFamily: MONO, fontSize: 11 },
+  // A SIZE DOWN, for the phone's time beside the airport's.
+  statusLineSmall: { fontSize: 9 },
 });

@@ -93,6 +93,11 @@ import {
   // the provider's own string rather than derived, so the card cannot disagree
   // with the time beside it.
   zoneLabel,
+  // EVERY OTHER CLOCK ON THE CARD, labelled the same way and with the phone's
+  // time beside it where the two differ.
+  zonedClock,
+  clockWithZone,
+  type ZonedClock,
   CD_GREEN,
   CD_LATE,
   // StatusWord IS GONE FROM THIS IMPORT AND HAS NO CALLER ANYWHERE NOW. The trip
@@ -215,6 +220,11 @@ export type FlightData = {
   // clock and no date rather than a guessed one.
   depTimeIso: string | null;
   arrTimeIso: string | null;
+  // EACH END'S IANA ZONE, so a clock on the card can say what it is on the
+  // phone. The label ("CEST") is read off `dep`/`arr`; this is the zone the ISO
+  // is interpreted in. Null on a record that never carried one.
+  depTz: string | null;
+  arrTz: string | null;
   // WHICH OF THE THREE IT CAME FROM. It used to be readable only from the LABEL
   // -- "Actual Departure" against "Estimated Departure" -- and the trip card no
   // longer prints one, so the fact has to travel as data. It is also what the
@@ -669,6 +679,8 @@ export function flightDataFromApi(data: any, effective?: string): FlightData {
       dep.actual_iso ?? null, dep.estimated_iso ?? null, dep.scheduled_iso ?? null),
     arrTimeIso: isoForSource(arrCell.source,
       arr.actual_iso ?? null, arr.estimated_iso ?? null, arr.scheduled_iso ?? null),
+    depTz: dep.timezone ?? null,
+    arrTz: arr.timezone ?? null,
     duration: scheduledDuration(dep.scheduled_iso ?? null, dep.timezone ?? null, arr.scheduled_iso ?? null, arr.timezone ?? null),
     terminal: dep.terminal ?? null,
     arrTerminal: arr.terminal ?? null,
@@ -759,6 +771,8 @@ export function flightDataFromSaved(f: SavedFlight, effective: string): FlightDa
       f.from.actualIso, f.from.estimatedIso, f.from.scheduledIso),
     arrTimeIso: isoForSource(arrCell.source,
       f.to.actualIso, f.to.estimatedIso, f.to.scheduledIso),
+    depTz: f.from.timezone,
+    arrTz: f.to.timezone,
     duration: scheduledDuration(
       f.from.scheduledIso, f.from.timezone, f.to.scheduledIso, f.to.timezone),
     terminal: f.from.terminal,
@@ -1101,6 +1115,8 @@ function SheetGroup({ title, items }: {
     // is the tail of the same sentence. A nested Text inherits its parent's size
     // and colour, so the style it takes only has to say what differs.
     suffix?: string;
+    // A SMALLER LINE UNDER THE VALUE: the phone's time beside an airport clock.
+    note?: string;
     // MAY USE A SECOND LINE, where every other tile is held to one.
     //
     // AND IT IS STILL NEEDED, WITH THE SUFFIX GONE. " (wheels up)" used to be
@@ -1193,6 +1209,9 @@ function SheetGroup({ title, items }: {
                 <Text style={s.archiveTileValueMono}>{t.suffix}</Text>
               )}
             </Text>
+            {t.note !== undefined && (
+              <Text style={s.tileYours} numberOfLines={1}>{t.note}</Text>
+            )}
           </View>
         ))}
       </View>
@@ -1296,16 +1315,30 @@ function AirportTiles({ gate, terminal, belt, showBelt, desk, sheet }: {
 // missing data; they read it as fine, and now it says so.
 //
 // Zero and negative land here too: dead on the minute, and early at any size.
-function movementTile(label: string, value: string, delay: number | null): {
+function movementTile(label: string, value: string, delay: number | null, z: ZonedClock | null = null): {
   label: string; value: string; suffix?: string;
-  tone?: 'ontime' | 'late'; twoLines: boolean;
+  tone?: 'ontime' | 'late'; twoLines: boolean; note?: string;
 } {
+  // THE ZONE RIDES IN THE SUFFIX, set in the lighter weight the delay uses, so
+  // "11:45 CEST" reads as a clock and its label rather than as two values.
+  const zone = z !== null && z.zone !== null ? ` ${z.zone}` : '';
+  const note = z !== null && z.yours !== null ? z.yours : undefined;
   if (typeof delay === 'number' && delay > 0) {
     // The time and the delay travel separately from here so the tile can set
     // them in different weights. They still render as one line.
-    return { label, value, suffix: ` · ${delay}m late`, tone: 'late', twoLines: true };
+    return { label, value, suffix: `${zone} · ${delay}m late`, tone: 'late', twoLines: true, note };
   }
-  return { label, value, tone: 'ontime', twoLines: true };
+  return { label, value, suffix: zone === '' ? undefined : zone, tone: 'ontime', twoLines: true, note };
+}
+
+// EACH END'S CLOCK, WITH ITS ZONE AND THE PHONE'S TIME. The ISO and the zone
+// travel on FlightData; the label is read off the scheduled string, which every
+// time at that end shares.
+function depClock(flight: FlightData): ZonedClock {
+  return zonedClock(flight.depTimeIso, flight.depTimeIso === null ? flight.depTimeValue : flight.dep, flight.depTz);
+}
+function arrClock(flight: FlightData): ZonedClock {
+  return zonedClock(flight.arrTimeIso, flight.arrTimeIso === null ? flight.arrTimeValue : flight.arr, flight.arrTz);
 }
 
 // `style` is optional and composes ON TOP of pg.wrap, so every existing caller
@@ -1669,9 +1702,12 @@ function headLabel(head: string): string {
   return short === undefined ? head : head.slice(0, cut) + ' ' + short;
 }
 
-function TripColumn({ head, time, tone, when, delay, rows }: {
+function TripColumn({ head, time, tone, when, yours = null, delay, rows }: {
   head: string;
   time: string;
+  // THE SAME INSTANT ON THE PHONE, a size down under the date and zone, or null
+  // when the phone is in the airport's zone. See yourTime in lib/time.ts.
+  yours?: string | null;
   // WHAT THE CLOCK IS SAYING ABOUT ITSELF: 'ontime' greens it, 'late' ambers it,
   // null leaves it white. See clockTone, which is the only thing that builds one.
   //
@@ -1805,6 +1841,9 @@ function TripColumn({ head, time, tone, when, delay, rows }: {
           than truncating a zone to "GMT+5:3". */}
       {when !== null && (
         <Text style={s.tripColWhen} numberOfLines={2}>{when}</Text>
+      )}
+      {yours !== null && (
+        <Text style={s.tripColYours} numberOfLines={1}>{yours}</Text>
       )}
       {/* THE BADGES, TWO TO A ROW AND FILLING IT. See inPairs for why the rows
           are built here rather than left to flexWrap.
@@ -3493,8 +3532,8 @@ export function FlightCard({
                       // scheduled time repeats in the row above and again here,
                       // white in both places, and neither claims the flight is
                       // running to time.
-                      movementTile(flight.depTimeLabel, flight.depTimeValue, flight.depDelay),
-                      movementTile(flight.arrTimeLabel, flight.arrTimeValue, flight.arrDelay),
+                      movementTile(flight.depTimeLabel, flight.depTimeValue, flight.depDelay, depClock(flight)),
+                      movementTile(flight.arrTimeLabel, flight.arrTimeValue, flight.arrDelay, arrClock(flight)),
                     ]}
                   />
 
@@ -4518,8 +4557,12 @@ export function FlightCard({
                 {tripVariant && tripPhase === 'stale' && (
                   <>
                     <Text style={s.tripStaleNote}>
-                      {`No update since ${flight.arrTimeValue}. `
-                        + 'The airline has not reported this flight’s arrival.'}
+                      {(() => {
+                        const z = arrClock(flight);
+                        return `No update since ${clockWithZone(z)}`
+                          + (z.yours === null ? '. ' : `, ${z.yours}. `)
+                          + 'The airline has not reported this flight’s arrival.';
+                      })()}
                     </Text>
                     {/* ── AND WHAT SOMEBODY ELSE SAW, WHEN ANYBODY DID ──
                         A SEPARATE SENTENCE, ATTRIBUTED, AND CAREFULLY WORDED. It
@@ -4609,6 +4652,7 @@ export function FlightCard({
                           time={flight.depTimeValue}
                           tone={depTone}
                           when={whenLine(flight.depTimeIso, flight.dep)}
+                          yours={depClock(flight).yours}
                           delay={flight.depDelay}
                           rows={[
                             // THREE BADGES, AND THEY ARE THE THREE PLACES THIS
@@ -4651,6 +4695,7 @@ export function FlightCard({
                           time={flight.arrTimeValue}
                           tone={arrTone}
                           when={whenLine(flight.arrTimeIso, flight.arr)}
+                          yours={arrClock(flight).yours}
                           delay={flight.arrDelay}
                           rows={[
                             { label: 'Terminal', value: flight.arrTerminal, always: true, pill: true },
@@ -4725,12 +4770,16 @@ export function FlightCard({
                           time={flight.arrTimeValue}
                           tone={arrTone}
                           when={zoneLabel(flight.arr)}
+                          yours={arrClock(flight).yours}
                           delay={flight.arrDelay}
                           rows={[]}
                         />
                         {hasTime(flight.depTimeValue) && (
                           <Text style={s.tripQuiet} numberOfLines={1}>
-                            {`departed ${flight.depTimeValue}`}
+                            {`departed ${clockWithZone(depClock(flight))}`}
+                            {depClock(flight).yours !== null && (
+                              <Text style={s.tripQuietYours}>{` · ${depClock(flight).yours}`}</Text>
+                            )}
                           </Text>
                         )}
                       </>
@@ -4855,6 +4904,18 @@ export function FlightCard({
                                     </Text>
                                   )}
                                 </Text>
+                                {/* THE ZONE, AS EVERY OTHER PHASE GIVES IT, and
+                                    the phone's time a size down beneath. */}
+                                {arrClock(flight).zone !== null && (
+                                  <Text style={s.tripColWhen} numberOfLines={1}>
+                                    {arrClock(flight).zone}
+                                  </Text>
+                                )}
+                                {arrClock(flight).yours !== null && (
+                                  <Text style={s.tripColYours} numberOfLines={1}>
+                                    {arrClock(flight).yours}
+                                  </Text>
+                                )}
                               </>
                             )}
                           </View>
@@ -5015,10 +5076,18 @@ export function FlightCard({
                             hedges about which clock it means, and it is the
                             line that least needs qualifying: the flight is not
                             going. */}
+                        {/* THE ZONE NOW, LIKE EVERY OTHER CLOCK. The note
+                            above argued a cancelled departure least needed
+                            one; that held only while no clock had one. */}
                         <Text style={s.tripOffWhen} numberOfLines={1}>
                           <Text style={s.tripOffWhenLabel}>{'SCHEDULED DEPARTURE  '}</Text>
-                          {clock24(flight.depIso, flight.dep)}
+                          {clockWithZone(zonedClock(flight.depIso, flight.dep, flight.depTz))}
                         </Text>
+                        {zonedClock(flight.depIso, flight.dep, flight.depTz).yours !== null && (
+                          <Text style={s.tripColYours} numberOfLines={1}>
+                            {zonedClock(flight.depIso, flight.dep, flight.depTz).yours}
+                          </Text>
+                        )}
                       </>
                     )}
 
@@ -5951,6 +6020,9 @@ const s = StyleSheet.create({
   // of this card -- which day, whose clock -- and they do not go smaller to fit.
   // If they cannot fit they wrap; see the note at the element.
   tripColWhen: { fontSize: 12, fontFamily: MONO, color: "rgba(226,226,226,0.52)" },
+  // THE PHONE'S TIME, a size under the date-and-zone line above it.
+  tripColYours: { fontSize: 10, fontFamily: MONO, color: "rgba(226,226,226,0.52)", marginTop: 2 },
+  tileYours: { fontSize: 10, fontFamily: MONO, color: "rgba(226,226,226,0.52)", marginTop: 2 },
   // THE OFFSET, ON THE SAME LINE AS THE TIME IT QUALIFIES. 12pt mono against the
   // clock's 20 -- tripColWhen's size, which is the card's one qualifier tier:
   // this and the date are both things you read AFTER the clock, and neither
@@ -6073,6 +6145,7 @@ const s = StyleSheet.create({
   // "departed" rather than a label-and-value pair, because a pair would give it
   // the weight of a row in a column it is no longer part of.
   tripQuiet: { fontSize: 12, fontFamily: MONO, color: "rgba(226,226,226,0.52)" },
+  tripQuietYours: { fontSize: 10 },
   // ── THE LANDED CARD'S ONE ROW ──
   //
   // IDENTITY LEFT, ANSWER RIGHT, AND THE ANSWER TAKES THE REMAINDER. flex: 1 on
