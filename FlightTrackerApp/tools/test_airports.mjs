@@ -21,6 +21,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { ALIASES, METRO_ALIASES } from './aliases.mjs';
 
 const out = mkdtempSync(join(tmpdir(), 'airports-'));
 execSync(`npx tsc --ignoreConfig lib/airports.ts --outDir "${out}" --module es2022 --target es2022 --moduleResolution bundler --skipLibCheck`, { stdio: 'inherit' });
@@ -121,6 +122,89 @@ check('a typo is NOT a known place -- the set is exact, the resolver is what for
   A.isKnownPlace('dehli') === false);
 
 console.log();
+console.log('-- normalizeTerm folds accents and keeps every script the table writes in --');
+const nf = (t) => A.normalizeTerm(t);
+check('"São Paulo" folds to "sao paulo"', nf('São Paulo') === 'sao paulo', nf('São Paulo'));
+check('"İstanbul" is one word again', nf('İstanbul') === 'istanbul', nf('İstanbul'));
+check('"Zürich", "Genève", "Bogotá", "Kraków" fold', [nf('Zürich'), nf('Genève'), nf('Bogotá'), nf('Kraków')].join() === 'zurich,geneve,bogota,krakow');
+check('"Malmø", "Wrocław", "Straße" map the letters NFD leaves whole', [nf('Malmø'), nf('Wrocław'), nf('Straße')].join() === 'malmo,wroclaw,strasse');
+check('Cyrillic, CJK, Devanagari, Arabic, Thai and Hangul survive', ['Москва', '東京', 'दिल्ली', 'القاهرة', 'กรุงเทพ', '서울'].every(t => nf(t) !== '' && nf(t) === nf(nf(t))));
+check('a hyphenated Cyrillic name becomes two words', nf('Санкт-Петербург') === 'санкт петербург', nf('Санкт-Петербург'));
+check('"東京" is Latin to nobody, "tokyo" is', !A.isLatinTerm(nf('東京')) && A.isLatinTerm(nf('tokyo')));
+
+console.log();
+console.log('-- the fold reaches the city tier: accents no longer split a city --');
+// The OPTIONS, not findAirports: that list runs on down the ranks and picks
+// up San José del Cabo as a prefix, which is not an equal reading.
+check('"san jose" offers California AND Costa Rica as equals', res('san jose')?.options.map(a => a.iata).sort().join() === 'SJC,SJO', hit('san jose'));
+check('"san josé" offers the same two', res('san josé')?.options.map(a => a.iata).sort().join() === 'SJC,SJO', hit('san josé'));
+check('"bogotá" is Bogotá at rank 1, not by a typo', hit('bogotá')?.iata === 'BOG' && hit('bogotá').rank === 1, hit('bogotá'));
+check('"zürich" ranks as "zurich" does', hit('zürich')?.rank === 1, hit('zürich'));
+check('"st petersburg" is Pulkovo, not Pinellas Park', hit('st petersburg')?.iata === 'LED' && hit('st petersburg').rank === 1, hit('st petersburg'));
+check('"münchen" is Munich', hit('münchen')?.iata === 'MUC' && hit('münchen').rank <= 2, hit('münchen'));
+
+console.log();
+console.log('-- names that used to fall into the typo tier and land elsewhere --');
+for (const [name, iata] of [['praha', 'PRG'], ['roma', 'FCO'], ['sampa', 'GRU'], ['kampala', 'EBB'], ['londres', 'LHR'], ['macao', 'MFM'], ['peking', 'PEK'], ['canton', 'CAN'], ['kyiv', null]]) {
+  const h = hit(name);
+  if (iata === null) check(`"${name}" is nothing -- there is no row for it, and no guess is made`, h === null || h.rank > A.RANK_LAST_EXACT, h);
+  else check(`"${name}" -> ${iata} at an exact tier`, h?.iata === iata && h.rank <= 2, h);
+}
+
+console.log();
+console.log('-- two-letter nicknames reach the curated map; two-letter guesses still do not --');
+check('"la" is Los Angeles, the group', res('la')?.airport.iata === 'LAX' && res('la').rank === 0, hit('la'));
+check('"sf" is San Francisco, the group', res('sf')?.airport.iata === 'SFO' && res('sf').rank === 0, hit('sf'));
+check('"dc" is Washington, the group', res('dc')?.airport.iata === 'IAD' && res('dc').rank === 0, hit('dc'));
+check('"hk" is Hong Kong, alone', res('hk')?.airport.iata === 'HKG' && res('hk').options.length === 1, hit('hk'));
+check('"de" is still nothing', res('de') === null, hit('de'));
+check('"la" is a known place, "de" is not', A.isKnownPlace('la') === true && A.isKnownPlace('de') === false);
+
+console.log();
+console.log('-- native scripts resolve on the device --');
+for (const [name, iata] of [['東京', 'HND'], ['大阪', 'KIX'], ['北京', 'PEK'], ['上海', 'PVG'], ['서울', 'ICN'], ['москва', 'SVO'], ['дубай', 'DXB'], ['دبي', 'DXB'], ['القاهرة', 'CAI'], ['दिल्ली', 'DEL'], ['मुंबई', 'BOM'], ['बेंगलुरु', 'BLR'], ['கொழும்பு', 'CMB'], ['กรุงเทพ', 'BKK'], ['ਅੰਮ੍ਰਿਤਸਰ', 'ATQ'], ['ঢাকা', 'DAC'], ['תל אביב', 'TLV']]) {
+  const h = hit(name);
+  check(`"${name}" -> ${iata}`, h?.iata === iata && h.rank <= 2, h);
+}
+check('a two-character CJK city is not too short', hit('東京') !== null && hit('香港') !== null);
+check('a script the table never wrote in still resolves to nothing rather than crashing', A.resolveAirportName('ᚠᚢᚦ') === null);
+
+console.log();
+console.log('-- THE WHOLE TABLE: every alias lands on its own row at an exact tier, with no rival --');
+let aliasCount = 0;
+let aliasBad = 0;
+for (const [region, rows] of Object.entries(ALIASES)) {
+  for (const [code, list] of Object.entries(rows)) {
+    if (A.airportByCode(code) === null) continue;      // reported by the generator, not a test failure
+    for (const alias of list) {
+      aliasCount++;
+      const r = A.resolveAirportName(alias);
+      const good = r !== null && r.rank <= 2 && r.airport.iata === code && r.options.length === 1;
+      if (!good) {
+        aliasBad++;
+        console.log(`  FAIL ${region} ${code} ${JSON.stringify(alias)} -> ${r === null ? 'nothing' : `${r.airport.iata} rank ${r.rank} [${r.options.map(o => o.iata).join(',')}]`}`);
+      }
+    }
+  }
+}
+check(`${aliasCount} row aliases, ${aliasBad} astray`, aliasBad === 0, aliasBad);
+let metroCount = 0;
+let metroBad = 0;
+for (const [base, list] of Object.entries(METRO_ALIASES)) {
+  const want = A.findAirports(base).map(a => a.iata).join();
+  for (const alias of list) {
+    metroCount++;
+    const r = A.resolveAirportName(alias);
+    const good = want !== '' && r !== null && r.rank === 0 && r.options.map(a => a.iata).join() === want;
+    if (!good) {
+      metroBad++;
+      console.log(`  FAIL metro ${base} ${JSON.stringify(alias)} -> ${r === null ? 'nothing' : `${r.airport.iata} rank ${r.rank} [${r.options.map(o => o.iata).join(',')}]`} (want ${want})`);
+    }
+  }
+}
+check(`${metroCount} metro aliases, ${metroBad} astray`, metroBad === 0, metroBad);
+
+console.log();
 console.log('-- the two lines the search rung draws across the ranks --');
 check('RANK_LAST_EXACT is 6 and RANK_LAST_ONE_EDIT is 8', A.RANK_LAST_EXACT === 6 && A.RANK_LAST_ONE_EDIT === 8);
 check('a one-edit hit sits between them', res('dehli').rank > A.RANK_LAST_EXACT && res('dehli').rank <= A.RANK_LAST_ONE_EDIT, res('dehli').rank);
@@ -132,7 +216,9 @@ console.log('-- cost --');
 const t0 = performance.now();
 for (let i = 0; i < 200; i++) res(i % 2 ? 'dehli' : 'banglor');
 const ms = (performance.now() - t0) / 200;
-check(`a fuzzy lookup over the whole file is under 5ms (measured ${ms.toFixed(2)}ms)`, ms < 5, ms);
+// EIGHT, UP FROM FIVE: the world table added 767 words to the haystacks, and
+// the non-Latin ones are skipped but still walked.
+check(`a fuzzy lookup over the whole file is under 8ms (measured ${ms.toFixed(2)}ms)`, ms < 8, ms);
 
 console.log(`\nPASSED: ${pass}   FAILURES: ${fail}`);
 process.exit(fail ? 1 : 0);
