@@ -24,8 +24,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'rea
 import Svg, { Path } from 'react-native-svg';
 import { airlineFromFlightNumber } from '../lib/airlines';
 import { makeFlightId } from '../lib/storage';
-import { clock24 } from '../lib/time';
-import { getStatusColor, stripZoneLabel, formatCountdown, CD_LATE } from '../lib/flightstatus';
+import { getStatusColor, stripZoneLabel, formatCountdown, CD_LATE, boardClock } from '../lib/flightstatus';
 import { CARD_FILL, CARD_RADIUS, CARD_GAP, CARD_PAD, SURFACE_EDGE } from '../lib/cards';
 import {
   useRouteResults, routeDayOf, routeStatusWord, ROUTE_NO_TIME, CATCH_RISKY_NOTE,
@@ -71,6 +70,15 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
   const leg = r.leg;
   const ms = optDurationMs(r);
   const origin = legOrigin(leg, routeResult?.origin ?? '');
+  const destination = leg.destination_iata ?? routeResult?.destination ?? '';
+  // EACH END'S CLOCK, NAMED FROM THE DATASET. The board sends no zone, so the
+  // airport's own IANA zone supplies it -- see boardClock.
+  const depZ = boardClock(leg.departure_scheduled_iso, leg.departure_scheduled, origin || null);
+  const arrZ = boardClock(
+    leg.arrival_scheduled_iso,
+    leg.arrival_scheduled === null ? ROUTE_NO_TIME : stripZoneLabel(leg.arrival_scheduled),
+    destination || null,
+  );
   // The APPLIED date, never routeDate: that can hold a selection the list has
   // not been re-fetched for, which would open a card for a day the row on
   // screen is not from. Null for an undated board, which is today.
@@ -144,7 +152,7 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
             rather than by tuning. */}
         <View style={s.routeFlatTop}>
           <Text style={s.routeFlatTime} numberOfLines={1}>
-            {clock24(leg.departure_scheduled_iso, leg.departure_scheduled)}
+            {depZ.clock}
           </Text>
           <View style={s.routeConn}>
             {ms !== null && (
@@ -160,10 +168,7 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
               the same 60pt cell a time does, so the arrival still ends on the
               row's right edge and the connector's share is unchanged. */}
           <Text style={[s.routeFlatTime, s.routeFlatTimeEnd]} numberOfLines={1}>
-            {clock24(
-              leg.arrival_scheduled_iso,
-              leg.arrival_scheduled === null ? ROUTE_NO_TIME : stripZoneLabel(leg.arrival_scheduled),
-            )}
+            {arrZ.clock}
           </Text>
         </View>
 
@@ -172,15 +177,32 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
             grown the box the connector centres itself in, dragging the line
             below the times it belongs to. */}
         <View style={s.routeFlatCodes}>
-          <Text style={s.routeFlatCode} numberOfLines={1}>{origin}</Text>
+          {/* THE ZONE BESIDE THE CODE, which is where a reader looks to ask
+              "whose time is this". minWidth rather than width on the cell, so
+              a long "GMT+5:30" takes from the spacer and not from the code. */}
+          <Text style={s.routeFlatCode} numberOfLines={1}>
+            {origin}
+            {depZ.zone !== null && <Text style={s.routeFlatZone}>{` ${depZ.zone}`}</Text>}
+          </Text>
           <View style={s.routeConnSpacer} />
           <Text style={[s.routeFlatCode, s.routeFlatCodeEnd]} numberOfLines={1}>
             {/* Never null in practice — a recovered row carries the code its
                 name resolved to — but the wire type allows it, and the answer
                 is knowable anyway: every row here is for this destination. */}
-            {leg.destination_iata ?? routeResult?.destination ?? ''}
+            {destination}
+            {arrZ.zone !== null && <Text style={s.routeFlatZone}>{` ${arrZ.zone}`}</Text>}
           </Text>
         </View>
+
+        {/* THE PHONE'S TIME, a size down, only for an end whose zone is not
+            the phone's. A row where neither differs draws nothing here. */}
+        {(depZ.yours !== null || arrZ.yours !== null) && (
+          <View style={s.routeFlatCodes}>
+            <Text style={s.routeFlatYours} numberOfLines={1}>{depZ.yours ?? ''}</Text>
+            <View style={s.routeConnSpacer} />
+            <Text style={[s.routeFlatYours, s.routeFlatCodeEnd]} numberOfLines={1}>{arrZ.yours ?? ''}</Text>
+          </View>
+        )}
 
         {/* THE LINE THAT SAYS WHY, under the codes, in the same amber as the
             tag. One sentence, so it is read rather than noticed. */}
@@ -312,6 +334,12 @@ const s = StyleSheet.create({
     fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: MONO, minWidth: 60,
   },
   routeFlatCodeEnd: { textAlign: "right" },
+  // The zone beside a code, and the phone's time on the line under: the codes'
+  // own grey, the second a size down.
+  routeFlatZone: { fontSize: 10 },
+  routeFlatYours: {
+    fontSize: 10, color: "rgba(226,226,226,0.52)", fontFamily: MONO, minWidth: 60,
+  },
   routeConnSpacer: { flex: 1, marginHorizontal: 12 },
 
   // Icon only, no container. hitSlop carries the tap target.

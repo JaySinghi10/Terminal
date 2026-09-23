@@ -23,7 +23,8 @@ import { SavedFlight, SavedFlightEndpoint } from './storage';
 // The one implementation of each, exactly as index.tsx reached them. See
 // lib/time.ts: there are two kinds of ISO in this app and only one may become an
 // instant.
-import { zonedIsoToTs, clock24, yourTime } from './time';
+import { zonedIsoToTs, clock24, yourTime, zoneAbbrAt } from './time';
+import { airportByCode } from './airports';
 // THE RULE ABOUT A STORED STATUS, imported rather than copied. It is the store's
 // because the refresh loop and the archive split read it too; this file is one
 // more reader.
@@ -159,6 +160,27 @@ export function zonedClock(
     zone: iso === null ? null : zoneLabel(formatted),
     yours: yourTime(zonedIsoToTs(iso, timeZone), timeZone),
   };
+}
+
+// ── A BOARD CLOCK, NAMED FROM THE AIRPORT DATASET ───────────────────────────
+//
+// THE SAME SHAPE AS zonedClock, FOR TIMES OFF A ROUTE BOARD. A board's ISO
+// carries a TRUE offset, so Date.parse gives the instant directly (see routeTs
+// in lib/routeResults); the zone is the IATA code's own, from the dataset, and
+// its name comes from zoneAbbrAt, which answers as the server would.
+export function boardClock(iso: string | null, fallback: string, iata: string | null): ZonedClock {
+  const clock = clock24(iso, fallback);
+  const tz = iata === null ? null : airportByCode(iata)?.tz ?? null;
+  const parsed = iso === null ? NaN : Date.parse(iso);
+  const ts = Number.isNaN(parsed) ? null : parsed;
+  return { clock, zone: zoneAbbrAt(ts, tz), yours: yourTime(ts, tz) };
+}
+
+// "14:20 IST (02:50 your time)": the form a SENTENCE takes when it has room for
+// both. Rows and cards set the phone's time a size down instead.
+export function clockInWords(z: ZonedClock): string {
+  const at = clockWithZone(z);
+  return z.yours === null ? at : `${at} (${z.yours})`;
 }
 
 // "11:45 CEST". The clock and its label, the form a sentence takes.

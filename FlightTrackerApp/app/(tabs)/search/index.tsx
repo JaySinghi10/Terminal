@@ -65,7 +65,6 @@ import { savedFlightFromApi } from '../../../lib/storage';
 // this screen used to keep a narrower copy that refused a carrier code with a
 // digit in it, which is most of the flights on this app's core routes.
 import { airlineFromFlightNumber, isFlightNumber } from '../../../lib/airlines';
-import { clock24 } from '../../../lib/time';
 import {
   useSaved,
   useAccountChange,
@@ -79,6 +78,10 @@ import {
   getStatusColor,
   routeDateLabel,
   stripZoneLabel,
+  // THE BUBBLE'S CLOCKS, named from the dataset: the board sends no zone.
+  boardClock,
+  // THE PANEL'S, named from the saved record's own strings.
+  zonedClock, clockWithZone, type ZonedClock,
 } from '../../../lib/flightstatus';
 import {
   SHEET_EDGE, SHEET_SCRIM,
@@ -249,6 +252,12 @@ const SANS = 'Inter_400Regular';
 // The semibold face, loaded in _layout with the rest. Only the airport panel's
 // city name uses it on this screen: it is the one heading the map owns.
 const SANS_SEMI = 'Inter_600SemiBold';
+
+// A SAVED FLIGHT'S CLOCK ON THE MAP PANEL: "11:45 CEST", and "02:45 your time"
+// on the line under it where the phone's zone differs.
+function flightPanelClock(z: ZonedClock): string {
+  return z.yours === null ? clockWithZone(z) : `${clockWithZone(z)}\n${z.yours}`;
+}
 
 // Three letters, an optional single separator, three letters. "BLR DEL",
 // "BLR>DEL", "BLR-DEL", "BLR\u2192DEL" and "BLRDEL" all match, and so do
@@ -2480,13 +2489,18 @@ export default function Search() {
         { kind: 'text', key: 'toCity', text: (f.to.city ?? f.to.airport).toUpperCase(), dim: false },
         { kind: 'text', key: 'fromCode', text: f.from.iata, dim: false },
         { kind: 'text', key: 'toCode', text: f.to.iata, dim: false },
+        // WITH THE ZONE, AND THE PHONE'S TIME ON A SECOND LINE where the two
+        // differ. A line, not a smaller run: the panel types its text out a
+        // character at a time and a step is one string.
         {
           kind: 'text', key: 'fromTime', dim: true,
-          text: clock24(f.from.actualIso ?? f.from.estimatedIso ?? f.from.scheduledIso, f.from.scheduled),
+          text: flightPanelClock(zonedClock(
+            f.from.actualIso ?? f.from.estimatedIso ?? f.from.scheduledIso, f.from.scheduled, f.from.timezone)),
         },
         {
           kind: 'text', key: 'toTime', dim: true,
-          text: clock24(f.to.actualIso ?? f.to.estimatedIso ?? f.to.scheduledIso, f.to.scheduled),
+          text: flightPanelClock(zonedClock(
+            f.to.actualIso ?? f.to.estimatedIso ?? f.to.scheduledIso, f.to.scheduled, f.to.timezone)),
         },
         { kind: 'text', key: 'num', text: f.flightNumber.toUpperCase(), dim: false },
         { kind: 'text', key: 'status', text: eff.toUpperCase(), dim: false },
@@ -3538,31 +3552,46 @@ export default function Search() {
               one card on the screen in a format nothing else in the app uses.
               clock24 reads the digits out of the ISO and falls back to the
               printed string only when there is no ISO to read. */}
-          <View style={dr.bubbleRow}>
-            <View>
-              <Text style={dr.bubbleTime}>
-                {clock24(
-                  bubbleLegs.first.departure_scheduled_iso,
-                  stripZoneLabel(bubbleLegs.first.departure_scheduled),
-                )}
-              </Text>
-              <Text style={dr.bubbleCode}>{routeResult.origin}</Text>
-            </View>
-            <Text style={dr.bubbleArrow}>{'\u2192'}</Text>
-            <View style={dr.bubbleEnd}>
-              <Text style={dr.bubbleTime}>
-                {clock24(
-                  bubbleLegs.last.arrival_scheduled_iso,
-                  bubbleLegs.last.arrival_scheduled === null
-                    ? ROUTE_NO_TIME
-                    : stripZoneLabel(bubbleLegs.last.arrival_scheduled),
-                )}
-              </Text>
-              <Text style={dr.bubbleCode}>
-                {bubbleLegs.last.destination_iata ?? routeResult.destination}
-              </Text>
-            </View>
-          </View>
+          {/* EACH CLOCK WITH ITS ZONE BESIDE THE CODE, and the phone's time a
+              size down under it where the two differ. The board sends no
+              zone; see boardClock. */}
+          {(() => {
+            const fromCode = legOrigin(bubbleLegs.first, routeResult.origin);
+            const toCode = bubbleLegs.last.destination_iata ?? routeResult.destination;
+            const depZ = boardClock(
+              bubbleLegs.first.departure_scheduled_iso,
+              stripZoneLabel(bubbleLegs.first.departure_scheduled),
+              fromCode,
+            );
+            const arrZ = boardClock(
+              bubbleLegs.last.arrival_scheduled_iso,
+              bubbleLegs.last.arrival_scheduled === null
+                ? ROUTE_NO_TIME
+                : stripZoneLabel(bubbleLegs.last.arrival_scheduled),
+              toCode,
+            );
+            return (
+              <View style={dr.bubbleRow}>
+                <View>
+                  <Text style={dr.bubbleTime}>{depZ.clock}</Text>
+                  <Text style={dr.bubbleCode}>
+                    {fromCode}
+                    {depZ.zone !== null && <Text style={dr.bubbleZone}>{` ${depZ.zone}`}</Text>}
+                  </Text>
+                  {depZ.yours !== null && <Text style={dr.bubbleYours}>{depZ.yours}</Text>}
+                </View>
+                <Text style={dr.bubbleArrow}>{'\u2192'}</Text>
+                <View style={dr.bubbleEnd}>
+                  <Text style={dr.bubbleTime}>{arrZ.clock}</Text>
+                  <Text style={dr.bubbleCode}>
+                    {toCode}
+                    {arrZ.zone !== null && <Text style={dr.bubbleZone}>{` ${arrZ.zone}`}</Text>}
+                  </Text>
+                  {arrZ.yours !== null && <Text style={dr.bubbleYours}>{arrZ.yours}</Text>}
+                </View>
+              </View>
+            );
+          })()}
           {/* WHY THIS ONE, AND HOW LONG IT TAKES. The reason is the list's own
               word where it has one and the chosen ordering otherwise; see
               routeReason. Either half is dropped rather than printed empty. */}
@@ -4231,6 +4260,8 @@ const dr = StyleSheet.create({
   bubbleEnd: { alignItems: 'flex-end' },
   bubbleTime: { fontFamily: MONO_BOLD, fontSize: 22, color: '#ffffff' },
   bubbleCode: { fontFamily: MONO, fontSize: 13, color: 'rgba(226,226,226,0.52)', marginTop: 2 },
+  bubbleZone: { fontSize: 11 },
+  bubbleYours: { fontFamily: MONO, fontSize: 10, color: 'rgba(226,226,226,0.52)', marginTop: 2 },
   bubbleArrow: { fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.52)' },
   bubbleWhy: { fontFamily: SANS_SEMI, fontSize: 12, color: 'rgba(226,226,226,0.6)' },
 

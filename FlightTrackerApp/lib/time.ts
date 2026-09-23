@@ -46,6 +46,8 @@
 // Failures are cached too, as null. An invalid timezone throws at construction;
 // without storing the miss, a record carrying a bad zone would pay the throw on
 // every call forever, which is the expensive case made permanent.
+import { ZONE_ABBR } from './zoneAbbr';
+
 const TZ_FORMATTERS = new Map<string, Intl.DateTimeFormat | null>();
 
 function tzFormatter(timeZone: string): Intl.DateTimeFormat | null {
@@ -170,6 +172,41 @@ export function yourTime(ts: number | null, timeZone: string | null): string | n
   } catch {
     return null;
   }
+}
+
+// ── WHAT A ZONE IS CALLED AT AN INSTANT, WHEN NOBODY PRINTED IT ─────────────
+//
+// A FLIGHT RECORD CARRIES ITS LABEL -- the server writes "11:45 CEST" -- and
+// zonedClock reads it from there. A ROUTE BOARD DOES NOT: its departure strings
+// arrive with no zone at all. So a board clock names its zone from the airport
+// dataset's IANA zone, and names it the way the server would: the tz database's
+// letter name at that instant where it has one (lib/zoneAbbr.ts, generated from
+// the server's own zoneinfo), and "GMT+5:30" -- the server's form, exactly --
+// where it has none. The phone's Intl is not asked, because it answers
+// differently in every locale; see tools/gen_zone_abbr.py.
+export function offsetMinutesAt(ts: number, timeZone: string): number | null {
+  const fmt = tzFormatter(timeZone);
+  if (fmt === null) return null;
+  try {
+    const p: Record<string, string> = {};
+    for (const part of fmt.formatToParts(new Date(ts))) p[part.type] = part.value;
+    const asZoned = Date.UTC(+p.year, +p.month - 1, +p.day, (+p.hour) % 24, +p.minute, +p.second);
+    return Math.round((asZoned - Math.floor(ts / 1000) * 1000) / 60000);
+  } catch {
+    return null;
+  }
+}
+
+export function zoneAbbrAt(ts: number | null, timeZone: string | null): string | null {
+  if (ts === null || !timeZone) return null;
+  const off = offsetMinutesAt(ts, timeZone);
+  if (off === null) return null;
+  const named = ZONE_ABBR[timeZone]?.[String(off)];
+  if (named !== undefined) return named;
+  const sign = off < 0 ? '-' : '+';
+  const h = Math.floor(Math.abs(off) / 60);
+  const m = Math.abs(off) % 60;
+  return m === 0 ? `GMT${sign}${h}` : `GMT${sign}${h}:${String(m).padStart(2, '0')}`;
 }
 
 export function clockInZone(ts: number | null, timeZone: string | null): string | null {

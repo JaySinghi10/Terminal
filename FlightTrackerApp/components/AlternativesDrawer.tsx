@@ -34,7 +34,7 @@ import { sheetDetents } from '../lib/sheet';
 import {
   CARD_GAP, CARD_PAD, DIM, GREEN,
 } from '../lib/cards';
-import { getStatusColor } from '../lib/flightstatus';
+import { getStatusColor, boardClock } from '../lib/flightstatus';
 import { API_BASE } from '../lib/saved';
 import {
   fetchAlternatives, connectionRows, searchAgeMinutes,
@@ -147,12 +147,21 @@ function ageWords(mins: number | null): string | null {
 // THE LAYOVER IS ONLY EVER SHOWN WHERE IT MEANS SOMETHING -- on a row in the
 // connection list, where the whole point is how much room is left at the hub.
 // In the destination list it would be an answer to a question nobody asked.
-function Row({ r, showLayover }: { r: AlternativeRow; showLayover: boolean }) {
+// `from` IS THE AIRPORT EVERY ROW LEAVES FROM -- the disrupted leg's own
+// origin -- and it names the clock's zone. The server's `tz` is empty on these
+// rows, because a board's departure strings carry none, and its `time` is the
+// 12-hour form; the row reads the ISO instead, like every other clock.
+function Row({ r, showLayover, from }: { r: AlternativeRow; showLayover: boolean; from: string | null }) {
   const tight = r.connects === 'at_risk';
+  const z = boardClock(r.departureIso, r.time, from);
   return (
     <View style={s.row}>
       <View style={s.rowMain}>
-        <Text style={s.rowTime} numberOfLines={1}>{r.time}</Text>
+        <Text style={s.rowTime} numberOfLines={1}>
+          {z.clock}
+          {z.zone !== null && <Text style={s.rowZone}>{` ${z.zone}`}</Text>}
+          {z.yours !== null && <Text style={s.rowYours}>{`  ${z.yours}`}</Text>}
+        </Text>
         <Text style={s.rowIdent} numberOfLines={1}>
           {r.flightNumber}
           {r.airline !== null && (
@@ -187,8 +196,8 @@ function Row({ r, showLayover }: { r: AlternativeRow; showLayover: boolean }) {
   );
 }
 
-function Section({ head, note, rows, showLayover }: {
-  head: string; note?: string | null; rows: AlternativeRow[]; showLayover: boolean;
+function Section({ head, note, rows, showLayover, from }: {
+  head: string; note?: string | null; rows: AlternativeRow[]; showLayover: boolean; from: string | null;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -209,7 +218,7 @@ function Section({ head, note, rows, showLayover }: {
       {rows.map((r, i) => (
         <View key={`${r.flightNumber}-${r.date}-${i}`}>
           {i > 0 && <View style={s.rowRule} />}
-          <Row r={r} showLayover={showLayover} />
+          <Row r={r} showLayover={showLayover} from={from} />
         </View>
       ))}
     </View>
@@ -352,6 +361,7 @@ export function AlternativesDrawer({ leg, onClose }: {
             : null}
           rows={connects}
           showLayover
+          from={data?.origin ?? leg.from.iata}
         />
         <Section
           head={dest !== null ? `Other flights to ${dest}` : 'Other flights'}
@@ -360,6 +370,7 @@ export function AlternativesDrawer({ leg, onClose }: {
             : null}
           rows={rows}
           showLayover={false}
+          from={data?.origin ?? leg.from.iata}
         />
 
         {rows.length === 0 && (
@@ -431,6 +442,9 @@ const s = StyleSheet.create({
   rowRule: { height: 1, backgroundColor: 'rgba(255,255,255,0.06)' },
   rowMain: { flex: 1, gap: 3 },
   rowTime: { fontFamily: MONO_BOLD, fontSize: 17, color: '#ffffff' },
+  // The zone a size down in the ident's grey, the phone's time smaller still.
+  rowZone: { fontFamily: MONO, fontSize: 12, color: DIM },
+  rowYours: { fontFamily: MONO, fontSize: 11, color: DIM },
   rowIdent: { fontFamily: MONO, fontSize: 13, color: DIM },
   rowIdentName: { fontFamily: SANS },
   rowSide: { alignItems: 'flex-end', gap: 3, marginLeft: CARD_GAP },

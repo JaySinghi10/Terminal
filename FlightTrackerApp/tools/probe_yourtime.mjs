@@ -4,13 +4,17 @@
 //   node tools/probe_yourtime.mjs America/Los_Angeles
 if (process.argv[2]) process.env.TZ = process.argv[2];
 import { execSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const out = mkdtempSync(join(tmpdir(), 'time-'));
-execSync(`npx tsc --ignoreConfig lib/time.ts --outDir "${out}" --module es2022 --target es2022 --moduleResolution bundler --skipLibCheck`, { stdio: 'inherit' });
+execSync(`npx tsc --ignoreConfig lib/time.ts lib/zoneAbbr.ts --outDir "${out}" --module es2022 --target es2022 --moduleResolution bundler --skipLibCheck`, { stdio: 'inherit' });
+// NODE WANTS THE EXTENSION METRO DOES NOT: tsc keeps "./zoneAbbr" as written.
+const timeJs = join(out, 'time.js');
+writeFileSync(timeJs, readFileSync(timeJs, 'utf8').replace("from './zoneAbbr'", "from './zoneAbbr.js'"));
 const T = await import(pathToFileURL(join(out, 'time.js')).href);
 
 const ends = [

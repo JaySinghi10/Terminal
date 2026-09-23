@@ -40,8 +40,7 @@ import type { Airport } from './airports';
 import { sheetDetents } from './sheet';
 // FOR THE LINE UNDER THE PILL: a row's clock as the row prints it, and the day
 // as the date pill prints it, so an answer reads in the list's own words.
-import { clock24 } from './time';
-import { routeDateLabel } from './flightstatus';
+import { routeDateLabel, boardClock, clockInWords } from './flightstatus';
 
 // Decoration the provider puts on board names that the airport dataset does
 // not carry: "Bengaluru Intl Airport", "Dubai Intl (Terminal 3)", "Khorog
@@ -1229,11 +1228,13 @@ function useRouteResultsState() {
       }
       return best;
     };
+    // THE CLOCK IN WORDS, WITH ITS ZONE, and the phone's time in brackets
+    // where the two differ: "at 14:20 IST (02:50 your time) from Delhi".
     const describe = (o: RouteOption): string => {
       const leg = optFirst(o);
-      return `${legCarrier(leg)} ${leg.flight_number} at `
-        + `${clock24(leg.departure_scheduled_iso, leg.departure_scheduled)} `
-        + `from ${cityOf(legOrigin(leg, routeResult.origin))}`;
+      const from = legOrigin(leg, routeResult.origin);
+      const z = boardClock(leg.departure_scheduled_iso, leg.departure_scheduled, from);
+      return `${legCarrier(leg)} ${leg.flight_number} at ${clockInWords(z)} from ${cityOf(from)}`;
     };
     const q = routeAsk.question;
     if (q !== null) {
@@ -1273,9 +1274,9 @@ function useRouteResultsState() {
           out.push(`No flight to ${toCity} ${when} has a known arrival time`);
         } else {
           const last = optLast(o);
-          out.push(`Earliest arrival in ${toCity} is `
-            + `${clock24(last.arrival_scheduled_iso, last.arrival_scheduled ?? ROUTE_NO_TIME)}, `
-            + describe(o));
+          const z = boardClock(last.arrival_scheduled_iso, last.arrival_scheduled ?? ROUTE_NO_TIME,
+            last.destination_iata ?? routeResult.destination);
+          out.push(`Earliest arrival in ${toCity} is ${clockInWords(z)}, ` + describe(o));
         }
       }
     }
