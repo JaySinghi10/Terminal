@@ -18,10 +18,9 @@ WHAT IS SENT IS FACTS, NOT SENTENCES. A message in the outbox carries the
 kind, the flight, both cities, the scheduled time and the values that changed.
 The sentence is written at delivery, by render(), when the sender has the
 recipient's own watch list in hand -- because the SUBJECT of the sentence
-depends on who is reading it. "Your flight to Bangalore" is right for the
-person on it; "The flight from Mumbai" is right for the person meeting it; and
-someone watching two flights to the same city that day needs the time in the
-subject. See subject().
+depends on who is reading it. "Your flight's gate changed" is right for the
+person on it; "The gate changed" is right for the person meeting it. See
+render(), and subject() for the title over it.
 
 NOTHING HERE SENDS. Push needs a dev build that does not exist yet. The outbox
 fills, bounded, and the sender drains it when it exists. See the note at the
@@ -41,6 +40,7 @@ two polls, because the provider has been seen to revise an "actual" by
 fifty-three minutes (6E6188, 7 Sep 2026, in the ledger).
 """
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -274,15 +274,6 @@ def _tz_label(dto_time_string):
     reusing it is how a computed time never invents a zone name."""
     parts = str(dto_time_string or "").split()
     return parts[-1] if len(parts) >= 3 else ""
-
-
-def _tz_suffix(v):
-    """' CEST' from a rendered-values dict that carries one, else ''. The two
-    cancellation lines print a departure clock like every other push does, and
-    now label it like every other push does. The phone's own time cannot be
-    added here: the server does not know which zone the reader is in."""
-    tz = (v or {}).get("tz")
-    return " " + tz if tz else ""
 
 
 def _minutes(td):
@@ -549,6 +540,9 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None)
                       "offset_min": _minutes(when - sched_arr) if when and sched_arr else None,
                       "belt": belt,
                       "elsewhere": bool(landing.get("diverted_to")),
+                      # WHERE IT CAME DOWN INSTEAD, so the sentence can name
+                      # both ends of the change: "landed at HYD instead of Mumbai".
+                      "diverted_to": landing.get("diverted_to"),
                       "next": nxt},
              expires=expiry(LANDED, dto, now, onward=connection if nxt else None, landed_at=when))
         return ns, out
@@ -563,8 +557,10 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None)
                 and now - when <= BELT_WINDOW
                 and int(ns["counts"].get(BELT, 0)) < BELT_CAP_COUNT
                 and _settled(ns, "belt", belt)):
+            # THE BELT IT MOVED FROM, when one was already told.
+            was = ns["notified"].get("belt")
             ns["notified"]["belt"] = belt
-            emit(BELT, {"belt": belt}, key_value=belt)
+            emit(BELT, {"belt": belt, "was": was}, key_value=belt)
         return ns, out
 
     # ── DEPARTED ── the actual is in the past and has held for two polls
@@ -624,7 +620,8 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None)
                 if emit(GATE, {"gate": gate, "was": ns["notified"].get("gate"), "terminal": term}, key_value=gate):
                     ns["notified"]["gate"] = gate
             elif int(ns["counts"].get(GATE_CAP, 0)) == 0:
-                emit(GATE_CAP, {})
+                # THE LAST GATE MESSAGE, AND IT STILL NAMES BOTH GATES.
+                emit(GATE_CAP, {"gate": gate, "was": ns["notified"].get("gate")})
                 ns["notified"]["gate"] = gate
 
     # Delay: inside twelve hours, in bands of fifteen minutes, thirty minutes apart
@@ -822,6 +819,9 @@ def _next_step(dto, onward, now):
     return {
         "flight_number": onward.get("flight_number"),
         "time": _clock(leaves) if leaves else None,
+        # ITS OWN ZONE, which is the airport just landed at: every clock in a
+        # push carries one.
+        "tz": _tz_label(ndep.get("scheduled")),
         "gate": ndep.get("gate") or None,
         "terminal": ndep.get("terminal") or None,
         "cancelled": str(onward.get("status") or "").lower() == STATUS_CANCELLED,
@@ -1025,51 +1025,91 @@ def _search_next(facts, dto, now, search, lookup_next, days):
 
 # ── THE SENTENCE, WRITTEN FOR ONE READER ────────────────────────────────────
 #
-# A NOTIFICATION IS ONE SHORT SENTENCE WITH ONLY WHAT CHANGED, and the title
-# says which flight. Each used to be a long sentence under a title it repeated
-# word for word -- "Your flight to London has moved to gate B32, was B24."
-# under "Your flight to London" -- and a lock screen is read at a glance. So
-# the title carries the flight and the body carries the news:
+# THE TITLE IS THE ROUTE AND THE FLIGHT; THE BODY IS ONE SHORT LINE OF NEWS,
+# said to whoever is reading it:
 #
-#     To London · BA178
-#     Gate changed to B32
+#     Amsterdam → Mumbai · KL877
+#     Your flight's gate changed from E2 to E6
 #
-# THE DESTINATION LEADS, NEVER THE FLIGHT NUMBER. A person knows where they
-# are going before they know the number they are going on. The number rides
-# second and does the work the old qualifiers did: two flights to one city on
-# one day read "To London · BA178" and "To London · BA182", where the old title
-# had to add the departure time, and then the airline.
+# THE SAME TITLE FOR EVERY READER. A route says which flight to the person on
+# it and to the person meeting it alike, so it no longer turns round for the
+# second the way "To London" became "From New York". City names when they fit
+# on one lock-screen line, airport codes when they would be cut off -- see
+# TITLE_MAX -- and never one of each.
 #
-# SOMEBODY MEETING A FLIGHT reads it from the other end -- "From New York ·
-# BA178" -- over the same body.
+# THE BODY IS PERSONAL FOR THE TRAVELLER AND PLAIN FOR SOMEBODY MEETING THE
+# FLIGHT: "Your flight's gate changed from E2 to E6" against "The gate changed
+# from E2 to E6". It names the old value wherever something changed -- a gate,
+# a terminal, a belt, the airport it came down at instead -- EXCEPT A TIME:
+# "delayed 25 min" already says what moved, so a delay says only when it now
+# leaves.
+#
+# EVERY CLOCK IS 24-HOUR AND CARRIES ITS AIRPORT'S ZONE, as the app prints
+# them: "21:15 CEST". The values keep the record's own 12-hour text, which the
+# drawer's rows also read, and render converts -- so a message queued before
+# this wording reads the same way as one written after it.
 #
 # NO BODY SENDS ANYBODY TO THE AIRLINE. The person is already holding the only
 # device that knows, and telling them to go and ask somebody else is an
 # admission dressed as advice. test_notify asserts it across every message.
 
-def subject(msg, owned=True, same_city=1, same_time=1):
-    """The title: where the flight goes -- or comes from, for a reader meeting
-    it -- then its number. "To London · BA178".
+# ── HOW LONG A TITLE CAN BE AND STILL FIT ───────────────────────────────────
+#
+# TWENTY-SIX CHARACTERS, which is "Amsterdam → Mumbai · KL877" exactly, and
+# about what the narrowest iPhones (SE, mini) show of a bold title beside its
+# timestamp. "San Francisco → London · BA286" at thirty is cut off there, so it
+# goes out as "SFO → LHR · BA286". A count and not a measured width, so it is
+# the same answer on the server, in the tests and in devFixtures' copy.
+TITLE_MAX = 26
 
-    owned: the reader is on the flight (True) or meeting it (False). None is
-    treated as on it, which is what the app registers by default.
-    same_city and same_time are still passed by dispatch and no longer read:
-    the flight number now separates the flights they used to."""
+
+def subject(msg, owned=True, same_city=1, same_time=1):
+    """The title: the route and the number, "Amsterdam → Mumbai · KL877", or
+    by airport code, "SFO → AMS · KL606", when the cities would not fit on one
+    lock-screen line. The same for every reader.
+
+    owned, same_city and same_time are still passed by dispatch and no longer
+    read: the route and the number separate every flight they used to."""
     number = str(msg.get("flight_number") or "").strip()
-    end = (msg.get("origin") if owned is False else msg.get("destination")) or {}
-    place = end.get("city") or end.get("iata") or ""
-    head = ("From %s" if owned is False else "To %s") % place if place else ""
-    if head and number:
-        return "%s · %s" % (head, number)
-    return head or number or "Your flight"
+    frm, to = msg.get("origin") or {}, msg.get("destination") or {}
+
+    def titled(a, b):
+        route = "%s → %s" % (a, b) if a and b else ""
+        return " · ".join(p for p in (route, number) if p)
+
+    if frm.get("city") and to.get("city"):
+        by_city = titled(frm["city"], to["city"])
+        if len(by_city) <= TITLE_MAX:
+            return by_city
+    by_code = titled(frm.get("iata") or frm.get("city"), to.get("iata") or to.get("city"))
+    return by_code or "Your flight"
+
+
+_CLOCK_12 = re.compile(r"\b(\d{1,2}):(\d{2})\s?([AP])M\b", re.IGNORECASE)
+
+
+def _24h(text):
+    """'21:15 CEST' from '9:15 PM CEST': every clock in the text 24-hour and
+    zero-padded, as the app prints them. Anything else passes unchanged."""
+    def to_24(m):
+        hour = int(m.group(1)) % 12 + (12 if m.group(3).upper() == "P" else 0)
+        return "%02d:%s" % (hour, m.group(2))
+    return _CLOCK_12.sub(to_24, str(text or ""))
+
+
+def _at(clock, tz=""):
+    """A clock with its zone, '21:15 CEST'; '' when there is no clock."""
+    if not clock:
+        return ""
+    return "%s %s" % (_24h(clock), tz) if tz else _24h(clock)
 
 
 def _when(nxt):
-    """The next flight's day and clock, labelled like every other clock:
-    "today at 5:05 PM PDT", "tomorrow at ...", "on Sunday at ...", "on 25 Sep at ..."."""
+    """The next flight's day and clock: "today at 17:05 PDT", "tomorrow at
+    ...", "on Sunday at ...", "on 25 Sep at ..."."""
     day = nxt.get("day") or ""
     day = day if day in ("today", "tomorrow") or not day else "on %s" % day
-    clock = "at %s%s" % (nxt.get("time"), _tz_suffix(nxt)) if nxt.get("time") else ""
+    clock = "at %s" % _at(nxt["time"], nxt.get("tz")) if nxt.get("time") else ""
     return " ".join(p for p in (day, clock) if p)
 
 
@@ -1081,22 +1121,22 @@ def _early_or_late(offset_min):
                       "late" if offset_min > 0 else "early")
 
 
-def _next_words(nxt):
-    """The landing summary's second sentence: "Next: LX325 at 11:50 AM, gate
-    A12", the terminal while no gate is assigned, "LX325 is cancelled", and the
-    connection's band when it is at risk. No clock label: the next leg leaves
-    from the airport the passenger has just landed at, whose zone the first
-    sentence named."""
-    number = nxt.get("flight_number") or "Your next flight"
+def _next_words(nxt, tz=""):
+    """The landing summary's last clause, for the passenger: "next is LX325 at
+    11:50 BST from gate A12", the terminal while no gate is assigned, that it
+    is cancelled, and the connection's band when it is at risk. A summary
+    written before the next leg carried its zone borrows the landing's, which
+    is the same airport's."""
+    number = nxt.get("flight_number")
     if nxt.get("cancelled"):
-        return "%s is cancelled" % number
-    out = "Next: %s" % number
+        return "next flight %s is cancelled" % number if number else "next flight is cancelled"
+    out = "next is %s" % number if number else "next flight"
     if nxt.get("time"):
-        out += " at %s" % nxt["time"]
+        out += " at %s" % _at(nxt["time"], nxt.get("tz") or tz)
     if nxt.get("gate"):
-        out += ", gate %s" % nxt["gate"]
+        out += " from gate %s" % nxt["gate"]
     elif nxt.get("terminal"):
-        out += ", Terminal %s" % nxt["terminal"]
+        out += " from Terminal %s" % nxt["terminal"]
     if nxt.get("band") == "will_miss":
         out += ", connection won't hold"
     elif nxt.get("band") == "at_risk":
@@ -1105,13 +1145,21 @@ def _next_words(nxt):
 
 
 def render(msg, owned=True, same_city=1, same_time=1):
-    """The body: one short sentence, only what changed. Facts in, words out;
-    nothing here decides. The title says which flight, so no body names it."""
+    """The body: one short line, personal for the traveller -- "Your flight's
+    gate changed from E2 to E6" -- and plain for somebody meeting the flight --
+    "The gate changed from E2 to E6". Facts in, words out; nothing here decides.
+
+    owned: the reader is on the flight (True) or meeting it (False). None is
+    treated as on it, which is what the app registers by default."""
     v = msg.get("values") or {}
     k = msg.get("kind")
+    yours = owned is not False
+    flight = "Your flight" if yours else "The flight"
+    gate_of = "Your flight's gate" if yours else "The gate"
+    bags = "Your bags" if yours else "The bags"
     dest = msg.get("destination") or {}
     city_to = dest.get("city") or dest.get("iata") or ""
-    tz = (" " + v["tz"]) if v.get("tz") else ""
+    tz = v.get("tz") or ""
 
     if k == CANCELLED:
         nxt = v.get("next")
@@ -1119,90 +1167,108 @@ def render(msg, owned=True, same_city=1, same_time=1):
             # THE DAY IS ALWAYS SAID, "today" included: a next flight tomorrow
             # read as a clock alone would be a time somebody could miss by a day.
             if nxt.get("flight_number"):
-                return "Cancelled, next is %s %s" % (nxt["flight_number"], _when(nxt))
-            return "Cancelled, the next flight leaves %s" % _when(nxt)
+                return "%s is cancelled, next is %s %s" % (flight, nxt["flight_number"], _when(nxt))
+            return "%s is cancelled, the next flight leaves %s" % (flight, _when(nxt))
         if v.get("none_within_days"):
             # A WEEK, NOT "AS FAR AS THE SCHEDULE REACHES": the search looks
             # NEXT_MAX_DAYS ahead and no further, so that is all the sentence
             # claims. Change one, change both, and NEXT_FLIGHT's below.
-            return "Cancelled, no other flight this week"
-        return "Cancelled, finding the next flight"
+            return "%s is cancelled, no other flight this week" % flight
+        return "%s is cancelled, finding the next flight" % flight
     if k == NEXT_FLIGHT:
+        # IT ARRIVES ON ITS OWN, hours after the cancellation it follows, so it
+        # says again what it follows. The title names the route.
         nxt = v.get("next")
         if nxt:
             if nxt.get("flight_number"):
-                # "Next flight is BA284, tomorrow at ...", but "Next flight is
-                # AI2812 on Sunday at ...": the comma belongs to the near days.
-                when = _when(nxt)
-                sep = ", " if when.startswith(("today", "tomorrow")) else " "
-                return "Next flight is %s%s%s" % (nxt["flight_number"], sep, when)
-            return "The next flight leaves %s" % _when(nxt)
-        # THE CITY IS NAMED HERE. This one arrives on its own, hours after the
-        # cancellation it follows, so "this week" alone would not say where to.
-        if city_to:
-            return "No other flight to %s this week" % city_to
-        return "No other flight on this route this week"
+                return "%s was cancelled, next is %s %s" % (flight, nxt["flight_number"], _when(nxt))
+            return "%s was cancelled, the next flight leaves %s" % (flight, _when(nxt))
+        return "%s was cancelled, no other flight this week" % flight
     if k == CANCEL_WITHDRAWN:
-        return "No longer cancelled, leaving %s" % v.get("scheduled")
+        if v.get("scheduled"):
+            return "%s is no longer cancelled and leaves at %s" % (flight, _24h(v["scheduled"]))
+        return "%s is no longer cancelled" % flight
     if k == GATE:
         if v.get("was"):
-            return "Gate changed to %s" % v["gate"]
+            return "%s changed from %s to %s" % (gate_of, v["was"], v["gate"])
         if v.get("terminal"):
-            return "Gate %s, Terminal %s" % (v["gate"], v["terminal"])
-        return "Gate %s" % v["gate"]
+            return "%s is %s, in Terminal %s" % (gate_of, v["gate"], v["terminal"])
+        return "%s is %s" % (gate_of, v["gate"])
     if k == GATE_CAP:
-        return "Gate keeps changing, so open Terminal for the latest"
+        # THE LAST GATE MESSAGE THIS FLIGHT GETS -- see GATE_CAP_COUNT. One
+        # queued before it carried the gates says only that it changed again.
+        if v.get("gate") and v.get("was"):
+            return "%s changed again, from %s to %s" % (gate_of, v["was"], v["gate"])
+        if v.get("gate"):
+            return "%s changed again, to %s" % (gate_of, v["gate"])
+        return "%s changed again" % gate_of
     if k == TERMINAL:
-        return "Now leaving from Terminal %s" % v["terminal"]
-    if k == DELAY:
-        if v.get("change") == "more":
-            return "Delayed again, now leaving %s%s" % (v.get("expected"), tz)
-        if v.get("change") == "less":
-            return "Less delayed, now leaving %s%s" % (v.get("expected"), tz)
-        d = _duration(timedelta(minutes=v.get("delay_min") or 0))
-        return "Delayed %s, now leaving %s%s" % (d, v.get("expected"), tz)
-    if k == ON_TIME:
-        return "Back on time for %s" % v.get("scheduled")
+        out = "%s now leaves from Terminal %s" % (flight, v["terminal"])
+        return out + (" instead of Terminal %s" % v["was"] if v.get("was") else "")
+    if k in (DELAY, ON_TIME):
+        # NO OLD TIME. The delay figure already says what changed; the one
+        # thing to add is when it now leaves.
+        if k == ON_TIME:
+            what, leaves = "%s is back on time" % flight, _24h(v.get("scheduled"))
+        else:
+            leaves = _at(v.get("expected"), tz)
+            if v.get("change") == "more":
+                what = "%s is delayed again" % flight
+            elif v.get("change") == "less":
+                what = "%s's delay is shorter" % flight
+            else:
+                what = "%s is delayed %s" % (flight, _duration(timedelta(minutes=v.get("delay_min") or 0)))
+        return "%s, now leaves at %s" % (what, leaves) if leaves else what
     if k == DEPARTED:
         if v.get("due"):
-            return "Took off, landing around %s%s" % (v["due"], tz)
-        return "Took off"
+            return "%s took off and lands around %s" % (flight, _at(v["due"], tz))
+        return "%s took off" % flight
     if k == ARRIVAL_MOVED:
-        return "Now landing around %s%s" % (v.get("due"), tz)
+        if v.get("due"):
+            return "%s now lands around %s" % (flight, _at(v["due"], tz))
+        return "%s has a new landing time" % flight
     if k == ARRIVAL_TERMINAL:
-        return "Now arriving at Terminal %s" % v["terminal"]
+        out = "%s now arrives at Terminal %s" % (flight, v["terminal"])
+        return out + (" instead of Terminal %s" % v["was"] if v.get("was") else "")
     if k == LANDED:
         if v.get("elsewhere"):
-            return "Landed, but not in %s" % city_to if city_to else "Landed somewhere else"
-        out = "Landed"
-        if v.get("time"):
-            out += " at %s%s" % (v["time"], tz)
+            if not city_to:
+                return "%s landed somewhere else" % flight
+            if v.get("diverted_to"):
+                return "%s landed at %s instead of %s" % (flight, v["diverted_to"], city_to)
+            return "%s landed, but not in %s" % (flight, city_to)
+        parts = ["%s landed at %s" % (flight, _at(v["time"], tz)) if v.get("time") else "%s landed" % flight]
         # HOW EARLY OR LATE, the touchdown against the timetable. A message
-        # written before the figure existed has none and reads as it did.
+        # written before the figure existed has none and reads without it.
         off = v.get("offset_min")
         if isinstance(off, int):
-            out += ", " + _early_or_late(off)
+            parts.append(_early_or_late(off))
         if v.get("belt"):
-            out += ", bags on belt %s" % v["belt"]
+            parts.append("bags on belt %s" % v["belt"])
         # THE NEXT LEG IS THE PASSENGER'S. Somebody meeting the flight is not
         # taking it, and hears the landing and the belt.
-        nxt = v.get("next") if owned is not False else None
+        nxt = v.get("next") if yours else None
         if nxt:
-            out += ". " + _next_words(nxt)
-        return out
+            parts.append(_next_words(nxt, tz))
+        return ", ".join(parts)
     if k == BELT:
-        return "Bags on belt %s" % v.get("belt")
+        if v.get("was") and v["was"] != v.get("belt"):
+            return "%s are now on belt %s instead of belt %s" % (bags, v.get("belt"), v["was"])
+        return "%s are on belt %s" % (bags, v.get("belt"))
     if k == DIVERTED:
-        return "Diverted, landing airport not known yet"
+        away = " from %s" % city_to if city_to else ""
+        return "%s has been diverted%s, landing airport not known yet" % (flight, away)
     if k == CONNECTION:
-        # THE HUB IS WHERE THE READER WILL BE STANDING, and it is the one place
-        # this sentence names. The onward flight and the minutes are on the
+        # THE ONWARD FLIGHT AND THE HUB, and no minutes: the layover is on the
         # trip screen the tap opens -- see deep_link.
+        conn = "Your connection" if yours else "The connection"
+        onward = (v.get("next") or {}).get("flight_number")
+        to = " to %s" % onward if onward else ""
         where = " in %s" % v["hub"] if v.get("hub") else ""
         if v.get("band") == "will_miss":
-            return "Your connection%s won't hold" % where
-        return "Your connection%s is at risk" % where
-    return "Flight updated"
+            return "%s%s%s won't hold" % (conn, to, where)
+        return "%s%s%s is at risk" % (conn, to, where)
+    return "%s was updated" % flight
 
 
 def deep_link(msg):
