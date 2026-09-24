@@ -141,6 +141,69 @@ def _useful_life(kind):
     return STALE_AFTER.get(kind, STALE_DEFAULT)
 
 
+# -- HOW LONG EXPO AND APPLE HOLD IT FOR A PHONE THAT IS OFF ------------------
+#
+# NOT THE QUESTION ABOVE. STALE_AFTER decides whether a waiting message is still
+# worth SENDING; this decides how long a SENT one is held for a phone that
+# cannot be reached -- a phone in airplane mode for a ten-hour flight. It was
+# an hour for everything, so whatever was sent during the flight expired
+# before the passenger reconnected.
+#
+# THE MESSAGE CARRIES ITS OWN expires_at, which notify.expiry sets from the
+# flight's times when it writes the message: a gate lives until its flight
+# leaves, a landing summary until the next leg does. This turns that into
+# Expo's ttl at the moment of sending, inside a floor and a ceiling.
+#
+# THE FLOOR: FIFTEEN MINUTES, so a message about something imminent is still
+# held long enough to reach a phone coming out of a tunnel. THE CEILING: A DAY,
+# because nothing about one flight is news for longer. A message with no expiry
+# -- one written before notify set them -- keeps the hour it always had.
+EXPIRY_FLOOR = timedelta(minutes=15)
+EXPIRY_CEILING = timedelta(hours=24)
+EXPIRY_DEFAULT = timedelta(hours=1)
+
+
+def _ttl(msg, now):
+    """Seconds Expo may hold this message for redelivery."""
+    until = _parse(msg.get("expires_at"))
+    life = until - now if until is not None else EXPIRY_DEFAULT
+    return int(max(EXPIRY_FLOOR, min(EXPIRY_CEILING, life)).total_seconds())
+
+
+# -- WHICH MESSAGES REPLACE WHICH -------------------------------------------
+#
+# A COLLAPSE ID MAKES A NEWER MESSAGE REPLACE AN OLDER ONE WITH THE SAME ID, in
+# transit and on the lock screen (Expo's collapseId, Apple's apns-collapse-id).
+# Given only to messages that supersede each other about one flight: a second
+# gate makes the first one wrong, and "back on time" answers "delayed". Without
+# it a held message could be an old gate delivered as current news.
+#
+# NOT THE LANDING SUMMARY, THE NEXT-FLIGHT SEARCH, TAKEOFF OR A DIVERSION. None
+# of them is made wrong by a later message of another kind, and a belt must not
+# replace the summary that told somebody where their next flight leaves from.
+COLLAPSE_GROUP = {
+    notify.GATE: "gate",
+    notify.GATE_CAP: "gate",
+    notify.DELAY: "departure",
+    notify.ON_TIME: "departure",
+    notify.TERMINAL: "terminal",
+    notify.CANCELLED: "cancelled",
+    notify.CANCEL_WITHDRAWN: "cancelled",
+    notify.CONNECTION: "connection",
+    notify.ARRIVAL_MOVED: "arrival",
+    notify.ARRIVAL_TERMINAL: "arrival-terminal",
+    notify.BELT: "belt",
+}
+
+
+def _collapse_id(msg):
+    """One flight, one kind of news: "LX325|2026-09-25|gate", or None."""
+    group = COLLAPSE_GROUP.get(msg.get("kind"))
+    if group is None:
+        return None
+    return "%s|%s|%s" % (msg.get("flight_number"), msg.get("flight_date"), group)
+
+
 def _age(msg, now):
     """How long this message has been waiting, from when it became due."""
     written = _parse(msg.get("at"))
@@ -254,25 +317,32 @@ def _post(url, payload):
     return resp.json()
 
 
-def _envelope(msg, device, index):
+def _envelope(msg, device, index, now=None):
     """One Expo message. Words from notify, routing from here."""
+    now = now or _now()
     owned = device.get("owned")
     dest = msg.get("destination") or {}
     city = dest.get("city") or dest.get("iata")
     when = " ".join((msg.get("scheduled_departure") or "").split()[:2])
     same_city, same_time = _counts(index, device.get("device_id"),
                                    msg.get("flight_date"), city, when)
-    return {
+    env = {
         "to": device.get("push_token"),
         "title": notify.subject(msg, owned, same_city, same_time),
         "body": notify.render(msg, owned, same_city, same_time),
         "data": notify.deep_link(msg),
         "sound": "default",
-        # A flight message is worthless once the flight has gone. Expo drops it
-        # rather than waking somebody about a gate that changed yesterday.
-        "ttl": 3600,
+        # A flight message is worthless once what it describes has happened.
+        # Expo drops it then rather than waking somebody about a gate that
+        # changed yesterday -- and holds it until then, not for a flat hour.
+        # See _ttl.
+        "ttl": _ttl(msg, now),
         "priority": "high",
     }
+    collapse = _collapse_id(msg)
+    if collapse is not None:
+        env["collapseId"] = collapse
+    return env
 
 
 # -- PHASE ONE: RECEIPTS -----------------------------------------------------
@@ -454,7 +524,7 @@ def _plan(watched, states, now):
                 # instead, under its own reason, and the traceback goes to the
                 # log where it can be found.
                 try:
-                    envelope = _envelope(msg, device, index)
+                    envelope = _envelope(msg, device, index, now)
                 except Exception:
                     logger.exception("dispatch: could not render a %s for %s/%s",
                                      msg.get("kind"), flight_key[0], flight_key[1])

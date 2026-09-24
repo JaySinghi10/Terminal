@@ -652,6 +652,16 @@ function dayWord(ms: number, now: number, offsetMin: number): string {
   return `${at.getUTCDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][at.getUTCMonth()]}`;
 }
 
+// notify.py _early_or_late, over _duration: "38 min early", "1 h 05 min late",
+// "on time" at the minute. How the landing summary says how it did.
+function earlyOrLate(offsetMin: number): string {
+  if (offsetMin === 0) return 'on time';
+  const m = Math.abs(offsetMin);
+  const h = Math.floor(m / 60);
+  const d = m < 60 ? `${m} min` : m % 60 === 0 ? `${h} h` : `${h} h ${String(m % 60).padStart(2, '0')} min`;
+  return `${d} ${offsetMin > 0 ? 'late' : 'early'}`;
+}
+
 // notify.py _when: "today at 5:05 PM PDT", "on Sunday at ...".
 function whenWords(day: string, time: string, tz: string): string {
   const d = day === 'today' || day === 'tomorrow' ? day : `on ${day}`;
@@ -725,7 +735,9 @@ function ba177(stage: 'gate' | 'delay' | 'air' | 'landed' | 'belt') {
     rawStatus: 'Arrived',
     landedMs: down,
   });
-  const body = stage === 'belt' ? 'Bags on belt 9' : `Landed at ${clockText(down, jfk.offset, jfk.tzLabel)}`;
+  const body = stage === 'belt'
+    ? 'Bags on belt 9'
+    : `Landed at ${clockText(down, jfk.offset, jfk.tzLabel)}, ${earlyOrLate(Math.round((down - sched) / MIN))}`;
   return { flight, notice: { kind: 'push' as const, title, body } };
 }
 

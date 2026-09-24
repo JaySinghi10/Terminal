@@ -511,5 +511,51 @@ dispatch.run_once(now=NOW, post=w41.post)
 check("a dead token is still found, by lookup rather than by memory",
       w41.forgotten == ["ExponentPushToken[aaa]"], w41.forgotten)
 
+print("-- how long Expo holds a sent message --")
+# THE MESSAGE CARRIES ITS OWN EXPIRY -- notify.expiry sets it from the flight's
+# times -- and the envelope turns what is left of it into Expo's ttl, inside a
+# fifteen-minute floor and a one-day ceiling.
+
+
+def expiring(delta, kind=notify.GATE, number="AI505"):
+    m = msg(number=number, kind=kind)
+    m["expires_at"] = None if delta is None else notify._iso(NOW + delta)
+    return m
+
+
+check("three hours of life is three hours of ttl",
+      dispatch._ttl(expiring(timedelta(hours=3)), NOW) == 3 * 3600, dispatch._ttl(expiring(timedelta(hours=3)), NOW))
+check("five minutes is held for the fifteen-minute floor",
+      dispatch._ttl(expiring(timedelta(minutes=5)), NOW) == 15 * 60)
+check("an expiry already passed is still held for the floor",
+      dispatch._ttl(expiring(timedelta(minutes=-30)), NOW) == 15 * 60)
+check("three days is held for the one-day ceiling",
+      dispatch._ttl(expiring(timedelta(days=3)), NOW) == 24 * 3600)
+check("a message written before expiries existed keeps the hour it had",
+      dispatch._ttl(expiring(None), NOW) == 3600)
+env = dispatch._envelope(expiring(timedelta(hours=5)), device(), {}, NOW)
+check("the envelope carries it as the ttl", env.get("ttl") == 5 * 3600, env.get("ttl"))
+
+print("-- which messages replace which --")
+gate_id = dispatch._collapse_id(msg(kind=notify.GATE))
+check("a gate collapses with the same flight's other gates", gate_id == "AI505|2026-09-09|gate", gate_id)
+check("the gate cap is one of them", dispatch._collapse_id(msg(kind=notify.GATE_CAP)) == gate_id)
+check("back on time replaces the delay",
+      dispatch._collapse_id(msg(kind=notify.ON_TIME)) == dispatch._collapse_id(msg(kind=notify.DELAY)))
+check("no longer cancelled replaces the cancellation",
+      dispatch._collapse_id(msg(kind=notify.CANCEL_WITHDRAWN)) == dispatch._collapse_id(msg(kind=notify.CANCELLED)))
+check("another flight's gate is another id",
+      dispatch._collapse_id(msg(number="AI506", kind=notify.GATE)) != gate_id)
+check("a gate never replaces a delay", dispatch._collapse_id(msg(kind=notify.DELAY)) != gate_id)
+check("the landing summary, the next flight, takeoff and a diversion replace nothing",
+      all(dispatch._collapse_id(msg(kind=k)) is None
+          for k in (notify.LANDED, notify.NEXT_FLIGHT, notify.DEPARTED, notify.DIVERTED)))
+env = dispatch._envelope(msg(kind=notify.GATE), device(), {}, NOW)
+check("the envelope carries the collapse id", env.get("collapseId") == gate_id, env.get("collapseId"))
+env = dispatch._envelope(msg(kind=notify.LANDED), device(), {}, NOW)
+check("and leaves it off a summary", "collapseId" not in env, env)
+longest = dispatch._collapse_id(msg(number="AI5055", kind=notify.ARRIVAL_TERMINAL))
+check("the longest id fits the 64 bytes Apple allows", len(longest.encode("utf-8")) <= 64, longest)
+
 print("\nPASSED: %d   FAILURES: %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

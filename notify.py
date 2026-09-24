@@ -133,6 +133,42 @@ CONNECT_BANDS = ("comfortable", "at_risk", "will_miss")
 # A connection at all, on the same window the app's MAX_CONNECTION_MS uses.
 CONNECT_MAX = timedelta(hours=24)
 
+# ── HOW LONG A SENT MESSAGE IS WORTH HOLDING FOR A PHONE THAT IS OFFLINE ────
+#
+# EACH KIND LIVES UNTIL THE MOMENT IT STOPS BEING TRUE, measured from the
+# flight's own times; dispatch hands Expo whatever is left of that as the
+# message's ttl. It was one hour for everything, so anything sent during a long
+# flight had expired before the passenger's phone came back on.
+#
+# SO THE SAME KIND CAN BE LONG OR SHORT. A gate is worth having until its flight
+# leaves: for the next leg that is hours after the passenger lands, for a flight
+# boarding now it is minutes. The rule names the event rather than a number.
+#
+# AND AN OFFLINE iPHONE KEEPS ONE. Apple stores a single notification per app
+# for a device it cannot reach, chosen by Apple and not necessarily the newest
+# (Apple DTS, February 2025). A longer life cannot deliver a backlog; it can
+# stop the one message that survives from having expired. That is why dispatch
+# also gives messages that supersede each other a collapse id, and why the
+# landing summary restates everything the next step needs.
+EXPIRY_GRACE = timedelta(minutes=15)
+EXPIRY_LONG = timedelta(hours=24)
+EXPIRY_DIVERTED = timedelta(hours=6)
+EXPIRY_BELT = timedelta(minutes=45)
+EXPIRY_AFTER_LANDING = timedelta(hours=2)
+# About when the flight leaves, or about when it lands.
+UNTIL_DEPARTURE = {GATE, GATE_CAP, TERMINAL, DELAY, ON_TIME, CANCEL_WITHDRAWN}
+UNTIL_ARRIVAL = {DEPARTED, ARRIVAL_MOVED, ARRIVAL_TERMINAL}
+
+# ── WHERE CHECKED BAGS COME OFF ─────────────────────────────────────────────
+#
+# AT THE END OF THE JOURNEY, NOT AT A CONNECTION. Bags on a connecting itinerary
+# are checked through to the final destination, so the belt at the hub is not
+# where they are, and printing it sends the passenger to the wrong hall. The
+# exception is the first airport in the United States on the way in from
+# abroad, where bags are collected for customs and checked again. The app's
+# bagEligible draws the same line; change one, change both.
+BAGS_RECLAIMED_ON_ENTRY = {"US"}
+
 # A cancellation of a flight more than a day away that lands in the night at
 # the departure airport is DEFERRED to seven in the morning there, not dropped.
 QUIET_START_HOUR = 22
@@ -381,7 +417,7 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None)
             ns["notified"]["belt"] = arr.get("baggage")
         return ns, out
 
-    def emit(kind, values, deliver_after=None, key_value=""):
+    def emit(kind, values, deliver_after=None, key_value="", expires=None):
         k = _key(facts, kind, key_value)
         if k in ns["keys"]:
             if trace is not None:
@@ -393,8 +429,12 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None)
                 trace.append({"kind": kind, "reason": "rate floor"})
             return False
         msg = dict(facts)
+        # UNTIL WHEN IT IS WORTH HOLDING FOR AN OFFLINE PHONE, decided here where
+        # the record is, and read by dispatch as the push's ttl. See expiry.
+        until = expires if expires is not None else expiry(kind, dto, now, onward=connection)
         msg.update({"key": k, "kind": kind, "at": _iso(now),
                     "deliver_after": _iso(deliver_after) if deliver_after else None,
+                    "expires_at": _iso(until) if until else None,
                     "values": values})
         out.append(msg)
         ns["keys"] = (ns["keys"] + [k])[-200:]
@@ -452,6 +492,12 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None)
     # NOT FOR A CANCELLED OR DIVERTED LEG. Cancelled has already returned above;
     # diverted is guarded here. Both have their own message, and a connection
     # off a flight that is not going there is not the news.
+    #
+    # AND ON THE LANDING POLL THE SUMMARY SAYS IT INSTEAD. The band is recorded
+    # as told either way, but the passenger gets one message for landing, and
+    # the summary below carries the connection's band in it -- two pushes a
+    # minute apart would compete for the one slot an offline phone keeps.
+    landing_now = landed and "landed" not in ns["notified"]
     if connection is not None and status not in (STATUS_CANCELLED, STATUS_DIVERTED):
         judged = connection_band(dto, connection, now)
         if judged is not None:
@@ -460,37 +506,60 @@ def decide(ns, dto, landing, now, lookup_next=None, connection=None, trace=None)
             if CONNECT_BANDS.index(band) > CONNECT_BANDS.index(told):
                 ns["notified"]["connection_band"] = band
                 nxt_dep = (connection.get("departure") or {})
-                emit(CONNECTION, {
-                    "band": band,
-                    "remaining_min": _minutes(remaining),
-                    "minimum_min": _minutes(minimum),
-                    "hub": nxt_dep.get("city") or nxt_dep.get("airport") or nxt_dep.get("iata"),
-                    "next": {
-                        "flight_number": connection.get("flight_number"),
-                        "date": connection.get("flight_date"),
-                    },
-                }, key_value=band)
+                if not landing_now:
+                    emit(CONNECTION, {
+                        "band": band,
+                        "remaining_min": _minutes(remaining),
+                        "minimum_min": _minutes(minimum),
+                        "hub": nxt_dep.get("city") or nxt_dep.get("airport") or nxt_dep.get("iata"),
+                        "next": {
+                            "flight_number": connection.get("flight_number"),
+                            "date": connection.get("flight_date"),
+                        },
+                    }, key_value=band)
+
+    # WHETHER THIS LEG FEEDS ANOTHER, which the summary and the belt both ask.
+    # connection_band is the test, so neither can name a leg the warning would
+    # not have treated as a connection.
+    connecting = connection is not None and connection_band(dto, connection, now) is not None
 
     # ── LANDED ── once, from the landing feed only
+    #
+    # THE ONE MESSAGE FOR THE PASSENGER'S NEXT STEP. It says when the aircraft
+    # came down and how early or late -- the touchdown against the scheduled
+    # arrival, the figure the app's cards print -- then either the belt, at the
+    # end of a journey, or the next leg: its expected departure and its gate, or
+    # that it is cancelled, and the connection's band when that is at risk.
+    #
+    # IT IS THE LAST THING SENT BEFORE MOST PHONES COME BACK ON, and an offline
+    # iPhone keeps one notification: so it restates the next leg's state rather
+    # than trusting that the gate or cancellation sent mid-flight survived.
     if landed and "landed" not in ns["notified"]:
         ns["notified"]["landed"] = landing.get("landed_utc")
         when = _parse(landing.get("landed_utc"))
         local = _to_zone(when, arr.get("timezone"))
-        belt = arr.get("baggage")
+        nxt = _next_step(dto, connection, now) if connecting else None
+        # THE BELT ONLY WHERE THE BAGS COME OFF. See BAGS_RECLAIMED_ON_ENTRY.
+        belt = arr.get("baggage") if _bags_claimed_here(dto, connecting) else None
         if belt:
             ns["notified"]["belt"] = belt
             ns["counts"][BELT] = int(ns["counts"].get(BELT, 0)) + 1
         emit(LANDED, {"time": _clock(local) if local else None,
                       "tz": _tz_label(arr.get("scheduled")),
+                      "offset_min": _minutes(when - sched_arr) if when and sched_arr else None,
                       "belt": belt,
-                      "elsewhere": bool(landing.get("diverted_to"))})
+                      "elsewhere": bool(landing.get("diverted_to")),
+                      "next": nxt},
+             expires=expiry(LANDED, dto, now, onward=connection if nxt else None, landed_at=when))
         return ns, out
 
-    # ── BELT ── only after landing, inside the window
+    # ── BELT ── only after landing, inside the window, and only where the bags
+    # come off: a belt at a connection is not where a through-checked bag is.
     if "landed" in ns["notified"]:
         when = _parse(ns["notified"].get("landed"))
         belt = arr.get("baggage")
         if (belt and belt != ns["notified"].get("belt") and when is not None
+                and _bags_claimed_here(dto, connecting)
                 and now - when <= BELT_WINDOW
                 and int(ns["counts"].get(BELT, 0)) < BELT_CAP_COUNT
                 and _settled(ns, "belt", belt)):
@@ -685,6 +754,79 @@ def _band(remaining, minimum):
     if remaining <= minimum + CONNECT_CUSHION:
         return "at_risk"
     return "comfortable"
+
+
+# ── UNTIL WHEN A SENT MESSAGE IS WORTH HOLDING ──────────────────────────────
+def _expected(movement):
+    """The instant a movement happens or is due: actual, then estimated, then
+    scheduled -- the precedence the poller tiers on and the app draws with."""
+    m = movement or {}
+    return (_parse(m.get("actual_iso")) or _parse(m.get("estimated_iso"))
+            or _parse(m.get("scheduled_iso")))
+
+
+def expiry(kind, dto, now, onward=None, landed_at=None):
+    """When a message of this kind stops being worth delivering, or None when
+    there is nothing to measure it from. See EXPIRY_GRACE for the rule; dispatch
+    applies the floor and the ceiling, and an hour where this says nothing.
+
+    onward is the leg the passenger connects into: the one a connection warning
+    is about, and the one a landing summary names. A summary that names none is
+    worth two hours after the landing."""
+    if kind in UNTIL_DEPARTURE:
+        t = _expected((dto or {}).get("departure"))
+        return t + EXPIRY_GRACE if t else None
+    if kind in UNTIL_ARRIVAL:
+        t = _expected((dto or {}).get("arrival"))
+        return t + EXPIRY_GRACE if t else None
+    if kind in (CANCELLED, NEXT_FLIGHT):
+        return now + EXPIRY_LONG
+    if kind == DIVERTED:
+        return now + EXPIRY_DIVERTED
+    if kind == BELT:
+        return now + EXPIRY_BELT
+    if kind == CONNECTION:
+        return _expected((onward or {}).get("departure"))
+    if kind == LANDED:
+        leaves = _expected((onward or {}).get("departure")) if onward else None
+        return leaves or (landed_at or now) + EXPIRY_AFTER_LANDING
+    return None
+
+
+# ── THE LANDING SUMMARY'S TWO QUESTIONS ─────────────────────────────────────
+def _bags_claimed_here(dto, connecting):
+    """Whether checked bags come off at this leg's arrival. See
+    BAGS_RECLAIMED_ON_ENTRY: always at the end of a journey, and at a
+    connection only on the way into a country that reclaims them."""
+    if not connecting:
+        return True
+    into = _country(dto, "arrival")
+    came_from = _country(dto, "departure")
+    return into in BAGS_RECLAIMED_ON_ENTRY and came_from is not None and came_from != into
+
+
+def _next_step(dto, onward, now):
+    """The leg the passenger goes on to, as the landing summary names it, or
+    None when there is no connection -- the same test the warning uses, so the
+    summary never names a flight connection_band would not.
+
+    ITS EXPECTED DEPARTURE, NOT ITS TIMETABLE. The warning measures against the
+    timetable on purpose; the summary is telling somebody when to be at a gate,
+    and that is the revised time."""
+    judged = connection_band(dto, onward, now)
+    if judged is None:
+        return None
+    band = judged[0]
+    ndep = (onward or {}).get("departure") or {}
+    leaves = _parse(ndep.get("estimated_iso")) or _parse(ndep.get("scheduled_iso"))
+    return {
+        "flight_number": onward.get("flight_number"),
+        "time": _clock(leaves) if leaves else None,
+        "gate": ndep.get("gate") or None,
+        "terminal": ndep.get("terminal") or None,
+        "cancelled": str(onward.get("status") or "").lower() == STATUS_CANCELLED,
+        "band": band if band != "comfortable" else None,
+    }
 
 
 # ── WHAT OF A BOARD ROW IS WORTH KEEPING ────────────────────────────────────
@@ -931,6 +1073,37 @@ def _when(nxt):
     return " ".join(p for p in (day, clock) if p)
 
 
+def _early_or_late(offset_min):
+    """How the landing did: 38 min early, 12 min late, on time at the minute."""
+    if offset_min == 0:
+        return "on time"
+    return "%s %s" % (_duration(timedelta(minutes=offset_min)),
+                      "late" if offset_min > 0 else "early")
+
+
+def _next_words(nxt):
+    """The landing summary's second sentence: "Next: LX325 at 11:50 AM, gate
+    A12", the terminal while no gate is assigned, "LX325 is cancelled", and the
+    connection's band when it is at risk. No clock label: the next leg leaves
+    from the airport the passenger has just landed at, whose zone the first
+    sentence named."""
+    number = nxt.get("flight_number") or "Your next flight"
+    if nxt.get("cancelled"):
+        return "%s is cancelled" % number
+    out = "Next: %s" % number
+    if nxt.get("time"):
+        out += " at %s" % nxt["time"]
+    if nxt.get("gate"):
+        out += ", gate %s" % nxt["gate"]
+    elif nxt.get("terminal"):
+        out += ", Terminal %s" % nxt["terminal"]
+    if nxt.get("band") == "will_miss":
+        out += ", connection won't hold"
+    elif nxt.get("band") == "at_risk":
+        out += ", connection at risk"
+    return out
+
+
 def render(msg, owned=True, same_city=1, same_time=1):
     """The body: one short sentence, only what changed. Facts in, words out;
     nothing here decides. The title says which flight, so no body names it."""
@@ -1004,8 +1177,18 @@ def render(msg, owned=True, same_city=1, same_time=1):
         out = "Landed"
         if v.get("time"):
             out += " at %s%s" % (v["time"], tz)
+        # HOW EARLY OR LATE, the touchdown against the timetable. A message
+        # written before the figure existed has none and reads as it did.
+        off = v.get("offset_min")
+        if isinstance(off, int):
+            out += ", " + _early_or_late(off)
         if v.get("belt"):
             out += ", bags on belt %s" % v["belt"]
+        # THE NEXT LEG IS THE PASSENGER'S. Somebody meeting the flight is not
+        # taking it, and hears the landing and the belt.
+        nxt = v.get("next") if owned is not False else None
+        if nxt:
+            out += ". " + _next_words(nxt)
         return out
     if k == BELT:
         return "Bags on belt %s" % v.get("belt")

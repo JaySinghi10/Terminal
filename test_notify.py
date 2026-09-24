@@ -94,8 +94,8 @@ check("first sight said nothing, and the landing came at the landing poll", got[
 check("the 13-minute arrival slip was swallowed (under fifteen)", N.ARRIVAL_MOVED not in kinds(got))
 check("the revised actual was swallowed (no time was ever claimed)", N.DEPARTED not in kinds(got))
 landed_text = N.render(got[0][1])
-check("landed text carries the feed's time in the airport's zone and the belt",
-      landed_text == "Landed at 11:42 PM IST, bags on belt 2", landed_text)
+check("landed text carries the feed's time in the airport's zone, how late, and the belt",
+      landed_text == "Landed at 11:42 PM IST, 17 min late, bags on belt 2", landed_text)
 check("landed once, never again", N.LANDED not in kinds(run(steps[5:], ns=ns)[1]))
 check("for the person meeting it, the title is the origin and the body the same",
       N.subject(got[0][1], owned=False) == "From Mumbai · 6E6188" and N.render(got[0][1], owned=False) == landed_text,
@@ -196,17 +196,21 @@ check("meeting-side title", N.subject(got[1][1], owned=False) == "From Mumbai ·
 print("-- belt after landing --")
 L = {"outcome": "landed", "landed_utc": (act + timedelta(hours=2)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"), "diverted_to": None}
 land_at = act + timedelta(hours=2)
-steps = [(sched - timedelta(hours=1), dto(sched=sched), None),
-         (land_at + timedelta(minutes=2), dto("active", act=act, sched=sched), L),
-         (land_at + timedelta(minutes=10), dto("landed", act=act, sched=sched, belt="5"), L),
-         (land_at + timedelta(minutes=12), dto("landed", act=act, sched=sched, belt="5"), L),
-         (land_at + timedelta(minutes=30), dto("landed", act=act, sched=sched, belt="7"), L),
-         (land_at + timedelta(minutes=32), dto("landed", act=act, sched=sched, belt="7"), L),
-         (land_at + timedelta(minutes=50), dto("landed", act=act, sched=sched, belt="9"), L),
-         (land_at + timedelta(minutes=52), dto("landed", act=act, sched=sched, belt="9"), L)]
+# THE ARRIVAL IS SCHEDULED TWO HOURS AFTER THE DEPARTURE, as the flight is. The
+# fixture's default is 23:25 on the 7th, two days before this departure, and a
+# landing measured against it would be two days late.
+arr2 = sched + timedelta(hours=2)
+steps = [(sched - timedelta(hours=1), dto(sched=sched, arr_sched=arr2), None),
+         (land_at + timedelta(minutes=2), dto("active", act=act, sched=sched, arr_sched=arr2), L),
+         (land_at + timedelta(minutes=10), dto("landed", act=act, sched=sched, arr_sched=arr2, belt="5"), L),
+         (land_at + timedelta(minutes=12), dto("landed", act=act, sched=sched, arr_sched=arr2, belt="5"), L),
+         (land_at + timedelta(minutes=30), dto("landed", act=act, sched=sched, arr_sched=arr2, belt="7"), L),
+         (land_at + timedelta(minutes=32), dto("landed", act=act, sched=sched, arr_sched=arr2, belt="7"), L),
+         (land_at + timedelta(minutes=50), dto("landed", act=act, sched=sched, arr_sched=arr2, belt="9"), L),
+         (land_at + timedelta(minutes=52), dto("landed", act=act, sched=sched, arr_sched=arr2, belt="9"), L)]
 got = run(steps)[1]
 check("landed without a belt, then the belt, then one change, then the cap", kinds(got) == [N.LANDED, N.BELT, N.BELT], kinds(got))
-check("landed text without belt", N.render(got[0][1]) == "Landed at 11:35 PM IST", N.render(got[0][1]))
+check("landed text without belt", N.render(got[0][1]) == "Landed at 11:35 PM IST, 5 min late", N.render(got[0][1]))
 check("belt text", N.render(got[1][1]) == "Bags on belt 5", N.render(got[1][1]))
 late = run([(sched - timedelta(hours=1), dto(sched=sched), None), (land_at + timedelta(minutes=2), dto("active", act=act, sched=sched), L),
             (land_at + timedelta(hours=2), dto("landed", act=act, sched=sched, belt="5"), L), (land_at + timedelta(hours=2, minutes=2), dto("landed", act=act, sched=sched, belt="5"), L)])[1]
@@ -527,6 +531,127 @@ _, out7 = run(home(arr_est=T(1, 30, day=8)), None)
 check("no next leg, no connection message",
       not any(m["kind"] == N.CONNECTION for m in out7), out7)
 
+# ── THE LANDING SUMMARY ─────────────────────────────────────────────────────
+#
+# ONE MESSAGE FOR THE NEXT STEP: when it came down and how early or late, then
+# the belt at the end of a journey or the next leg at a connection. The 6E6188
+# dto is due at 23:25; it lands at 22:47, thirty-eight minutes early.
+print()
+print("-- the landing summary --")
+EARLY = T(22, 47)
+
+
+def landing_at(when):
+    return {"outcome": "landed", "diverted_to": None,
+            "landed_utc": when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}
+
+
+def land(d, n, when=EARLY, prior=None):
+    """The poll that sees the landing, nine minutes after it, on a leg seeded
+    while healthy."""
+    return N.decide(prior or seeded(d), d, landing_at(when), when + timedelta(minutes=9), connection=n)
+
+
+def gated(n, gate="A12", terminal=None, status=None):
+    n["departure"]["gate"] = gate
+    if terminal is not None:
+        n["departure"]["terminal"] = terminal
+    if status is not None:
+        n["status"] = status
+    return n
+
+
+ns_l, out_l = land(home(), gated(onward(dep=T(2, 0, day=8))))
+check("one message for the landing", [m["kind"] for m in out_l] == [N.LANDED], out_l)
+check("the passenger hears when, how early, and the next leg's time and gate",
+      N.render(out_l[0]) == "Landed at 10:47 PM IST, 38 min early. Next: 6E777 at 2:00 AM, gate A12",
+      N.render(out_l[0]))
+check("somebody meeting the flight hears the landing and not the next leg",
+      N.render(out_l[0], owned=False) == "Landed at 10:47 PM IST, 38 min early",
+      N.render(out_l[0], owned=False))
+
+_, out_t = land(home(), gated(onward(dep=T(2, 0, day=8)), gate=None, terminal="1"))
+check("no gate yet: the terminal instead",
+      N.render(out_t[0]).endswith(". Next: 6E777 at 2:00 AM, Terminal 1"), N.render(out_t[0]))
+
+_, out_c = land(home(), gated(onward(dep=T(2, 0, day=8)), status="cancelled"))
+check("a cancelled next leg is said, and nothing else about it",
+      N.render(out_c[0]) == "Landed at 10:47 PM IST, 38 min early. 6E777 is cancelled", N.render(out_c[0]))
+
+# THE CONNECTION'S BAND IS IN IT, AND IS NOT SENT A SECOND TIME. A 00:40
+# departure is 75 minutes after the 23:25 arrival: at risk, domestically.
+ns_r, out_r = land(home(), gated(onward(dep=T(0, 40, day=8))))
+check("at risk: said in the summary, and no separate warning on the landing poll",
+      [m["kind"] for m in out_r] == [N.LANDED]
+      and N.render(out_r[0]).endswith(". Next: 6E777 at 12:40 AM, gate A12, connection at risk"),
+      [(m["kind"], N.render(m)) for m in out_r])
+check("and recorded as told, so the next poll does not send it either",
+      ns_r["notified"].get("connection_band") == "at_risk", ns_r["notified"].get("connection_band"))
+_, after_r = N.decide(ns_r, home(), landing_at(EARLY), EARLY + timedelta(minutes=15),
+                      connection=gated(onward(dep=T(0, 40, day=8))))
+check("the next poll is silent about it", not any(m["kind"] == N.CONNECTION for m in after_r), after_r)
+_, out_m = land(home(), gated(onward(dep=T(0, 20, day=8))))
+check("will miss: said in the summary",
+      N.render(out_m[0]).endswith(", gate A12, connection won't hold"), N.render(out_m[0]))
+
+# THE BELT, WHERE THE BAGS COME OFF AND NOWHERE ELSE.
+_, out_b = land(home(belt="5"), None)
+check("at the end of the journey, the belt",
+      N.render(out_b[0]) == "Landed at 10:47 PM IST, 38 min early, bags on belt 5", N.render(out_b[0]))
+ns_nb, out_nb = land(home(belt="5"), gated(onward(dep=T(2, 0, day=8))))
+check("at a connection the belt is left off: the bags are checked through",
+      "belt" not in N.render(out_nb[0]), N.render(out_nb[0]))
+nb_next = gated(onward(dep=T(2, 0, day=8)))
+ns_nb2, later1 = N.decide(ns_nb, home(status="landed", belt="5"), landing_at(EARLY),
+                          EARLY + timedelta(minutes=20), connection=nb_next)
+_, later2 = N.decide(ns_nb2, home(status="landed", belt="5"), landing_at(EARLY),
+                     EARLY + timedelta(minutes=22), connection=nb_next)
+check("and no belt message follows for it", not any(m["kind"] == N.BELT for m in later1 + later2), later1 + later2)
+_, out_us = land(home(belt="5", dep_country="GB", arr_country="US"),
+                 gated(onward(dep=T(2, 0, day=8), dep_country="US", arr_country="US")))
+check("into the United States from abroad the bags are reclaimed for customs, so the belt is said too",
+      N.render(out_us[0]) == "Landed at 10:47 PM IST, 38 min early, bags on belt 5. Next: 6E777 at 2:00 AM, gate A12",
+      N.render(out_us[0]))
+
+# THE FIGURE AT THE MINUTE, AND LATE.
+_, out_ot = land(home(), None, when=T(23, 25))
+check("on the minute is on time", N.render(out_ot[0]) == "Landed at 11:25 PM IST, on time", N.render(out_ot[0]))
+_, out_lt = land(home(), None, when=T(23, 37))
+check("twelve minutes after is late", N.render(out_lt[0]) == "Landed at 11:37 PM IST, 12 min late", N.render(out_lt[0]))
+old = copy.deepcopy(out_b[0])
+old["values"].pop("offset_min")
+old["values"].pop("next")
+check("a summary written before the figure existed reads as it did",
+      N.render(old) == "Landed at 10:47 PM IST, bags on belt 5", N.render(old))
+
+# ── HOW LONG EACH MESSAGE IS WORTH HOLDING ──────────────────────────────────
+print("-- expiry: each kind until the moment it stops being true --")
+check("the summary is held until the next leg leaves",
+      N._parse(out_l[0]["expires_at"]) == T(2, 0, day=8), out_l[0]["expires_at"])
+check("with no next leg, two hours after the landing",
+      N._parse(out_b[0]["expires_at"]) == EARLY + timedelta(hours=2), out_b[0]["expires_at"])
+d_est = home(est=T(21, 50), arr_est=T(23, 40))
+check("a gate is held until its flight leaves, and a quarter of an hour",
+      N.expiry(N.GATE, d_est, T(20, 0)) == T(22, 5), N.expiry(N.GATE, d_est, T(20, 0)))
+check("so is a delay, and a terminal change",
+      N.expiry(N.DELAY, d_est, T(20, 0)) == T(22, 5) and N.expiry(N.TERMINAL, d_est, T(20, 0)) == T(22, 5))
+check("the next leg's gate lives until that leg leaves, hours after this one lands",
+      N.expiry(N.GATE, onward(dep=T(2, 0, day=8)), T(22, 0)) == T(2, 15, day=8))
+check("took off, until the landing it predicts",
+      N.expiry(N.DEPARTED, d_est, T(22, 0)) == T(23, 55), N.expiry(N.DEPARTED, d_est, T(22, 0)))
+check("a cancellation and the next flight found, for a day",
+      N.expiry(N.CANCELLED, d_est, T(20, 0)) == T(20, 0, day=8)
+      and N.expiry(N.NEXT_FLIGHT, d_est, T(20, 0)) == T(20, 0, day=8))
+check("a connection warning, until the onward flight leaves",
+      N.expiry(N.CONNECTION, d_est, T(20, 0), onward=onward(dep=T(2, 0, day=8))) == T(2, 0, day=8))
+check("a belt, for three quarters of an hour",
+      N.expiry(N.BELT, d_est, T(23, 50)) == T(23, 50) + timedelta(minutes=45))
+check("a diversion, for six hours", N.expiry(N.DIVERTED, d_est, T(22, 0)) == T(4, 0, day=8))
+check("a kind nobody wrote a rule for: none, and dispatch keeps its hour",
+      N.expiry("something new", d_est, T(20, 0)) is None)
+check("every message written carries one",
+      all(m.get("expires_at") for m in out_l + out_b + out + out3), [m.get("expires_at") for m in out_l + out_b])
+
 # ── THE RULE, OVER EVERY KIND THIS FILE PRODUCES ────────────────────────────
 #
 # THERE WAS ALREADY A CHECK FOR THIS and it was scoped to the 6E6188 replay --
@@ -535,7 +660,8 @@ check("no next leg, no connection message",
 # Scoped to every message any test in this file has built instead.
 print()
 print("-- and nothing anywhere sends the reader to the airline --")
-everything = [m for _, m in got] + out + out2 + out3 + out4 + out5 + out6 + out7
+everything = ([m for _, m in got] + out + out2 + out3 + out4 + out5 + out6 + out7
+              + out_l + out_t + out_c + out_r + out_m + out_b + out_nb + out_us + out_ot + out_lt)
 sent = [N.render(m) for m in everything
         if "check with" in N.render(m).lower() or "contact the airline" in N.render(m).lower()]
 check("NO message of any kind sends anyone to the airline", sent == [], sent)
