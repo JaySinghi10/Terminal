@@ -85,6 +85,8 @@ import {
   departureTs,
   // WHETHER A LEG IS LATE AT ITS GATE, AND BY HOW MUCH. See the chip.
   departurePhase,
+  // AND WHEN A LANDED ONE CAME DOWN. See the landed line.
+  arrivalOutcome,
   OWN_MSG,
 } from '../../lib/saved';
 // WHICH ROUTES ARE DRAWN, and the one conversion that builds a route from a
@@ -119,6 +121,8 @@ import {
   getStatusColor,
   // A DELAY WRITTEN AS THE CARD AND THE ROWS WRITE IT. See the chip.
   delayFigure,
+  // THE LANDING, IN THE WORDS THE CARD AND THE ROWS USE.
+  arrivalLine,
 } from '../../lib/flightstatus';
 // SURFACE_1 AND SURFACE_2 JOIN THEM FOR THE FOLDER HEADERS. See the scale in
 // lib/cards: level is decided by what sits UNDERNEATH, so a header on the page
@@ -1516,6 +1520,11 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   // lands on first and the clock is what it checks against -- which is the order
   // somebody actually uses them in.
   const cd = landed ? null : countdown(leg, now);
+  // AND A LANDED LEG SAYS WHEN IT CAME DOWN, where an unflown one counts down:
+  // "Landed 08:27 IST · 38m early", the open card's own words. Null until
+  // something measured the arrival -- see lib/arrival.ts.
+  const arrived = landed ? arrivalOutcome(leg, now) : null;
+  const landedLine = arrived === null ? null : arrivalLine(leg, arrived);
 
   // ── WHAT HAPPENED TO THIS LEG, WHEN SOMETHING DID ────────────────────────
   //
@@ -1603,6 +1612,10 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   // in the right-hand column is the route and the countdown, and the countdown is
   // the better half of what was there: it cannot go stale the way a quoted
   // timetable can, and it is the question somebody actually has.
+  //
+  // A LANDED LEG DOES PRINT A CLOCK, and it is not the exception it looks like:
+  // it is the landing, a measured fact that cannot go stale, in the countdown's
+  // own slot -- so the leg stays that one height too.
   //
   // 'next' IS NOT DEAD CODE, AND THIS NOTE EXISTS SO IT IS NOT READ AS SOME.
   // nextLegIndex, nextIdx and the LegState member are all still computed and
@@ -1710,6 +1723,28 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
                   countdown.value alone -- so greening the label here would be
                   colouring something that surface has no counterpart for. */}
               <Text style={[st.legTimeValue, st.legCountdown]}>{cd.value}</Text>
+            </View>
+          )}
+          {/* THE LANDING, IN THE SLOT THE COUNTDOWN HOLDS ON AN UNFLOWN LEG, so a
+              landed row is the same height as the rows around it. The clock
+              keeps the value's weight; its zone and the figure ride a size down,
+              the figure amber when it was late. */}
+          {landedLine !== null && (
+            <View style={st.legTimeRow}>
+              <Text style={st.legTimeLabel}>
+                {landedLine.word === 'landed' ? 'Landed' : 'Arrived'}
+              </Text>
+              <Text style={st.legTimeValue}>
+                {landedLine.clock.clock}
+                <Text style={st.legArrTail}>
+                  {landedLine.clock.zone !== null ? ` ${landedLine.clock.zone}` : ''}
+                </Text>
+                {landedLine.offset !== null && (
+                  <Text style={[st.legArrTail, landedLine.isLate && st.legArrTailLate]}>
+                    {` · ${landedLine.offset}`}
+                  </Text>
+                )}
+              </Text>
             </View>
           )}
           {/* THE BELT, WHEN showsBelt ALLOWS ONE AND NOT OTHERWISE. That rule is
@@ -3988,6 +4023,10 @@ const st = StyleSheet.create({
   // countdown() call, and one hex written twice is how the row and the card it
   // collapses into come to disagree.
   legCountdown: { color: CD_GREEN },
+  // A LANDED LEG'S ZONE AND FIGURE, at the 13 this file already uses, under the
+  // clock's 15 and in the label's ink, amber when the landing was late.
+  legArrTail: { fontFamily: MONO, fontSize: 13, color: DIM },
+  legArrTailLate: { color: CD_LATE },
 
   // ── THE OTHER TRIPS ──
   // gap 4 RATHER THAN 8, because the rows carry 8 of their own padding now and

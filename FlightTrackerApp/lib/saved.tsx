@@ -88,6 +88,8 @@ import {
 // WHERE A DEPARTURE STANDS. The rule is in its own file so it can be tested
 // under plain node; departurePhase below is what the screens call.
 import { fr24TakeoffTs, phaseOfDeparture, type DeparturePhase } from './departure';
+// AND WHEN IT CAME DOWN, from its own file for the same reason.
+import { arrivalOutcomeOf, type ArrivalOutcome } from './arrival';
 // ── FAKE FLIGHTS, AND THE ONE THING THE STORE HAS TO KNOW ABOUT THEM ────────
 //
 // isDevFixture IS A STRING TEST ON A FLIGHT NUMBER and nothing more. It is
@@ -666,6 +668,18 @@ export type { DeparturePhase };
 
 export function departurePhase(f: SavedFlight, now: number): DeparturePhase {
   return phaseOfDeparture(f, now, effectiveStatus(f, now));
+}
+
+// ── AND WHEN IT CAME DOWN, AND HOW EARLY OR LATE ────────────────────────────
+//
+// THE OTHER END OF THE SAME JOB: "landed 08:27 IST · 38m early" on every row
+// and card that shows a finished flight. The rule is lib/arrival.ts's; this
+// supplies the effective status, so a landing the clock refuses is never
+// given a time. Null when there is no measured arrival to state.
+export type { ArrivalOutcome };
+
+export function arrivalOutcome(f: SavedFlight, now: number): ArrivalOutcome | null {
+  return arrivalOutcomeOf(f, now, effectiveStatus(f, now));
 }
 
 // ── SINCE WHEN THE AIRCRAFT HAS BEEN FLYING, FOR ANYTHING THAT DRAWS IT ─────

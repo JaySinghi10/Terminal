@@ -93,6 +93,8 @@ import {
   // THE AMBER THIS APP ALREADY USES FOR LATE, for the one state that is not a
   // verdict: a booking the airline cancelled without naming its flights.
   CD_LATE,
+  // "landed 08:27 IST · 38m early", for the archive's finished rows.
+  arrivalWords,
 } from '../../lib/flightstatus';
 // THE SWIPE, AND EVERY PIECE IT IS MADE OF. The button, the expanding box, the
 // threshold's haptic, the geometry, the spring, the fills, the glyphs and the
@@ -804,8 +806,11 @@ const SavedFlightRow = memo(function SavedFlightRow({
           than by the record. A row in the archive whose arrival has passed is
           finished, so it says so and stops there; anything else keeps the live
           line, which is what a manually archived future flight still needs. */}
+      {/* AND A FINISHED ONE SAYS WHEN IT CAME DOWN AND HOW IT DID, in the same
+          grey, where there is a measured arrival to say it with; the bare word
+          otherwise, as before. See lib/arrival.ts. */}
       {archived && hasFlown(flight, now) ? (
-        <Text style={sf.landed}>{'landed'}</Text>
+        <Text style={sf.landed}>{arrivalWords(flight, now) ?? 'landed'}</Text>
       ) : (
         <StatusLine f={flight} now={now} numberOfLines={1} style={{ marginTop: 4 }} />
       )}

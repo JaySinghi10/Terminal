@@ -85,6 +85,8 @@ import {
   effectiveStatus, isArchived, BAG_WINDOW_MS, landedInstant,
   // WHERE THE DEPARTURE STANDS, and when the aircraft actually left the ground.
   departurePhase, airborneSince,
+  // AND WHEN IT CAME DOWN, against its timetable.
+  arrivalOutcome,
 } from '../lib/saved';
 // INDEPENDENT CORROBORATION, AND ONLY FOR A LOST FLIGHT. See lib/adsb.ts: it
 // cannot change a status, it cannot set a landing, and its usual answer is
@@ -107,6 +109,8 @@ import {
   // THE DEPARTURE'S WORDS, written once there for the rows and the card alike.
   countingWords,
   departureLine,
+  // AND THE ARRIVAL'S: "landed 08:27 IST · 38m early".
+  arrivalLine,
   // StatusWord IS GONE FROM THIS IMPORT AND HAS NO CALLER ANYWHERE NOW. The trip
   // card's pill was its only render site and reads flight.status directly instead
   // -- see the note there. The function itself is still declared in
@@ -2534,6 +2538,33 @@ export function FlightCard({
   const depLine = flightRecord !== null && depPhase !== null
     ? departureLine(flightRecord, depPhase)
     : null;
+  // ── AND WHEN IT CAME DOWN, ONCE IT HAS ────────────────────────────────────
+  //
+  // "Landed 08:27 · 38m early", from the record for the reason the phase above
+  // is: the card model is built once and a landing arrives later. Null until
+  // there is a measured arrival -- see lib/arrival.ts -- and then every place
+  // this card states the arrival states that one.
+  const arrOutcome = flightRecord !== null ? arrivalOutcome(flightRecord, now) : null;
+  const arrLine = flightRecord !== null && arrOutcome !== null
+    ? arrivalLine(flightRecord, arrOutcome)
+    : null;
+  // THE ARRIVAL CELL FOR THE MOVEMENT LINE AND THE SHEET'S TILE, in the shape
+  // movementTile returns, so both render it with no change of their own. The
+  // zone and the phone's time only where the caller asks, as movementTile
+  // gives them only where it is handed a clock.
+  const landedCell = (zoned: boolean) => {
+    if (arrLine === null) return null;
+    const zone = zoned && arrLine.clock.zone !== null ? ` ${arrLine.clock.zone}` : '';
+    const offset = arrLine.offset !== null ? ` · ${arrLine.offset}` : '';
+    return {
+      label: arrLine.word === 'landed' ? 'Landed' : 'Arrived',
+      value: arrLine.clock.clock,
+      suffix: zone + offset === '' ? undefined : zone + offset,
+      tone: arrLine.isLate ? 'late' as const : 'ontime' as const,
+      twoLines: true,
+      note: zoned && arrLine.clock.yours !== null ? arrLine.clock.yours : undefined,
+    };
+  };
   // CALLED UNCONDITIONALLY, read only when mapVariant. A hook behind an if is
   // not a hook.
   const insets = useSafeAreaInsets();
@@ -3588,7 +3619,9 @@ export function FlightCard({
                       // white in both places, and neither claims the flight is
                       // running to time.
                       movementTile(flight.depTimeLabel, flight.depTimeValue, flight.depDelay, depClock(flight)),
-                      movementTile(flight.arrTimeLabel, flight.arrTimeValue, flight.arrDelay, arrClock(flight)),
+                      // ONCE IT HAS COME DOWN, THE LANDING: see landedCell.
+                      landedCell(true)
+                        ?? movementTile(flight.arrTimeLabel, flight.arrTimeValue, flight.arrDelay, arrClock(flight)),
                     ]}
                   />
 
@@ -4932,6 +4965,49 @@ export function FlightCard({
                                   </Text>
                                 </View>
                               </View>
+                            ) : arrLine !== null ? (
+                              /* ── THE LANDING ITSELF, ONCE THE BELT HAS HAD ITS
+                                 WINDOW ──
+                                 LANDED AND THE TOUCHDOWN, or ARRIVED and the gate
+                                 time when that is all there is -- see
+                                 lib/arrival.ts -- with how early or late in words
+                                 beside it, the figure the landing notification
+                                 sent. It replaces ACTUAL ARR and the arrow offset,
+                                 which measured the provider's gate time: two
+                                 figures for one landing on one card would differ
+                                 by the length of the taxi. */
+                              <>
+                                <Text style={s.tripColHead} numberOfLines={1}>
+                                  {headLabel(arrLine.word === 'landed' ? 'Landed' : 'Arrived')}
+                                </Text>
+                                <Text
+                                  style={[
+                                    s.tripColTime,
+                                    arrLine.isLate ? s.tripColTimeLate : s.tripColTimeOnTime,
+                                  ]}
+                                  numberOfLines={1}
+                                >
+                                  {arrLine.clock.clock}
+                                  {arrLine.offset !== null && (
+                                    <Text
+                                      style={[s.tripColDelay,
+                                        arrLine.isLate && s.tripColDelayLate]}
+                                    >
+                                      {` ${arrLine.offset}`}
+                                    </Text>
+                                  )}
+                                </Text>
+                                {arrLine.clock.zone !== null && (
+                                  <Text style={s.tripColWhen} numberOfLines={1}>
+                                    {arrLine.clock.zone}
+                                  </Text>
+                                )}
+                                {arrLine.clock.yours !== null && (
+                                  <Text style={s.tripColYours} numberOfLines={1}>
+                                    {arrLine.clock.yours}
+                                  </Text>
+                                )}
+                              </>
                             ) : (
                               /* ACTUAL ARR WHEN THERE IS A RECORD, ARRIVED WHEN
                                  THE FLIGHT IS DOWN AND THERE IS NOT. See arrHead,
@@ -4996,6 +5072,21 @@ export function FlightCard({
                             )}
                           </View>
                         </View>
+                        {/* ── AND IN THE BAG WINDOW, UNDER THE BELT ──
+                            THE BELT IS THE ANSWER FOR THE FIRST FORTY-FIVE
+                            MINUTES, so the landing sits under it on the quiet
+                            line the air phase gives its departure, and the card
+                            says when it came down in both of its landed states. */}
+                        {beltState && arrLine !== null && (
+                          <Text style={s.tripQuiet} numberOfLines={1}>
+                            {arrLine.lead}
+                            {arrLine.offset !== null && (
+                              <Text style={arrLine.isLate && s.tripColDelayLate}>
+                                {` · ${arrLine.offset}`}
+                              </Text>
+                            )}
+                          </Text>
+                        )}
                         {/* THE ROUTE STAYS, AND THE ARGUMENT FOR DROPPING IT LOST
                             TO ONE OBSERVATION: every collapsed leg above and below
                             prints DXB -> BOM, so a card without it would mean
@@ -5193,7 +5284,8 @@ export function FlightCard({
                           cell={movementTile(flight.depTimeLabel, flight.depTimeValue, flight.depDelay)}
                         />
                         <MovementLine
-                          cell={movementTile(flight.arrTimeLabel, flight.arrTimeValue, flight.arrDelay)}
+                          cell={landedCell(false)
+                            ?? movementTile(flight.arrTimeLabel, flight.arrTimeValue, flight.arrDelay)}
                         />
                       </View>
                     </View>

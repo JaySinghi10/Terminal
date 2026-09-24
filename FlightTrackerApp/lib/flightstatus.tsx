@@ -27,8 +27,12 @@ import { zonedIsoToTs, clock24, yourTime, zoneAbbrAt, clockInZone } from './time
 import { airportByCode } from './airports';
 // THE RULE ABOUT A STORED STATUS, imported rather than copied. It is the store's
 // because the refresh loop and the archive split read it too; this file is one
-// more reader. The departure's phase is the store's for the same reason.
-import { effectiveStatus, departurePhase, type DeparturePhase } from './saved';
+// more reader. The departure's phase is the store's for the same reason, and
+// so is the arrival's outcome.
+import {
+  effectiveStatus, departurePhase, arrivalOutcome,
+  type DeparturePhase, type ArrivalOutcome,
+} from './saved';
 // WHEN THE APP LAST FETCHED A FLIGHT, for the label. Its own file, so that this
 // module can read it without adding to the import it already has from saved.
 import { useCheckedAt } from './checked';
@@ -229,13 +233,13 @@ export function countingWords(minutes: number): string {
   return `delayed ${delayFigure(minutes)}`;
 }
 
-// A DEPARTURE INSTANT AS ITS OWN AIRPORT'S CLOCK. The zone label is the
-// provider's, read off the scheduled string as zonedClock reads it -- one
-// airport, one zone -- and the phone's time comes with it.
-function departureClock(f: SavedFlight, at: number): ZonedClock | null {
-  const clock = clockInZone(at, f.from.timezone);
+// AN INSTANT AS ITS OWN AIRPORT'S CLOCK, at either end of a flight. The zone
+// label is the provider's, read off that end's scheduled string as zonedClock
+// reads it -- one airport, one zone -- and the phone's time comes with it.
+function endpointClock(ep: SavedFlightEndpoint, at: number): ZonedClock | null {
+  const clock = clockInZone(at, ep.timezone);
   if (clock === null) return null;
-  return { clock, zone: zoneLabel(f.from.scheduled), yours: yourTime(at, f.from.timezone) };
+  return { clock, zone: zoneLabel(ep.scheduled), yours: yourTime(at, ep.timezone) };
 }
 
 // THE TWO PHASES THAT HAVE A TIME TO NAME, or null for every other: a count
@@ -249,7 +253,7 @@ export type DepartureLine = {
 
 export function departureLine(f: SavedFlight, p: DeparturePhase): DepartureLine | null {
   if (p.kind === 'leftGate') {
-    const z = departureClock(f, p.at);
+    const z = endpointClock(f.from, p.at);
     if (z === null) return null;
     return {
       lead: `left the gate ${clockWithZone(z)}`,
@@ -261,11 +265,51 @@ export function departureLine(f: SavedFlight, p: DeparturePhase): DepartureLine 
     };
   }
   if (p.kind === 'tookOff' && p.at !== null) {
-    const z = departureClock(f, p.at);
+    const z = endpointClock(f.from, p.at);
     if (z === null) return null;
     return { lead: `took off ${clockWithZone(z)}`, late: null, isLate: false, yours: z.yours };
   }
   return null;
+}
+
+// ── AND THE WORDS FOR HOW IT CAME DOWN ────────────────────────────────────
+//
+// "landed 08:27 IST · 38m early", or "arrived" when the time is the gate's --
+// see lib/arrival.ts. Early, late, or "on time" at exactly the minute: a
+// flight in two minutes early is two minutes early, and that is worth saying.
+export function arrivalOffsetWords(offsetMin: number): string {
+  if (offsetMin > 0) return `${delayFigure(offsetMin)} late`;
+  if (offsetMin < 0) return `${delayFigure(-offsetMin)} early`;
+  return 'on time';
+}
+
+export type ArrivalLine = {
+  word: 'landed' | 'arrived';
+  clock: ZonedClock;       // the arrival airport's clock, its zone, the phone's
+  lead: string;            // "landed 08:27 IST"
+  offset: string | null;   // "38m early", "12m late", "on time"; null unscheduled
+  isLate: boolean;
+};
+
+export function arrivalLine(f: SavedFlight, a: ArrivalOutcome): ArrivalLine | null {
+  const z = endpointClock(f.to, a.at);
+  if (z === null) return null;
+  return {
+    word: a.word,
+    clock: z,
+    lead: `${a.word} ${clockWithZone(z)}`,
+    offset: a.offsetMin === null ? null : arrivalOffsetWords(a.offsetMin),
+    isLate: a.offsetMin !== null && a.offsetMin > 0,
+  };
+}
+
+// THE WHOLE LINE AS ONE STRING, for a surface that sets it in a single colour:
+// the archive rows. Null when there is no measured arrival to state.
+export function arrivalWords(f: SavedFlight, now: number): string | null {
+  const a = arrivalOutcome(f, now);
+  const line = a === null ? null : arrivalLine(f, a);
+  if (line === null) return null;
+  return line.offset === null ? line.lead : `${line.lead} · ${line.offset}`;
 }
 
 // scheduled/active: estimated vs scheduled. landed: actual (else estimated) vs scheduled.
@@ -372,6 +416,31 @@ function flightLineSegments(
   const watchedTail: LineSeg | null = checkedAt !== null && hideAbsolute !== true
     ? { text: ` · updated ${timeAgo(shownAt, now)}`, color: CD_AGE }
     : null;
+
+  // ── A LANDED ROW SAYS WHEN IT CAME DOWN, AND HOW IT DID ───────────────────
+  //
+  // "landed 08:27 IST · 38m early". It read "landed · 1h 5m ago · 38m early",
+  // which asked the reader to work out the clock from an interval and measured
+  // the figure against whatever the provider last called the arrival. The time
+  // is now the touchdown and the figure the same one the landing notification
+  // sends -- see lib/arrival.ts. Late is amber, early the quiet ink an early
+  // figure has always taken on a row.
+  //
+  // NOT GATED ON FRESHNESS, unlike the countdowns below: a landing time is a
+  // fact about the past and does not go stale. With nothing measured, the row
+  // falls through to what it said before.
+  if (s === 'landed') {
+    const a = arrivalOutcome(f, now);
+    const line = a === null ? null : arrivalLine(f, a);
+    if (line !== null) {
+      const segs: LineSeg[] = [{ text: line.lead, color: getStatusColor('landed'), head: true }];
+      if (line.offset !== null) {
+        segs.push({ text: ` · ${line.offset}`, color: line.isLate ? CD_LATE : CD_EARLY, head: true });
+      }
+      if (watchedTail) segs.push(watchedTail);
+      return segs;
+    }
+  }
 
   if (fresh && ep && ts != null) {
     if (s === 'landed') {
