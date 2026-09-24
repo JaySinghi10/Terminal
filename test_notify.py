@@ -95,11 +95,11 @@ check("the 13-minute arrival slip was swallowed (under fifteen)", N.ARRIVAL_MOVE
 check("the revised actual was swallowed (no time was ever claimed)", N.DEPARTED not in kinds(got))
 landed_text = N.render(got[0][1])
 check("landed text carries the feed's time in the airport's zone and the belt",
-      landed_text == "Your flight to Bangalore has landed, 11:42 PM IST. Bags on belt 2.", landed_text)
+      landed_text == "Landed at 11:42 PM IST, bags on belt 2", landed_text)
 check("landed once, never again", N.LANDED not in kinds(run(steps[5:], ns=ns)[1]))
-check("for the person meeting it, the subject is the origin",
-      N.render(got[0][1], owned=False) == "The flight from Mumbai has landed, 11:42 PM IST. Bags on belt 2.",
-      N.render(got[0][1], owned=False))
+check("for the person meeting it, the title is the origin and the body the same",
+      N.subject(got[0][1], owned=False) == "From Mumbai · 6E6188" and N.render(got[0][1], owned=False) == landed_text,
+      (N.subject(got[0][1], owned=False), N.render(got[0][1], owned=False)))
 check("no sentence sends anyone to the airline", not any("check with" in N.render(m).lower() for _, m in got))
 check("no flight number leads a sentence", not any(N.render(m).startswith("6E") for _, m in got))
 
@@ -135,12 +135,12 @@ steps = [base("12", -600), base("12", -300),           # seeded far out with gat
 ns, got = run(steps)
 check("three gate messages then the cap notice, then silence",
       kinds(got) == [N.GATE, N.GATE, N.GATE, N.GATE_CAP], kinds(got))
-check("the first names the old gate", N.render(got[0][1]) == "Your flight to Bangalore has moved to gate 14, was 12.", N.render(got[0][1]))
+check("the first names the old gate", N.render(got[0][1]) == "Gate changed to 14", N.render(got[0][1]))
 check("the flip to 16 and back was invisible", not any(m["values"].get("gate") == "16" for _, m in got))
-check("the cap text", N.render(got[3][1]) == "Your flight to Bangalore's gate keeps changing. Terminal will show the current one when you open it.")
+check("the cap text", N.render(got[3][1]) == "Gate keeps changing, so open Terminal for the latest", N.render(got[3][1]))
 first_gate = run([base(None, -600), base(None, -300), base(None, 0), base("14", 5), base("14", 10)])[1]
 check("a first assignment inside the window is told with the terminal",
-      bool(first_gate) and N.render(first_gate[0][1]) == "Your flight to Bangalore departs from gate 14, Terminal 2.", N.render(first_gate[0][1]) if first_gate else None)
+      bool(first_gate) and N.render(first_gate[0][1]) == "Gate 14, Terminal 2", N.render(first_gate[0][1]) if first_gate else None)
 
 print("-- a gate that reverts after it was told --")
 steps = [base("12", -600), base("12", -300), base("12", 0), base("14", 5), base("14", 10), base("12", 35), base("12", 40)]
@@ -154,7 +154,7 @@ steps = [(sched - timedelta(days=3), dto(term="2", sched=sched), None),
          (sched - timedelta(hours=20), dto(term="1", sched=sched), None), (sched - timedelta(hours=19), dto(term="1", sched=sched), None)]
 got = run(steps)[1]
 check("a terminal change two days out waits for the 24-hour window", kinds(got) == [N.TERMINAL] and got[0][0] == sched - timedelta(hours=19), [(t, m["kind"]) for t, m in got])
-check("terminal text", N.render(got[0][1]) == "Your flight to Bangalore now departs from Terminal 1, not Terminal 2.", N.render(got[0][1]))
+check("terminal text", N.render(got[0][1]) == "Now leaving from Terminal 1", N.render(got[0][1]))
 
 # ── DELAY ───────────────────────────────────────────────────────────────────
 print("-- delay bands --")
@@ -171,10 +171,10 @@ steps = [dl(700, 0), dl(690, 0),                       # seed and inside 12h
 got = run(steps)[1]
 check("first, further, shorter, on time", kinds(got) == [N.DELAY, N.DELAY, N.DELAY, N.ON_TIME], kinds(got))
 texts = [N.render(m) for _, m in got]
-check("first delay text", texts[0] == "Your flight to Bangalore is delayed 40 min. Now expected 10:10 PM IST from Mumbai.", texts[0])
-check("further text", texts[1] == "Your flight to Bangalore is delayed further, now 1 h. Expected 10:30 PM IST.", texts[1])
-check("shorter text", texts[2] == "Your flight to Bangalore's delay has shortened to 15 min. Expected 9:45 PM IST.", texts[2])
-check("on-time text", texts[3] == "Your flight to Bangalore is back on schedule, 9:30 PM IST from Mumbai.", texts[3])
+check("first delay text", texts[0] == "Delayed 40 min, now leaving 10:10 PM IST", texts[0])
+check("further text", texts[1] == "Delayed again, now leaving 10:30 PM IST", texts[1])
+check("shorter text", texts[2] == "Less delayed, now leaving 9:45 PM IST", texts[2])
+check("on-time text", texts[3] == "Back on time for 9:30 PM IST", texts[3])
 far = run([(sched - timedelta(hours=30), dto(sched=sched), None), (sched - timedelta(hours=20), dto(est=sched + timedelta(hours=2), sched=sched), None),
            (sched - timedelta(hours=19), dto(est=sched + timedelta(hours=2), sched=sched), None)])[1]
 check("a two-hour delay twenty hours out is swallowed", far == [], kinds(far))
@@ -189,8 +189,8 @@ steps = [(sched - timedelta(hours=1), dto(sched=sched), None),
          (act + timedelta(minutes=50), dto("active", act=act, arr_est=sched + timedelta(hours=2, minutes=25), sched=sched, arr_sched=sched + timedelta(hours=2)), None)]
 got = run(steps)[1]
 check("departed, then one arrival move of 25 minutes; the 8-minute one swallowed", kinds(got) == [N.DEPARTED, N.ARRIVAL_MOVED], kinds(got))
-check("arrival text", N.render(got[1][1]) == "Your flight to Bangalore is now due around 11:55 PM IST, 25 min later.", N.render(got[1][1]))
-check("meeting-side subject", N.render(got[1][1], owned=False).startswith("The flight from Mumbai is now due"))
+check("arrival text", N.render(got[1][1]) == "Now landing around 11:55 PM IST", N.render(got[1][1]))
+check("meeting-side title", N.subject(got[1][1], owned=False) == "From Mumbai · 6E6188", N.subject(got[1][1], owned=False))
 
 # ── LANDED WITHOUT A BELT, THEN THE BELT ────────────────────────────────────
 print("-- belt after landing --")
@@ -206,16 +206,16 @@ steps = [(sched - timedelta(hours=1), dto(sched=sched), None),
          (land_at + timedelta(minutes=52), dto("landed", act=act, sched=sched, belt="9"), L)]
 got = run(steps)[1]
 check("landed without a belt, then the belt, then one change, then the cap", kinds(got) == [N.LANDED, N.BELT, N.BELT], kinds(got))
-check("landed text without belt", N.render(got[0][1]).endswith("has landed, 11:35 PM IST."), N.render(got[0][1]))
-check("belt text", N.render(got[1][1]) == "Your flight to Bangalore: bags on belt 5.", N.render(got[1][1]))
+check("landed text without belt", N.render(got[0][1]) == "Landed at 11:35 PM IST", N.render(got[0][1]))
+check("belt text", N.render(got[1][1]) == "Bags on belt 5", N.render(got[1][1]))
 late = run([(sched - timedelta(hours=1), dto(sched=sched), None), (land_at + timedelta(minutes=2), dto("active", act=act, sched=sched), L),
             (land_at + timedelta(hours=2), dto("landed", act=act, sched=sched, belt="5"), L), (land_at + timedelta(hours=2, minutes=2), dto("landed", act=act, sched=sched, belt="5"), L)])[1]
 check("a belt two hours after landing is not worth a buzz", kinds(late) == [N.LANDED], kinds(late))
 elsewhere = run([(sched - timedelta(hours=1), dto(sched=sched), None),
                  (land_at, dto("diverted", act=act, sched=sched), dict(L, diverted_to="VOHS"))])[1]
 check("a diversion says so and a landing elsewhere says so",
-      kinds(elsewhere) == [N.DIVERTED, N.LANDED] and "though not at Bangalore" in N.render(elsewhere[1][1]), [N.render(m) for _, m in elsewhere])
-check("diversion text", N.render(elsewhere[0][1]) == "Your flight to Bangalore has been diverted. Terminal does not yet know where it landed, and will say when it does.")
+      kinds(elsewhere) == [N.DIVERTED, N.LANDED] and N.render(elsewhere[1][1]) == "Landed, but not in Bangalore", [N.render(m) for _, m in elsewhere])
+check("diversion text", N.render(elsewhere[0][1]) == "Diverted, landing airport not known yet", N.render(elsewhere[0][1]))
 
 # ── CANCELLATION AND THE NEXT FLIGHT ────────────────────────────────────────
 print("-- cancellation --")
@@ -244,7 +244,7 @@ got = run([(sched - timedelta(hours=6), dto(sched=sched), None), (sched - timede
 # means anything is whether they can still get there, which is NEXT_MIN_LEAD.
 check("the earliest reachable departure wins, even one leaving before the cancelled flight would have",
       kinds(got) == [N.CANCELLED] and got[0][1]["values"]["next"]["flight_number"] == "AI2812", got[0][1]["values"] if got else None)
-check("cancellation text", N.render(got[0][1]) == "Your flight to Bangalore is cancelled. The next one leaves today at 8:00 PM IST, Air India AI2812.", N.render(got[0][1]))
+check("cancellation text", N.render(got[0][1]) == "Cancelled, next is AI2812 today at 8:00 PM IST", N.render(got[0][1]))
 # ── BOTH EDGES OF THAT FLOOR, because a rule with only one test passes just as
 # happily when it is inverted. Ninety minutes is the line: a departure inside it
 # is unreachable and must not be offered, one outside it must.
@@ -273,8 +273,8 @@ steps = [(c0 - timedelta(hours=1), dto(sched=sched), None), (c0, dto("cancelled"
 ns, got = run(steps, lookup=lk)
 check("nothing for three days: cancelled now, next flight when found two polls later",
       kinds(got) == [N.CANCELLED, N.NEXT_FLIGHT], kinds(got))
-check("the first message admits the search honestly", N.render(got[0][1]) == "Your flight to Bangalore is cancelled. Terminal is looking for the next departure and will tell you.", N.render(got[0][1]))
-check("the follow-up names the day", N.render(got[1][1]) == "The next flight to Bangalore leaves Sunday at 6:05 AM IST, Air India AI2812.", N.render(got[1][1]))
+check("the first message admits the search honestly", N.render(got[0][1]) == "Cancelled, finding the next flight", N.render(got[0][1]))
+check("the follow-up names the day", N.render(got[1][1]) == "Next flight is AI2812 on Sunday at 6:05 AM IST", N.render(got[1][1]))
 check("three days in the first pass, then two per poll: 09,10,11 | 12,13", lk.calls == ["2026-09-09", "2026-09-10", "2026-09-11", "2026-09-12", "2026-09-13"], lk.calls)
 check("the search is closed", ns["next_search"]["done"] is True)
 more = run([(c0 + timedelta(hours=2), dto("cancelled", sched=sched), None)], ns=ns, lookup=lk)[1]
@@ -290,16 +290,16 @@ ns, got = run(steps, lookup=lk)
 # cancellation on a route with no service.
 check("an empty route stops at a week and says so once", kinds(got) == [N.CANCELLED, N.NEXT_FLIGHT] and len(lk.calls) == 7, (kinds(got), len(lk.calls)))
 check("the exhausted text says what it looked at, not that the schedule ends",
-      N.render(got[1][1]) == "Nothing else to Bangalore on this route in the next week.", N.render(got[1][1]))
+      N.render(got[1][1]) == "No other flight to Bangalore this week", N.render(got[1][1]))
 check("and the cancelled branch says the same thing about itself",
       N.render(dict(got[0][1], values={"none_within_days": N.NEXT_MAX_DAYS}))
-      == "Your flight to Bangalore is cancelled. Nothing else on this route in the next week.",
+      == "Cancelled, no other flight this week",
       N.render(dict(got[0][1], values={"none_within_days": N.NEXT_MAX_DAYS})))
 
 withdrawn = run([(sched - timedelta(hours=6), dto(sched=sched), None), (sched - timedelta(hours=5), dto("cancelled", sched=sched), None),
                  (sched - timedelta(hours=4), dto("scheduled", sched=sched), None)], lookup=board({}))[1]
 check("a cancellation withdrawn is said, not swallowed", kinds(withdrawn) == [N.CANCELLED, N.CANCEL_WITHDRAWN])
-check("withdrawn text", N.render(withdrawn[1][1]) == "Your flight to Bangalore is no longer showing as cancelled. Scheduled 9:30 PM IST from Mumbai.", N.render(withdrawn[1][1]))
+check("withdrawn text", N.render(withdrawn[1][1]) == "No longer cancelled, leaving 9:30 PM IST", N.render(withdrawn[1][1]))
 
 print("-- the night --")
 far_sched = T(21, 30, day=12)
@@ -310,14 +310,20 @@ check("a 2 AM cancellation three days out is deferred to 7 AM at the airport",
 got = run([(night - timedelta(hours=1), dto(sched=T(9, 0, day=9)), None), (night, dto("cancelled", sched=T(9, 0, day=9)), None)], lookup=board({}))[1]
 check("a 2 AM cancellation of a 9 AM flight is not deferred", got[0][1]["deliver_after"] is None)
 
-# ── THE SUBJECT LADDER ──────────────────────────────────────────────────────
-print("-- the subject --")
+# ── THE TITLE ───────────────────────────────────────────────────────────────
+# THE DESTINATION LEADS AND THE NUMBER FOLLOWS, and the number is what used to
+# take a departure time and then an airline to say: which of two flights to one
+# city this is. See subject.
+print("-- the title --")
 m = got[0][1]
-check("one flight to the city", N.subject(m) == "Your flight to Bangalore")
-check("two to the same city that day: the time joins", N.subject(m, same_city=2) == "Your 9:00 AM flight to Bangalore", N.subject(m, same_city=2))
-check("same city and same time: the airline joins", N.subject(m, same_city=2, same_time=2) == "Your 9:00 AM IndiGo flight to Bangalore")
-check("meeting it: the origin leads", N.subject(m, owned=False, same_city=2) == "The 9:00 AM flight from Mumbai")
-check("owned unknown reads as on it", N.subject(m, owned=None) == "Your flight to Bangalore")
+check("the destination leads, then the number", N.subject(m) == "To Bangalore · 6E6188", N.subject(m))
+check("two to the same city at the same time: nothing else joins",
+      N.subject(m, same_city=2, same_time=2) == "To Bangalore · 6E6188", N.subject(m, same_city=2, same_time=2))
+check("meeting it: the origin leads", N.subject(m, owned=False) == "From Mumbai · 6E6188", N.subject(m, owned=False))
+check("owned unknown reads as on it", N.subject(m, owned=None) == "To Bangalore · 6E6188")
+check("no city known: the number alone",
+      N.subject(dict(m, destination={})) == "6E6188", N.subject(dict(m, destination={})))
+check("no body repeats the title", not N.render(m).startswith(("To ", "From ", "Your flight")), N.render(m))
 
 # ── NOT TWICE ───────────────────────────────────────────────────────────────
 print("-- not twice --")
@@ -478,22 +484,15 @@ def seeded(d):
 
 ns, out = run(home(arr_est=T(0, 45, day=8)), onward(dep=T(2, 0, day=8)))
 check("one message when the band worsens", [m["kind"] for m in out] == [N.CONNECTION], out)
-check("it names the onward flight and what is left",
-      "6E777" in N.render(out[0]) and "1 h 15 min" in N.render(out[0]), N.render(out[0]))
-# THE SUBJECT ALREADY PLACED THE READER. "your flight to Bangalore ... in
-# Bangalore" is what this wording exists to avoid; see render.
-check("connection text, with the hub said once",
-      N.render(out[0]) == "Your flight to Bangalore is running late enough to put 6E777"
-                          " at risk -- about 1 h 15 min between them,"
-                          " where 1 h is the usual minimum.",
-      N.render(out[0]))
-# AND IT IS KEPT WHERE THE SUBJECT COULD NOT SAY IT. A leg whose arrival city
-# never reached the DTO gets a subject with no place in it, and then this
-# clause is the only thing telling the reader where they will be.
+# THE HUB IS NAMED, AND ONLY THE HUB: where the reader will be standing. The
+# onward flight and the minutes are on the screen the tap opens.
+check("connection text", N.render(out[0]) == "Your connection in Bangalore is at risk", N.render(out[0]))
+check("and the values still carry the onward flight and what is left, for the screen",
+      out[0]["values"]["next"]["flight_number"] == "6E777" and out[0]["values"]["remaining_min"] == 75, out[0]["values"])
 placeless = copy.deepcopy(out[0])
-placeless["destination"] = {"iata": "BLR", "city": None}
-check("and the hub IS named when the subject could not name it",
-      " in Bangalore" in N.render(placeless), N.render(placeless))
+placeless["values"] = dict(placeless["values"], hub=None)
+check("with no hub known it still says the connection is at risk",
+      N.render(placeless) == "Your connection is at risk", N.render(placeless))
 check("a tap opens the flight at risk, not the delayed one",
       N.deep_link(out[0]) == {"screen": "flight", "flight_number": "6E777", "date": "2026-09-08"},
       N.deep_link(out[0]))
@@ -503,9 +502,7 @@ check("the same band again says nothing", out2 == [], out2)
 
 ns3, out3 = run(home(arr_est=T(1, 30, day=8)), onward(dep=T(2, 0, day=8)), prior=ns)
 check("a worse band speaks once more", [m["kind"] for m in out3] == [N.CONNECTION], out3)
-check("miss text",
-      N.render(out3[0]).startswith("Your flight to Bangalore is running late enough to miss 6E777"),
-      N.render(out3[0]))
+check("miss text", N.render(out3[0]) == "Your connection in Bangalore won't hold", N.render(out3[0]))
 check("and it does not send them to the airline",
       "check with" not in N.render(out3[0]).lower(), N.render(out3[0]))
 

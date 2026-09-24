@@ -150,7 +150,7 @@ sent = w.sends()
 check("one send call", len(sent) == 1 and len(sent[0]) == 1, sent)
 env = sent[0][0] if sent and sent[0] else {}
 check("addressed to the device's token", env.get("to") == "ExponentPushToken[aaa]", env.get("to"))
-check("the title leads with the destination", env.get("title") == "Your flight to Delhi", env.get("title"))
+check("the title leads with the destination", env.get("title") == "To Delhi · AI505", env.get("title"))
 check("the body is notify's sentence", "gate" in (env.get("body") or "").lower(), env.get("body"))
 check("the tap target is the flight", (env.get("data") or {}).get("screen") == "flight", env.get("data"))
 check("reported as sent", out.get("sent") == 1, out)
@@ -244,8 +244,8 @@ w11 = World([one, two], states_two).install()
 w11.reply = ok_tickets(1)
 dispatch.run_once(now=NOW, post=w11.post)
 t11 = w11.sends()[0][0]["title"] if w11.sends() else ""
-check("two flights to the same city: the time joins",
-      t11 == "Your 9:30 PM flight to Delhi", t11)
+check("two flights to the same city: the number tells them apart",
+      t11 == "To Delhi · AI505", t11)
 
 # same city AND same clock time on both: the airline has to separate them
 states_same = [state("AI505", outbox=[msg("AI505", key="kb")]),
@@ -255,8 +255,8 @@ w12 = World([one, two], states_same).install()
 w12.reply = ok_tickets(1)
 dispatch.run_once(now=NOW, post=w12.post)
 t12 = w12.sends()[0][0]["title"] if w12.sends() else ""
-check("same city and same time: the airline joins",
-      t12 == "Your 9:30 PM Air India flight to Delhi", t12)
+check("same city and same time: still the number, nothing more",
+      t12 == "To Delhi · AI505", t12)
 
 print("-- meeting the flight --")
 w13 = World([watched("AI505", [device(owned=False)])],
@@ -265,7 +265,7 @@ w13.reply = ok_tickets(1)
 dispatch.run_once(now=NOW, post=w13.post)
 t13 = w13.sends()[0][0]["title"] if w13.sends() else ""
 check("a person meeting it hears about the origin",
-      t13 == "The flight from Mumbai", t13)
+      t13 == "From Mumbai · AI505", t13)
 
 print("-- two readers, one flight --")
 pair = watched("AI505", [device("dev-1", "ExponentPushToken[aaa]"),
@@ -276,7 +276,7 @@ dispatch.run_once(now=NOW, post=w14.post)
 batch = w14.sends()[0] if w14.sends() else []
 check("one call carries both", len(batch) == 2, batch)
 check("each hears it their own way",
-      {e["title"] for e in batch} == {"Your flight to Delhi", "The flight from Mumbai"},
+      {e["title"] for e in batch} == {"To Delhi · AI505", "From Mumbai · AI505"},
       [e["title"] for e in batch])
 check("two slots, one per device", len(w14.slots()) == 2, w14.slots())
 
