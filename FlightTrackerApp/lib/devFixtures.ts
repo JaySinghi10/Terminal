@@ -638,6 +638,28 @@ function clock12(ms: number, offsetMin: number): string {
   return clockText(ms, offsetMin, '').trim();
 }
 
+// notify.py _at: every clock a push prints is 24-hour with its zone, "21:15
+// BST", as the app prints them.
+function clockText24(ms: number, offsetMin: number, tzLabel: string): string {
+  const d = new Date(ms + offsetMin * 60_000);
+  const hm = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+  return tzLabel ? `${hm} ${tzLabel}` : hm;
+}
+
+// notify.py _24h, for a clock that arrives as text: "17:05" from "5:05 PM".
+function hm24(text: string): string {
+  return text.replace(/\b(\d{1,2}):(\d{2})\s?([AP])M\b/gi, (_m, h: string, mm: string, ap: string) =>
+    `${String((Number(h) % 12) + (ap.toUpperCase() === 'P' ? 12 : 0)).padStart(2, '0')}:${mm}`);
+}
+
+// notify.py subject and TITLE_MAX: the route and the number, by city when it
+// fits on one lock-screen line and by airport code when it would be cut off.
+const TITLE_MAX = 26;
+function routeTitle(from: { city: string; iata: string }, to: { city: string; iata: string }, number: string): string {
+  const byCity = `${from.city} → ${to.city} · ${number}`;
+  return byCity.length <= TITLE_MAX ? byCity : `${from.iata} → ${to.iata} · ${number}`;
+}
+
 // notify.py _day_label: "today", "tomorrow", a weekday inside the week, or
 // "25 Sep" beyond it, all read in the departure airport's own day.
 function dayWord(ms: number, now: number, offsetMin: number): string {
@@ -662,10 +684,10 @@ function earlyOrLate(offsetMin: number): string {
   return `${d} ${offsetMin > 0 ? 'late' : 'early'}`;
 }
 
-// notify.py _when: "today at 5:05 PM PDT", "on Sunday at ...".
+// notify.py _when: "today at 17:05 PDT", "on Sunday at ...".
 function whenWords(day: string, time: string, tz: string): string {
   const d = day === 'today' || day === 'tomorrow' ? day : `on ${day}`;
-  return `${d} at ${time}${tz ? ` ${tz}` : ''}`;
+  return `${d} at ${hm24(time)}${tz ? ` ${tz}` : ''}`;
 }
 
 export type SiteNotice =
@@ -696,7 +718,7 @@ function ba177(stage: 'gate' | 'delay' | 'air' | 'landed' | 'belt') {
   const t = Date.now();
   const lhr = sitePlace('LHR', t);
   const jfk = sitePlace('JFK', t);
-  const title = `To ${jfk.city} · BA177`;
+  const title = routeTitle(lhr, jfk, 'BA177');
   const base = { ...BA177, number: 'BA177', tripId: tripId() };
   if (stage === 'gate' || stage === 'delay') {
     const dep = t + 80 * MIN;
@@ -708,8 +730,8 @@ function ba177(stage: 'gate' | 'delay' | 'air' | 'landed' | 'belt') {
       rawStatus: slip ? 'Delayed' : 'Expected',
     });
     const body = slip
-      ? `Delayed 25 min, now leaving ${clockText(dep + slip, lhr.offset, lhr.tzLabel)}`
-      : 'Gate changed to B32';
+      ? `Your flight is delayed 25 min, now leaves at ${clockText24(dep + slip, lhr.offset, lhr.tzLabel)}`
+      : "Your flight's gate changed from B24 to B32";
     return { flight, notice: { kind: 'push' as const, title, body } };
   }
   if (stage === 'air') {
@@ -722,7 +744,7 @@ function ba177(stage: 'gate' | 'delay' | 'air' | 'landed' | 'belt') {
       status: 'active',
       rawStatus: 'EnRoute',
     });
-    return { flight, notice: { kind: 'push' as const, title, body: `Took off, landing around ${clockText(due, jfk.offset, jfk.tzLabel)}` } };
+    return { flight, notice: { kind: 'push' as const, title, body: `Your flight took off and lands around ${clockText24(due, jfk.offset, jfk.tzLabel)}` } };
   }
   const down = stage === 'belt' ? t - 14 * MIN : t - 3 * MIN;
   const sched = down - 9 * MIN;
@@ -736,8 +758,8 @@ function ba177(stage: 'gate' | 'delay' | 'air' | 'landed' | 'belt') {
     landedMs: down,
   });
   const body = stage === 'belt'
-    ? 'Bags on belt 9'
-    : `Landed at ${clockText(down, jfk.offset, jfk.tzLabel)}, ${earlyOrLate(Math.round((down - sched) / MIN))}`;
+    ? 'Your bags are on belt 9'
+    : `Your flight landed at ${clockText24(down, jfk.offset, jfk.tzLabel)}, ${earlyOrLate(Math.round((down - sched) / MIN))}`;
   return { flight, notice: { kind: 'push' as const, title, body } };
 }
 
@@ -837,13 +859,14 @@ export function devAlternatives(f: SavedFlight, now: number = Date.now()): Alter
   };
 }
 
-const TO_LONDON = 'To London · BA286';
+// "San Francisco → London · BA286" is thirty characters: SFO → LHR · BA286.
+const BA286_TITLE = routeTitle(SITE_PLACES.SFO, SITE_PLACES.LHR, 'BA286');
 
 export const SITE_SHOTS: SiteShot[] = [
   {
     key: 'site-gate',
     label: 'Site 1 · BA177 gate changed',
-    note: 'My Flights. Notification: Gate changed to B32.',
+    note: 'My Flights. Notification: gate changed from B24 to B32.',
     build: () => { const b = ba177('gate'); return { flights: [b.flight], pending: [], notice: b.notice }; },
   },
   {
@@ -882,7 +905,7 @@ export const SITE_SHOTS: SiteShot[] = [
     note: 'My Flights. BA286 40 min late. Notification: at risk.',
     build: () => ({
       flights: trip286({ late: 40 }), pending: [],
-      notice: { kind: 'push', title: TO_LONDON, body: 'Your connection in London is at risk' },
+      notice: { kind: 'push', title: BA286_TITLE, body: 'Your connection to LX325 in London is at risk' },
     }),
   },
   {
@@ -891,7 +914,7 @@ export const SITE_SHOTS: SiteShot[] = [
     note: 'My Flights. BA286 70 min late. Notification: won’t hold.',
     build: () => ({
       flights: trip286({ late: 70 }), pending: [],
-      notice: { kind: 'push', title: TO_LONDON, body: 'Your connection in London won’t hold' },
+      notice: { kind: 'push', title: BA286_TITLE, body: "Your connection to LX325 in London won't hold" },
     }),
   },
   {
@@ -903,9 +926,9 @@ export const SITE_SHOTS: SiteShot[] = [
       const alt = devAlternatives(flights[0]);
       const next = alt?.rows[0];
       const body = next
-        ? `Cancelled, next is ${next.flightNumber} ${whenWords(next.day, next.time, next.tz ?? '')}`
-        : 'Cancelled, finding the next flight';
-      return { flights, pending: [], notice: { kind: 'push', title: TO_LONDON, body } };
+        ? `Your flight is cancelled, next is ${next.flightNumber} ${whenWords(next.day, next.time, next.tz ?? '')}`
+        : 'Your flight is cancelled, finding the next flight';
+      return { flights, pending: [], notice: { kind: 'push', title: BA286_TITLE, body } };
     },
   },
   {
