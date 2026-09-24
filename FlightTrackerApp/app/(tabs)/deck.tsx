@@ -28,6 +28,8 @@ import {
   // WHETHER A LEG HAS LANDED, AND WHEN IT ARRIVED. whereAmI asks the first and
   // budgetFor the second; neither is computed here any more.
   effectiveStatus, arrivalTs,
+  // AND WHETHER IT HAS TAKEN OFF, which is not whether its time has passed.
+  airborneSince,
 } from '../../lib/saved';
 // THE RECORD ITSELF comes from storage, which is where it is declared -- saved
 // re-exports nothing and a type imported from the wrong file is a second name
@@ -188,8 +190,11 @@ function whereAmI(list: SavedFlight[], now: number): Where {
   if (hasLanded && after !== null) return layover(leg, after);
   if (hasLanded) return none;                         // the journey is over
 
-  const dep = departureTs(leg);
-  if (dep !== null && dep <= now) {
+  // IN THE AIR ONCE IT HAS TAKEN OFF, NOT ONCE ITS TIME HAS COME. This read
+  // the departure clock, so a flight an hour late at its gate sent the Deck to
+  // the airport it had not left for. The takeoff decides it now; see
+  // airborneSince, which keeps the clock only for a record too old to say.
+  if (airborneSince(leg, now) !== null) {
     // In the air: the airport that matters is the one being flown to.
     return { ...none, airport: (leg.to.iata || '').toUpperCase() || null, kind: 'airborne' };
   }

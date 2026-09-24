@@ -4,7 +4,7 @@ const LEGACY_KEY = 'savedFlights';
 const KEY_PREFIX = 'savedFlights:';
 const GUEST_KEY = `${KEY_PREFIX}guest`;
 const BACKUP_PREFIX = 'backup:v1:';
-const SCHEMA_VERSION = 14;
+const SCHEMA_VERSION = 15;
 // ── NOT A LIMIT TODAY, AND THE NUMBER SAYS SO ──────────────────────────────
 //
 // TWENTY WAS COSTING MORE THAN IT BOUGHT. A single real booking is three or
@@ -50,6 +50,16 @@ export type SavedFlightEndpoint = {
   // 18:14. actualIso is the second of those and this is the first. Seven
   // minutes apart there, and different again at every airport.
   runwayIso: string | null;
+  // WHETHER THE PROVIDER HAS LIVE COVERAGE OF THIS MOVEMENT, as the DTO's
+  // live_feed says: its times are corrected as the flight happens rather than
+  // copied from a timetable. null on a record from before v15 and on a
+  // response that omitted it.
+  //
+  // IT IS WHAT MAKES A GATE TIME BELIEVABLE. A "revised" actual on a movement
+  // with no live coverage can be the schedule copied across, and printing it
+  // as the moment the aircraft left the gate would be inventing that moment.
+  // See gateTs in lib/departure.ts, which mirrors the server's _row_departed.
+  liveFeed: boolean | null;
 };
 
 export type SavedFlight = {
@@ -116,6 +126,20 @@ export type SavedFlight = {
   // same reason it carries the other four -- a /flight response knows nothing
   // about FR24 and would null it once a minute.
   divertedTo: string | null;
+  // ── WHEN FR24 SAW IT LEAVE THE GROUND ─────────────────────────────────────
+  //
+  // A UTC INSTANT, like landedUtc and for the same reason. The server has sent
+  // it on every /watched and /landing answer all along and nothing on this
+  // side kept it. The poller asks FR24 every two minutes from ninety before
+  // departure, and an open app reads /watched once a minute, so it lands here
+  // a few minutes after FR24 has it.
+  //
+  // KEPT ONLY FROM A 'pending' OR 'landed' ANSWER, which is the poller's own
+  // rule in _has_departed: the other two outcomes assert nothing, and an
+  // 'unknown' can carry the takeoff of a different day's leg.
+  //
+  // FR24's OWN, so touchSavedFlight carries it forward with the other five.
+  takeoffUtc: string | null;
   // WHEN THE USER ARCHIVED IT BY HAND, or null if they never did.
   //
   // The archive is otherwise derived: index.tsx calls a flight archived once its
@@ -267,6 +291,7 @@ function endpointFromApi(raw: any): SavedFlightEndpoint {
     actualSource: raw?.actual_source ?? null,
     estimatedSource: raw?.estimated_source ?? null,
     runwayIso: raw?.runway_iso ?? null,
+    liveFeed: typeof raw?.live_feed === 'boolean' ? raw.live_feed : null,
   };
 }
 
@@ -329,6 +354,7 @@ export function savedFlightFromApi(data: any): SavedFlight {
     landingCheck: null,
     landingCheckedAt: null,
     divertedTo: null,
+    takeoffUtc: null,
     // A fresh lookup is never manually archived. touchSavedFlight carries the
     // stored value forward, so a refresh cannot silently un-archive anything.
     archivedAt: null,
@@ -522,6 +548,25 @@ function normalizeRecord(flight: SavedFlight): { record: SavedFlight | null; cha
   if (version < 14 && flight.divertedTo === undefined) {
     flight.divertedTo = null;
     changed = true;
+  }
+
+  // v14 -> v15: FR24's takeoff and the provider's live coverage.
+  //
+  // null IS CORRECT FOR BOTH. No stored record ever kept a takeoff, and a
+  // flight that has already left will not be asked again; a live coverage flag
+  // fills in on the next refresh. Until it does, the record's gate time is not
+  // believed, which is how every record read before this existed.
+  if (version < 15) {
+    if (flight.takeoffUtc === undefined) {
+      flight.takeoffUtc = null;
+      changed = true;
+    }
+    for (const ep of [flight.from, flight.to]) {
+      if (ep && ep.liveFeed === undefined) {
+        ep.liveFeed = null;
+        changed = true;
+      }
+    }
   }
 
   // AFTER the version blocks, not before them: v7 may have just supplied the
@@ -767,6 +812,9 @@ export async function setFlightLanding(
     // 'error' carries no diversion, and an absent one must not erase a
     // diversion an earlier check already established -- see below.
     divertedTo?: string | null;
+    // OPTIONAL, AND FOR THE SAME REASON AGAIN. A null says this answer had no
+    // takeoff, not that the aircraft never left.
+    takeoffUtc?: string | null;
   },
 ): Promise<SavedFlight[]> {
   const flights = await readKey(keyFor(email));
@@ -794,6 +842,12 @@ export async function setFlightLanding(
     // diverted was diverted, and a later null means we failed to ask rather
     // than that the aircraft went back.
     divertedTo: landing.divertedTo ?? prev.divertedTo ?? null,
+    // THE SAME RULE AGAIN: a new takeoff replaces the stored one, and an
+    // answer without one changes nothing. The first half matters more here
+    // than for the two above, because the one way a stored takeoff can be
+    // wrong is FR24 having matched another rotation of the number -- and the
+    // answer that corrects it is a new one.
+    takeoffUtc: landing.takeoffUtc ?? prev.takeoffUtc ?? null,
     // landedAt IS THE FLAG "a landing has been observed", and FR24 confirming
     // one IS observing it. The card gates the belt pill and the ARRIVED label
     // on this field, so a landing that set only landedUtc would change the
@@ -968,6 +1022,8 @@ export async function touchSavedFlight(
     // so without this line an ordinary refresh nulls it, once a minute, on
     // exactly the flight the field exists for.
     divertedTo: prev.divertedTo ?? null,
+    // AND THE SIXTH, for the same reason: AeroDataBox has never seen it.
+    takeoffUtc: prev.takeoffUtc ?? null,
   };
   await writeKey(keyFor(email), next);
   return next;

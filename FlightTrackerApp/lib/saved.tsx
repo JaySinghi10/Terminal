@@ -85,6 +85,9 @@ import {
   landingDue,
   landingWindowClosed,
 } from './landing';
+// WHERE A DEPARTURE STANDS. The rule is in its own file so it can be tested
+// under plain node; departurePhase below is what the screens call.
+import { fr24TakeoffTs, phaseOfDeparture, type DeparturePhase } from './departure';
 // ── FAKE FLIGHTS, AND THE ONE THING THE STORE HAS TO KNOW ABOUT THEM ────────
 //
 // isDevFixture IS A STRING TEST ON A FLIGHT NUMBER and nothing more. It is
@@ -533,9 +536,9 @@ export function hasFlown(f: SavedFlight, now: number): boolean {
 // A MEASUREMENT IS NOT A CLOCK. Flightradar24 watching an aircraft transmit
 // from the ground is evidence of an event, not the passage of time, and it is
 // the kind of thing the old rule was protecting the record FROM the absence of.
-// So landedUtc promotes, and only landedUtc: it is the single field on this
-// record written by a source that observes the aircraft rather than reporting
-// what an airline filed.
+// So landedUtc promotes, and takeoffUtc now does too: they are the two fields
+// on this record written by a source that observes the aircraft rather than
+// reporting what an airline filed. Nothing else promotes.
 //
 // AND AERODATABOX MAY STILL LAND A FLIGHT, in one narrow case -- see
 // aeroDataBoxMayLand. Frankfurt timed LH909 to the minute, touchdown and gate
@@ -601,6 +604,23 @@ export function effectiveStatus(f: SavedFlight, now: number): string {
 
   let s = f.status.toLowerCase();
 
+  // ── AND THE SECOND PROMOTION: FR24 SAW IT LEAVE THE GROUND ──
+  //
+  // THE SAME KIND OF EVIDENCE AS THE TOUCHDOWN ABOVE, one end earlier. A flight
+  // the provider still calls Boarding or Delayed while FR24 watches it climb is
+  // in the air, and the departure count would otherwise keep ticking on it.
+  //
+  // FROM 'scheduled' ONLY. A cancelled flight with a takeoff is two sources
+  // disagreeing, not one being late, and the wrong-rotation guard inside
+  // fr24TakeoffTs is not a strong enough reason to overrule a cancellation.
+  //
+  // AND IT EXEMPTS THE DEMOTION BELOW. That refuses an 'active' whose departure
+  // is still ahead, which is right for a provider's word and wrong for a
+  // measured takeoff: an estimate that has not caught up is not a reason to
+  // put an airborne aircraft back at its gate.
+  const airborne = fr24TakeoffTs(f, now) !== null;
+  if (s === 'scheduled' && airborne) s = 'active';
+
   // A STORED 'landed' AERODATABOX IS NO LONGER ENTITLED TO. Demoted to
   // 'active', which is what FR24 is actually saying when it answers 'pending',
   // and which the rules below then treat exactly as they treat any other
@@ -617,7 +637,7 @@ export function effectiveStatus(f: SavedFlight, now: number): string {
     // estimate, then the schedule.
     const ts = zonedIsoToTs(
       f.from.actualIso ?? f.from.estimatedIso ?? f.from.scheduledIso, f.from.timezone);
-    if (ts !== null && ts > now) return 'scheduled';
+    if (!airborne && ts !== null && ts > now) return 'scheduled';
     // ── AND THE OTHER END OF THE SAME QUESTION ──
     //
     // THE MIRROR OF THE 'landed' RULE ABOVE. That one refuses a landing which
@@ -634,6 +654,40 @@ export function effectiveStatus(f: SavedFlight, now: number): string {
     }
   }
   return s;
+}
+
+// ── WHERE THE DEPARTURE STANDS, BESIDE WHAT THE FLIGHT IS DOING ─────────────
+//
+// THE ONE PLACE A SCREEN ASKS whether a flight is late at its gate and by how
+// much, off the gate, or off the ground. The rule is lib/departure.ts's; this
+// supplies the effective status it needs, so the two questions are answered
+// from one reading of the record. Derived, never stored, like the rest here.
+export type { DeparturePhase };
+
+export function departurePhase(f: SavedFlight, now: number): DeparturePhase {
+  return phaseOfDeparture(f, now, effectiveStatus(f, now));
+}
+
+// ── SINCE WHEN THE AIRCRAFT HAS BEEN FLYING, FOR ANYTHING THAT DRAWS IT ─────
+//
+// THE MAP'S AIRCRAFT, THE DECK'S "WHERE YOU ARE HEADING" AND THE ARC ALL
+// SWITCHED AT THE DEPARTURE TIME, which put a delayed flight in the air while
+// it sat at its gate. They wait for the takeoff now, and this is the instant
+// they wait for: the measured takeoff when there is one, the departure the
+// record holds when the provider says the flight has gone with no takeoff
+// time, and null while it is still on the ground.
+//
+// A PHASE NOBODY CAN PLACE KEEPS THE OLD RULE. 'unknown' is a record too old
+// to say whether the aircraft has left, and there the departure time passing
+// is still the best there is -- which is exactly how all three behaved before.
+export function airborneSince(f: SavedFlight, now: number): number | null {
+  const p = departurePhase(f, now);
+  if (p.kind === 'tookOff') return p.at ?? departureTs(f);
+  if (p.kind === 'unknown') {
+    const dep = departureTs(f);
+    return dep !== null && dep <= now ? dep : null;
+  }
+  return null;
 }
 
 // WHETHER THIS RECORD IS STILL WORTH SPENDING A UNIT ON. Not the same question
@@ -1809,6 +1863,9 @@ export function SavedProvider({ children }: { children: ReactNode }) {
           // diversion at precisely the airports the unknown path exists for.
           // setFlightLanding will not unwrite one it already holds.
           divertedTo: result.divertedTo,
+          // THE TAKEOFF RIDES ON THE SAME ANSWER, and checkLanding has already
+          // dropped it from the two outcomes that assert nothing.
+          takeoffUtc: result.takeoffUtc,
         });
       }
       // ONE setState FOR THE WHOLE SWEEP. Each write returns the full list, so
@@ -1890,6 +1947,10 @@ export function SavedProvider({ children }: { children: ReactNode }) {
               landingSource: w.landing.outcome === 'landed' ? 'fr24' : null,
               landingCheck: w.landing.outcome,
               divertedTo: w.landing.divertedTo,
+              // THE PATH A TAKEOFF USUALLY ARRIVES BY. The poller asks FR24 every
+              // two minutes from ninety before departure, and this reads its
+              // answer once a minute.
+              takeoffUtc: w.landing.takeoffUtc,
             });
             cur = next; latest = next;
           }

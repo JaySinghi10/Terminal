@@ -81,7 +81,11 @@ import { zonedIsoToTs, clock24 } from '../lib/time';
 // BAG_WINDOW_MS JOINS THEM, and for the same reason: it is a RULE about a record
 // and a clock rather than any screen's state. app/flights reads the same constant
 // for the collapsed rows and for how long focus stays on a leg that has landed.
-import { effectiveStatus, isArchived, BAG_WINDOW_MS, landedInstant } from '../lib/saved';
+import {
+  effectiveStatus, isArchived, BAG_WINDOW_MS, landedInstant,
+  // WHERE THE DEPARTURE STANDS, and when the aircraft actually left the ground.
+  departurePhase, airborneSince,
+} from '../lib/saved';
 // INDEPENDENT CORROBORATION, AND ONLY FOR A LOST FLIGHT. See lib/adsb.ts: it
 // cannot change a status, it cannot set a landing, and its usual answer is
 // nothing at all.
@@ -100,6 +104,9 @@ import {
   type ZonedClock,
   CD_GREEN,
   CD_LATE,
+  // THE DEPARTURE'S WORDS, written once there for the rows and the card alike.
+  countingWords,
+  departureLine,
   // StatusWord IS GONE FROM THIS IMPORT AND HAS NO CALLER ANYWHERE NOW. The trip
   // card's pill was its only render site and reads flight.status directly instead
   // -- see the note there. The function itself is still declared in
@@ -427,6 +434,12 @@ const BADGE_LABEL: Record<string, string> = {
 // somebody on behalf of a provider that simply stopped writing things down.
 const STATUS_WORD: Record<string, string> = {
   stale: 'NO UPDATE',
+  // IN AIR, NOT ACTIVE, WHEN THE PROVIDER'S WORD HAS GONE. It goes when FR24
+  // has overruled it -- the aircraft seen climbing while the provider still
+  // says Boarding, or still flying when the provider says Arrived -- and both
+  // times FR24 is watching an aircraft in the air. "ACTIVE" is this app's
+  // internal word, and the pill is not the place for it.
+  active: 'IN AIR',
 };
 
 export function badgeLabel(rawStatus: string | null | undefined, fallback: string): string {
@@ -607,9 +620,16 @@ export function computeProgress(f: SavedFlight | null, now: number): number | nu
   if (s === 'landed') return 1;
   if (s === 'scheduled') return 0;
   if (s !== 'active') return null; // cancelled, diverted, unknown, anything else
-  const depIso = f.from.actualIso ?? f.from.estimatedIso ?? f.from.scheduledIso;
+  // ── FROM THE TAKEOFF, AND NOT BEFORE IT ──────────────────────────────────
+  //
+  // THE ARC MEASURED FROM THE GATE, so an aircraft twenty minutes into its taxi
+  // was drawn twenty minutes into its route. It measures from the takeoff now
+  // -- airborneSince, the instant the map's aircraft rides from too -- and sits
+  // at the start while the aircraft is still taxiing. No instant at all is what
+  // it always was: a record with no readable departure, and no bar.
+  const dep = airborneSince(f, now);
+  if (dep === null) return departurePhase(f, now).kind === 'leftGate' ? 0 : null;
   const arrIso = f.to.estimatedIso ?? f.to.scheduledIso;
-  const dep = zonedIsoToTs(depIso, f.from.timezone);
   const arr = zonedIsoToTs(arrIso, f.to.timezone);
   if (dep == null || arr == null || arr <= dep) return null;
   return Math.min(0.98, Math.max(0.02, (now - dep) / (arr - dep)));
@@ -2455,7 +2475,7 @@ function useCorroboration(record: SavedFlight | null, stale: boolean, now: numbe
 }
 
 export function FlightCard({
-  flight,
+  flight: given,
   flightRecord,
   now,
   isSaved,
@@ -2479,6 +2499,41 @@ export function FlightCard({
   // to state, so no line. See the prop's note.
   countdown = null,
 }: FlightCardProps) {
+  // ── WHERE THE DEPARTURE STANDS, AS OF THIS MINUTE ─────────────────────────
+  //
+  // READ FROM THE RECORD AND THE CLOCK, NOT FROM `given`. Home builds its card
+  // model once, when a row is tapped, and search builds it from a response; a
+  // count that moves every minute cannot come from either. `now` ticks on
+  // every screen that renders this card, so the record is enough. No record --
+  // an unsaved search result -- means no phase, and the card is as it was.
+  const depPhase = flightRecord !== null ? departurePhase(flightRecord, now) : null;
+  // ── AND WHILE IT COUNTS, THE COUNT IS THE CARD'S DELAY ────────────────────
+  //
+  // THE PILL SAYS "DELAYED 12M" IN AMBER, and every clock that states the
+  // departure's delay -- the movement line, the sheet's tile, the trip column
+  // and its colour -- states the same figure, because they all read depDelay.
+  // Substituting the model once, here, is what keeps them from disagreeing:
+  // a figure left at the provider's last estimate beside a live count would
+  // be two answers to one question on one card.
+  //
+  // THE PILL GROWS WITH THE FIGURE. "DELAYED 1H 5M" is thirteen characters,
+  // two past GATE CLOSED, which the head row's notes measure against the leg
+  // tag. Everything else on the card reads the model exactly as it was given.
+  const flight: FlightData = depPhase?.kind === 'counting'
+    ? {
+      ...given,
+      status: countingWords(depPhase.minutes).toUpperCase(),
+      statusColor: getStatusColor('delayed'),
+      statusBg: getStatusBg('delayed'),
+      depDelay: depPhase.minutes,
+    }
+    : given;
+  // "left the gate 19:58 IST · 18m late", then "took off 20:11 IST": the air
+  // phase's quiet line, where "departed" and the clock used to be. Null on
+  // every other phase, and on a takeoff nobody timed.
+  const depLine = flightRecord !== null && depPhase !== null
+    ? departureLine(flightRecord, depPhase)
+    : null;
   // CALLED UNCONDITIONALLY, read only when mapVariant. A hook behind an if is
   // not a hook.
   const insets = useSafeAreaInsets();
@@ -4774,7 +4829,28 @@ export function FlightCard({
                           delay={flight.arrDelay}
                           rows={[]}
                         />
-                        {hasTime(flight.depTimeValue) && (
+                        {/* ── OFF THE GATE, THEN OFF THE GROUND ──
+                            THE SAME LINE, SAYING WHICH. It read "departed" and
+                            the departure clock whatever had happened; it now
+                            names the gate time and how late it was, which is
+                            how an airline measures the delay, and then the
+                            takeoff once FR24 or the provider has timed it. The
+                            lateness takes the amber every late figure on this
+                            card takes. A takeoff nobody timed keeps the old
+                            line, which claims no more than it did. */}
+                        {depLine !== null ? (
+                          <Text style={s.tripQuiet} numberOfLines={1}>
+                            {depLine.lead}
+                            {depLine.late !== null && (
+                              <Text style={depLine.isLate && s.tripColDelayLate}>
+                                {` · ${depLine.late}`}
+                              </Text>
+                            )}
+                            {depLine.yours !== null && (
+                              <Text style={s.tripQuietYours}>{` · ${depLine.yours}`}</Text>
+                            )}
+                          </Text>
+                        ) : hasTime(flight.depTimeValue) && (
                           <Text style={s.tripQuiet} numberOfLines={1}>
                             {`departed ${clockWithZone(depClock(flight))}`}
                             {depClock(flight).yours !== null && (

@@ -83,6 +83,8 @@ import {
   // THIS screen", which is rendering rather than journey.
   currentLegIndex,
   departureTs,
+  // WHETHER A LEG IS LATE AT ITS GATE, AND BY HOW MUCH. See the chip.
+  departurePhase,
   OWN_MSG,
 } from '../../lib/saved';
 // WHICH ROUTES ARE DRAWN, and the one conversion that builds a route from a
@@ -115,6 +117,8 @@ import {
   // the app. A cancelled unpublished leg takes the same red the published card
   // gives a cancelled flight, because it is the same fact about the same trip.
   getStatusColor,
+  // A DELAY WRITTEN AS THE CARD AND THE ROWS WRITE IT. See the chip.
+  delayFigure,
 } from '../../lib/flightstatus';
 // SURFACE_1 AND SURFACE_2 JOIN THEM FOR THE FOLDER HEADERS. See the scale in
 // lib/cards: level is decided by what sits UNDERNEATH, so a header on the page
@@ -627,6 +631,11 @@ function legState(leg: SavedFlight, i: number, openIdx: number, nextIdx: number,
 // said the flight is airborne, there is no honest interval to state: counting
 // up from a departure that may not have happened is a number about our own
 // ignorance. The row simply drops the line.
+//
+// THE COUNT UP THAT DOES EXIST IS NOT AN INTERVAL, AND IT IS NOT HERE. A leg
+// past its time that a RECENT record still has at its gate is late by the
+// minutes since, and departurePhase says so; the chip and the card's pill
+// carry that count. On a record too old to say, it does not count either.
 //
 // gapLabel IS THE LAYOVER'S OWN FORMATTER, reused deliberately. Both are "how
 // long is this gap", both cross a day, and two spellings of a duration on one
@@ -1559,7 +1568,15 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   //
   // AND IT OUTRANKS NOTHING. A cancelled or diverted leg never shows this;
   // `off` is tested first and a flight that is not going cannot be late.
-  const delayMin = leg.from.delay;
+  //
+  // ── AND PAST ITS TIME, THE FIGURE IS THE COUNT ───────────────────────────
+  //
+  // A LEG STILL AT ITS GATE AFTER ITS DEPARTURE TIME IS LATE BY THE MINUTES
+  // SINCE, whatever the provider last estimated, and the chip counts them on
+  // the screen's own minute tick. departurePhase decides it, so this row and
+  // the open card above it read one number.
+  const phase = departurePhase(leg, now);
+  const delayMin = phase.kind === 'counting' ? phase.minutes : leg.from.delay;
   const delayed = off === null && effState === 'scheduled'
     && displayStatus(effState, delayMin, leg.rawStatus) === 'delayed';
   // THE FIGURE WITH THE WORD, WHICH IS WHAT MAKES THE CHIP HONEST AT THIS
@@ -1568,11 +1585,12 @@ function CollapsedLeg({ leg, state, belt, now, onPress }: {
   // what lets the reader size it without opening the card. Absent when the
   // provider said Delayed and gave no minutes, which is the one case where
   // the word has to stand on its own.
+  //
+  // delayFigure WRITES IT, as the card's pill and the rows write it, so an
+  // hour is "1H" here and not "1H 0M" beside a pill that says "1H".
   const delayWords = !delayed || typeof delayMin !== 'number' || delayMin <= 0
     ? ''
-    : delayMin >= 60
-      ? ` ${Math.floor(delayMin / 60)}H ${delayMin % 60}M`
-      : ` ${delayMin}M`;
+    : ` ${delayFigure(delayMin).toUpperCase()}`;
 
   // ── NO COLLAPSED LEG PRINTS A CLOCK, AND 'next' NOW EARNS NOTHING VISIBLE ──
   //
@@ -1798,7 +1816,12 @@ function tripTone(legs: SavedFlight[], now: number): 'ontime' | 'late' | null {
   const leg = i >= 0 ? legs[i] : legs.find(l => l.landedAt === null);
   if (leg === undefined) return null;
   const s = effectiveStatus(leg, now);
-  const d = s === 'active' || s === 'landed' ? leg.to.delay : leg.from.delay;
+  // A LEG COUNTING AT ITS GATE IS LATE, whatever its last estimate said: the
+  // same figure its chip and its card are showing.
+  const phase = departurePhase(leg, now);
+  const d = s === 'active' || s === 'landed' ? leg.to.delay
+    : phase.kind === 'counting' ? phase.minutes
+      : leg.from.delay;
   if (typeof d !== 'number') return null;
   return d > 0 ? 'late' : 'ontime';
 }

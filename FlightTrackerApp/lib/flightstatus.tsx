@@ -23,12 +23,12 @@ import { SavedFlight, SavedFlightEndpoint } from './storage';
 // The one implementation of each, exactly as index.tsx reached them. See
 // lib/time.ts: there are two kinds of ISO in this app and only one may become an
 // instant.
-import { zonedIsoToTs, clock24, yourTime, zoneAbbrAt } from './time';
+import { zonedIsoToTs, clock24, yourTime, zoneAbbrAt, clockInZone } from './time';
 import { airportByCode } from './airports';
 // THE RULE ABOUT A STORED STATUS, imported rather than copied. It is the store's
 // because the refresh loop and the archive split read it too; this file is one
-// more reader.
-import { effectiveStatus } from './saved';
+// more reader. The departure's phase is the store's for the same reason.
+import { effectiveStatus, departurePhase, type DeparturePhase } from './saved';
 // WHEN THE APP LAST FETCHED A FLIGHT, for the label. Its own file, so that this
 // module can read it without adding to the import it already has from saved.
 import { useCheckedAt } from './checked';
@@ -195,7 +195,9 @@ export const CD_LATE = '#fbbf24';
 const CD_EARLY = 'rgba(226,226,226,0.52)';
 
 // `small` sets a segment a size down: the phone's time, beside the airport's.
-type LineSeg = { text: string; color: string; small?: boolean };
+// `head` marks the segments that say what the flight is doing -- the status
+// word, or the departure's own words in its place -- which hideStatus drops.
+type LineSeg = { text: string; color: string; small?: boolean; head?: boolean };
 
 // The backend's *_iso fields carry a bogus "+00:00"; the value is the airport's
 // LOCAL wall clock. Strip the offset, treat as naive, interpret in the IANA zone.
@@ -208,6 +210,62 @@ export function formatCountdown(ms: number): string {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
   return `${mins}m`;
+}
+
+// ── THE WORDS FOR WHERE A DEPARTURE STANDS ────────────────────────────────
+//
+// "delayed 12m", then "left the gate 19:58 IST · 18m late", then "took off
+// 20:11 IST". Written once, here, so the rows, the card and the trip screen
+// say one thing in one way; each surface sets the case its own type uses.
+//
+// A DELAY IS WRITTEN AS A DURATION IS EVERYWHERE ELSE, by formatCountdown:
+// "12m", "1h 5m", "2h". A count and a countdown sitting on one row should not
+// spell an hour two ways.
+export function delayFigure(minutes: number): string {
+  return formatCountdown(minutes * 60_000);
+}
+
+export function countingWords(minutes: number): string {
+  return `delayed ${delayFigure(minutes)}`;
+}
+
+// A DEPARTURE INSTANT AS ITS OWN AIRPORT'S CLOCK. The zone label is the
+// provider's, read off the scheduled string as zonedClock reads it -- one
+// airport, one zone -- and the phone's time comes with it.
+function departureClock(f: SavedFlight, at: number): ZonedClock | null {
+  const clock = clockInZone(at, f.from.timezone);
+  if (clock === null) return null;
+  return { clock, zone: zoneLabel(f.from.scheduled), yours: yourTime(at, f.from.timezone) };
+}
+
+// THE TWO PHASES THAT HAVE A TIME TO NAME, or null for every other: a count
+// has no clock, and a takeoff nobody timed says what it always said.
+export type DepartureLine = {
+  lead: string;           // "left the gate 19:58 IST", "took off 20:11 IST"
+  late: string | null;    // "18m late", "on time"; null once it is airborne
+  isLate: boolean;        // whether `late` is the bad news, for its colour
+  yours: string | null;   // the same instant on the phone, or null
+};
+
+export function departureLine(f: SavedFlight, p: DeparturePhase): DepartureLine | null {
+  if (p.kind === 'leftGate') {
+    const z = departureClock(f, p.at);
+    if (z === null) return null;
+    return {
+      lead: `left the gate ${clockWithZone(z)}`,
+      // ON TIME AT ZERO AND BELOW. A few minutes early is on time to anybody
+      // waiting for it, and "3m early" would be a figure nobody acts on.
+      late: p.lateMin > 0 ? `${delayFigure(p.lateMin)} late` : 'on time',
+      isLate: p.lateMin > 0,
+      yours: z.yours,
+    };
+  }
+  if (p.kind === 'tookOff' && p.at !== null) {
+    const z = departureClock(f, p.at);
+    if (z === null) return null;
+    return { lead: `took off ${clockWithZone(z)}`, late: null, isLate: false, yours: z.yours };
+  }
+  return null;
 }
 
 // scheduled/active: estimated vs scheduled. landed: actual (else estimated) vs scheduled.
@@ -263,7 +321,25 @@ function flightLineSegments(
   const s = effectiveStatus(f, now);
   // THE WORD ON THE ROW IS THE WORD A PERSON WOULD USE. 'stale' is the internal
   // name for the state; "no update" is what it means to somebody scanning a list.
-  const statusSeg: LineSeg = { text: s === 'stale' ? 'no update' : s, color: getStatusColor(s) };
+  const statusSeg: LineSeg = { text: s === 'stale' ? 'no update' : s, color: getStatusColor(s), head: true };
+  // ── AND THE DEPARTURE'S OWN WORDS, WHERE IT HAS ANY, TAKE THE WORD'S PLACE ──
+  //
+  // "scheduled" ON A FLIGHT TWELVE MINUTES PAST ITS TIME WAS TRUE AND USELESS.
+  // It now reads "delayed 12m", counting, and then "left the gate 19:58 IST ·
+  // 18m late" and "took off 20:11 IST" as each is measured. Only the two
+  // statuses a departure is still news in: a landed row is about its landing.
+  const phase = s === 'scheduled' || s === 'active' ? departurePhase(f, now) : null;
+  const line = phase !== null ? departureLine(f, phase) : null;
+  const head: LineSeg[] = phase?.kind === 'counting'
+    ? [{ text: countingWords(phase.minutes), color: CD_LATE, head: true }]
+    : line !== null
+      ? [
+        { text: line.lead, color: getStatusColor(s), head: true },
+        ...(line.late === null ? [] : [{
+          text: ` · ${line.late}`, color: line.isLate ? CD_LATE : CD_EARLY, head: true,
+        }]),
+      ]
+      : [statusSeg];
   const fresh = now - f.updatedAt < COUNTDOWN_MAX_AGE_MS;
 
   let ep: SavedFlightEndpoint | null = null;
@@ -309,8 +385,10 @@ function flightLineSegments(
     } else if (verb) {
       const diff = ts - now;
       if (diff >= 0) {
-        const segs: LineSeg[] = [statusSeg, { text: ` · ${verb} ${formatCountdown(diff)}`, color: CD_GREEN }];
-        const d = delaySegment(ep, s); if (d) segs.push(d);
+        const segs: LineSeg[] = [...head, { text: ` · ${verb} ${formatCountdown(diff)}`, color: CD_GREEN }];
+        // NOT WHILE COUNTING: the count already is the departure's delay, and a
+        // second figure beside it would be the same fact from an older reading.
+        const d = phase?.kind === 'counting' ? null : delaySegment(ep, s); if (d) segs.push(d);
         if (watchedTail) segs.push(watchedTail);
         return segs;
       }
@@ -332,7 +410,7 @@ function flightLineSegments(
   const tail = shown
     ? ` · updated ${timeAgo(shownAt, now)} · ${absLabel} ${clockWithZone(abs)}`
     : ` · updated ${timeAgo(shownAt, now)}`;
-  const segs: LineSeg[] = [statusSeg, { text: tail, color: CD_AGE }];
+  const segs: LineSeg[] = [...head, { text: tail, color: CD_AGE }];
   // LAST, SO A NARROW ROW LOSES THIS BEFORE IT LOSES THE AIRPORT'S OWN CLOCK.
   if (shown && abs.yours !== null) segs.push({ text: ` · ${abs.yours}`, color: CD_AGE, small: true });
   return segs;
@@ -357,10 +435,13 @@ export function StatusLine({ f, now, style, numberOfLines, hideStatus, hideAbsol
   // under SavedProvider, which is where the times come from.
   const checkedAt = useCheckedAt(f.id);
   const all = flightLineSegments(f, now, hideAbsolute, checkedAt);
-  // The status word is always the first segment, and everything after it opens
-  // with " · ". Dropping the word means dropping that separator too.
+  // The status word always leads, and everything after it opens with " · ".
+  // Dropping the word means dropping that separator too. It is one segment or,
+  // where the departure's words stand in for it, two -- so the head segments
+  // are dropped by their mark rather than by counting.
   const segs = hideStatus
-    ? all.slice(1).map((seg, i) => (i === 0 ? { ...seg, text: seg.text.replace(/^ · /, '') } : seg))
+    ? all.filter(seg => seg.head !== true)
+      .map((seg, i) => (i === 0 ? { ...seg, text: seg.text.replace(/^ · /, '') } : seg))
     : all;
   return (
     <Text style={[s.statusLineText, style]} numberOfLines={numberOfLines}>

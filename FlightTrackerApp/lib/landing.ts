@@ -49,6 +49,9 @@ export type LandingResult = {
   // destination to show instead. It names the airport now; search that file for
   // "THE DIVERSION AIRPORT IS AVAILABLE NOW".
   divertedTo: string | null;
+  // WHEN FR24 SAW IT LEAVE THE GROUND, on a 'pending' or 'landed' answer only.
+  // See takeoffUtc on SavedFlight.
+  takeoffUtc: string | null;
 };
 
 // ── WHEN A FLIGHT IS WORTH ASKING ABOUT ─────────────────────────────────────
@@ -144,9 +147,10 @@ export async function checkLanding(apiBase: string, f: SavedFlight): Promise<Lan
   try {
     const r = await fetch(
       `${apiBase}/landing/${encodeURIComponent(f.flightNumber)}?${params.join('&')}`);
-    if (!r.ok) return { outcome: 'error', landedUtc: null, divertedTo: null };
+    if (!r.ok) return { outcome: 'error', landedUtc: null, divertedTo: null, takeoffUtc: null };
     const body = await r.json() as {
       outcome?: string; landed_utc?: string | null; diverted_to?: string | null;
+      takeoff_utc?: string | null;
     };
     const outcome = body?.outcome;
     if (outcome !== 'landed' && outcome !== 'pending'
@@ -154,7 +158,7 @@ export async function checkLanding(apiBase: string, f: SavedFlight): Promise<Lan
       // An envelope we do not recognise is not an answer. Reporting it as
       // 'unknown' would let AeroDataBox claim a landing on the strength of a
       // response we could not read.
-      return { outcome: 'error', landedUtc: null, divertedTo: null };
+      return { outcome: 'error', landedUtc: null, divertedTo: null, takeoffUtc: null };
     }
     return {
       outcome,
@@ -163,9 +167,11 @@ export async function checkLanding(apiBase: string, f: SavedFlight): Promise<Lan
       landedUtc: outcome === 'landed' && typeof body.landed_utc === 'string'
         ? body.landed_utc : null,
       divertedTo: typeof body.diverted_to === 'string' ? body.diverted_to : null,
+      takeoffUtc: (outcome === 'landed' || outcome === 'pending')
+        && typeof body.takeoff_utc === 'string' ? body.takeoff_utc : null,
     };
   } catch {
-    return { outcome: 'error', landedUtc: null, divertedTo: null };
+    return { outcome: 'error', landedUtc: null, divertedTo: null, takeoffUtc: null };
   }
 }
 

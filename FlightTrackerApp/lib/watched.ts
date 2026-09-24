@@ -26,6 +26,10 @@ export type WatchedLanding = {
   outcome: 'landed' | 'pending' | 'unknown' | 'error';
   landedUtc: string | null;
   divertedTo: string | null;
+  // WHEN FR24 SAW IT LEAVE THE GROUND. Only on 'pending' and 'landed', the two
+  // answers that say the aircraft is or was airborne -- the rule the poller's
+  // _has_departed applies to the same field.
+  takeoffUtc: string | null;
 };
 
 export type WatchedFlight = {
@@ -59,6 +63,7 @@ function landing(v: unknown): WatchedLanding | null {
     outcome: o,
     landedUtc: o === 'landed' ? str(raw.landed_utc) : null,
     divertedTo: str(raw.diverted_to),
+    takeoffUtc: o === 'landed' || o === 'pending' ? str(raw.takeoff_utc) : null,
   };
 }
 

@@ -109,6 +109,10 @@ type EndArgs = {
   terminal?: string | null;
   gate?: string | null;
   baggage?: string | null;
+  // WHETHER THE PROVIDER HAS LIVE COVERAGE. True unless a scenario says not,
+  // which is the ordinary case at the airports these fixtures use; a gate time
+  // on a movement without it is not believed. See gateTs in lib/departure.ts.
+  live?: boolean;
 };
 
 // EVERY FIELD A REAL ENDPOINT HAS, including the ones that are usually null.
@@ -141,6 +145,7 @@ function endpoint(a: EndArgs): SavedFlightEndpoint {
     actualSource: a.actualMs != null ? 'revised' : null,
     estimatedSource: a.estimatedMs != null ? 'revised' : null,
     runwayIso: null,
+    liveFeed: a.live ?? true,
   };
 }
 
@@ -163,6 +168,12 @@ type LegArgs = {
   aircraft?: string;
   registration?: string;
   pnr?: string;
+  // WHEN FR24 SAW IT TAKE OFF, written as the server delivers it. Only the
+  // departure scenarios set it.
+  takeoffMs?: number | null;
+  // WHEN THE PROVIDER LAST SPOKE, if not this moment: the stale departure
+  // scenario is a record the count may no longer trust.
+  updatedAt?: number;
 };
 
 function leg(a: LegArgs): SavedFlight {
@@ -179,7 +190,7 @@ function leg(a: LegArgs): SavedFlight {
     aircraftModel: a.aircraft ?? 'Airbus A320',
     aircraftRegistration: a.registration ?? 'VT-ZZZ',
     savedAt: now,
-    updatedAt: now,
+    updatedAt: a.updatedAt ?? now,
     landedAt: a.landedMs ?? null,
     // THE AUTHORITATIVE LANDING, and it is the only thing that makes
     // effectiveStatus say 'landed' -- see its note on the one promotion. A
@@ -190,6 +201,10 @@ function leg(a: LegArgs): SavedFlight {
     landingCheck: a.landedMs != null ? 'landed' : null,
     landingCheckedAt: a.landedMs != null ? now : null,
     divertedTo: a.divertedTo ?? null,
+    // FR24's OWN FORMAT: UTC with no zone marker, to the second. landedUtcToTs
+    // is what reads it, so a fixture written any other way would test a path
+    // the wire never takes.
+    takeoffUtc: a.takeoffMs != null ? new Date(a.takeoffMs).toISOString().slice(0, 19) : null,
     archivedAt: null,
     remindersSetAt: null,
     tripId: a.tripId ?? null,
@@ -199,7 +214,7 @@ function leg(a: LegArgs): SavedFlight {
     rawStatus: a.rawStatus ?? 'Expected',
     // THE CURRENT VERSION, so normalizeRecord leaves these alone rather than
     // running a migration over them on the first read.
-    schemaVersion: 14,
+    schemaVersion: 15,
   };
 }
 
@@ -323,6 +338,53 @@ function doubtLeg(trip: string | null): PendingLeg {
     arrivalTime: '20:55',
     arrivalDate: null,
   };
+}
+
+// ── ONE DEPARTURE, AT DIFFERENT MOMENTS AFTER ITS TIME ─────────────────────
+//
+// BOM -> DEL, ONE LEG, OWNED, so the trip screen opens it as the current card
+// and the rows and the Deck all have it. Each scenario is the same flight at a
+// different point between its scheduled time and its takeoff: counting at the
+// gate, counting from an announced delay, off the gate, off the ground, and a
+// record too old to count on.
+//
+// WHOLE MINUTES, as the provider's times are, so the figures read exactly: the
+// schedule is set a whole number of minutes before the current minute.
+//
+// THE COUNT STOPS THIRTY MINUTES AFTER INSTALL. A fixture's updatedAt is the
+// moment it was installed and nothing refreshes a fixture, so the counting
+// scenarios go quiet when COUNT_FRESH_MS says a real record would. Install one
+// again to see it count.
+function departureLeg(o: {
+  number: string;
+  schedAgo: number;       // minutes since the scheduled departure
+  estimateLate?: number;  // the airline's announced delay, in minutes
+  gateLate?: number;      // minutes after the schedule it left the gate
+  takeoffAgo?: number;    // minutes since FR24 saw it take off
+  updatedAgo?: number;    // minutes since the provider last spoke
+  status: string;
+  rawStatus: string;
+}): SavedFlight {
+  const t = Date.now();
+  const sched = Math.floor(t / MIN) * MIN - o.schedAgo * MIN;
+  const block = 2 * HOUR + 10 * MIN;
+  const late = (o.gateLate ?? o.estimateLate ?? 0) * MIN;
+  return leg({
+    number: o.number, tripId: tripId(),
+    from: {
+      place: BOM, scheduledMs: sched, terminal: '2', gate: 'A7',
+      estimatedMs: o.estimateLate != null ? sched + o.estimateLate * MIN : null,
+      actualMs: o.gateLate != null ? sched + o.gateLate * MIN : null,
+    },
+    to: {
+      place: DEL, scheduledMs: sched + block, terminal: '3',
+      estimatedMs: late ? sched + block + late : null,
+    },
+    status: o.status,
+    rawStatus: o.rawStatus,
+    takeoffMs: o.takeoffAgo != null ? Math.floor(t / MIN) * MIN - o.takeoffAgo * MIN : null,
+    updatedAt: o.updatedAgo != null ? t - o.updatedAgo * MIN : undefined,
+  });
 }
 
 export const DEV_SCENARIOS: DevScenario[] = [
@@ -472,6 +534,59 @@ export const DEV_SCENARIOS: DevScenario[] = [
         pending: [],
       };
     },
+  },
+  {
+    key: 'dep-counting',
+    label: 'Departure · 12 min past, still at the gate',
+    note: 'Nothing reported since its time. The pill reads DELAYED 12M, and 13M a minute later.',
+    build: () => ({
+      flights: [departureLeg({ number: 'ZZ911', schedAgo: 12, status: 'scheduled', rawStatus: 'Boarding' })],
+      pending: [],
+    }),
+  },
+  {
+    key: 'dep-counting-estimate',
+    label: 'Departure · announced 45 min late',
+    note: 'Ten minutes past its time and announced forty-five late: the count starts at 45M, not 10M.',
+    build: () => ({
+      flights: [departureLeg({
+        number: 'ZZ912', schedAgo: 10, estimateLate: 45, status: 'scheduled', rawStatus: 'Delayed',
+      })],
+      pending: [],
+    }),
+  },
+  {
+    key: 'dep-left-gate',
+    label: 'Departure · left the gate 18 min late',
+    note: 'Off the gate seven minutes ago. The count has stopped at 18m and the card says left the gate.',
+    build: () => ({
+      flights: [departureLeg({
+        number: 'ZZ913', schedAgo: 25, gateLate: 18, status: 'active', rawStatus: 'Departed',
+      })],
+      pending: [],
+    }),
+  },
+  {
+    key: 'dep-took-off',
+    label: 'Departure · FR24 saw it take off',
+    note: 'The provider still says Gate Closed; FR24 saw it climb four minutes ago. The card says took off.',
+    build: () => ({
+      flights: [departureLeg({
+        number: 'ZZ914', schedAgo: 30, takeoffAgo: 4, status: 'scheduled', rawStatus: 'GateClosed',
+      })],
+      pending: [],
+    }),
+  },
+  {
+    key: 'dep-stale',
+    label: 'Departure · past its time, record 40 min old',
+    note: 'Too old to say it has not left: no count, and the card reads as it did before.',
+    build: () => ({
+      flights: [departureLeg({
+        number: 'ZZ915', schedAgo: 50, updatedAgo: 40, status: 'scheduled', rawStatus: 'Boarding',
+      })],
+      pending: [],
+    }),
   },
 ];
 

@@ -70,8 +70,10 @@ import {
   useAccountChange,
   API_BASE,
   effectiveStatus,
-  departureTs,
   arrivalTs,
+  // WHEN THE AIRCRAFT LEFT THE GROUND, which the map's aircraft and the panel's
+  // "% flown" now read where they read the departure time.
+  airborneSince,
   localIsoDate,
 } from '../../../lib/saved';
 import {
@@ -2180,6 +2182,17 @@ export default function Search() {
         const a = airportByCode(r.from);
         const b = airportByCode(r.to);
         if (a === null || b === null) return [];
+        // ── THE AIRCRAFT WAITS FOR THE TAKEOFF ──────────────────────────────
+        //
+        // THE ROUTE'S TWO INSTANTS WERE FROZEN WHEN IT WAS ADDED, and the page
+        // puts an aircraft on the arc once the first has passed -- so a flight
+        // an hour late at its gate was drawn an hour along its route. Where the
+        // flight is still saved, its record answers instead: the aircraft
+        // appears at the takeoff (airborneSince) and rides to the arrival the
+        // record holds now, which is the same instant the card's arc and the
+        // panel's "% flown" read. A route whose flight is no longer saved keeps
+        // what it was given.
+        const rec = savedFlights.find(f => f.id === r.id) ?? null;
         return [{
           id: r.id,
           // THE NAMES THE MAP PRINTS BESIDE THE ENDPOINT DOTS. From the airport
@@ -2188,8 +2201,8 @@ export default function Search() {
           // place from, so the two cannot disagree.
           a: [a.lon, a.lat] as [number, number],
           b: [b.lon, b.lat] as [number, number],
-          dep: r.dep,
-          arr: r.arr,
+          dep: rec !== null ? airborneSince(rec, now) : r.dep,
+          arr: rec !== null ? arrivalTs(rec) : r.arr,
         }];
       });
       // ── AND THE ONE BEING SEARCHED, ON THE END ──────────────────────────────
@@ -2238,7 +2251,10 @@ export default function Search() {
         arr: null,
       }];
     },
-    [routes, routeResult, flownVia],
+    // savedFlights AND now, because the takeoff can arrive with either: a
+    // /watched read writes it, and the phase moves with the clock. The key
+    // below still sends the page a list only when an instant actually changed.
+    [routes, routeResult, flownVia, savedFlights, now],
   );
 
   // KEYED ON A STRING, not on the array, whose identity changes whenever the
@@ -2590,7 +2606,10 @@ export default function Search() {
       // number and the mark cannot disagree. A flight that has not left or has
       // landed has no fraction worth printing: 0% and 100% are the words
       // SCHEDULED and LANDED in a worse font.
-      const dep = departureTs(f);
+      //
+      // FROM THE TAKEOFF, as the aircraft now is: nothing while it is still
+      // taxiing, since the mark is not on the arc yet either.
+      const dep = airborneSince(f, now);
       const arr = arrivalTs(f);
       if (eff === 'active' && dep !== null && arr !== null && arr > dep) {
         const t = Math.min(1, Math.max(0, (now - dep) / (arr - dep)));
