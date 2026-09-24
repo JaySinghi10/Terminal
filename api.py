@@ -153,13 +153,17 @@ def get_route(origin: str, destination: str, hours: int = 12, date: str | None =
 # answer. Nothing may be called fastest before "done", and not then unless it
 # says complete. Without stream the reply is the whole answer at once.
 @app.get("/connections/{origin}/{destination}")
-def get_connections(origin: str, destination: str, date: str | None = None, stream: bool = False):
+def get_connections(origin: str, destination: str, date: str | None = None, stream: bool = False,
+                    auto: bool = False):
+    # auto=1 SAYS THE APP STARTED THIS ITSELF, because the direct search found
+    # nothing. Below the month's connections threshold such a search is deferred
+    # and the app offers its button instead; see connections.auto_allowed.
     if not stream:
-        return connections.search(origin, destination, date)
+        return connections.search(origin, destination, date, auto)
 
     def lines():
         yield json.dumps({"type": "direct", **fetch_route(origin, destination, 12, date)}) + "\n"
-        for event in connections.search_events(origin, destination, date):
+        for event in connections.search_events(origin, destination, date, auto):
             yield json.dumps(event) + "\n"
 
     return StreamingResponse(lines(), media_type="application/x-ndjson")

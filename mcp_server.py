@@ -326,6 +326,11 @@ def _record_quota(response, gateway: str) -> None:
         _QUOTA["gateway"] = gateway
     except (AttributeError, TypeError, ValueError):
         return
+    try:
+        import pollstate
+        pollstate.warn_usage(_QUOTA["remaining"])
+    except Exception:  # noqa: BLE001 -- a warning must never fail a lookup
+        pass
 
 
 def _report_unknown_units_header(response, gateway: str) -> None:

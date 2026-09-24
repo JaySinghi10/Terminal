@@ -620,6 +620,55 @@ def budget_floor(now=None):
     return RESERVE_PER_DAY * days_until_reset(now)
 
 
+# ── THE MONTH'S ALLOWANCE, AND WHO GIVES WAY FIRST ──────────────────────────
+#
+# 40,000 IS THE DIRECT STARTER PLAN'S, from the provider's pricing page.
+MONTHLY_ALLOWANCE = 40_000
+
+# AUTOMATIC CONNECTION SEARCHES RUN ONLY ABOVE 500 UNITS A DAY UNTIL THE RESET.
+# 500 is what fully tracking one ten-hour flight costs at the current tiers (452
+# measured), rounded up: below this line there is no longer room to track a long
+# flight every remaining day, and connections -- which are optional -- stop
+# starting themselves. The "Show connections" button still works; a person asking
+# is not the same as the app deciding to spend. It is twelve times the poller's
+# own floor (RESERVE_PER_DAY), so connections always give way long before
+# tracking has to.
+CONNECTIONS_RESERVE_PER_DAY = 500
+
+
+def connections_floor(now=None):
+    """Units that must remain for an automatic connection search to start."""
+    return CONNECTIONS_RESERVE_PER_DAY * days_until_reset(now)
+
+
+# ── A CLEAR WARNING AT 70% OF THE MONTH ─────────────────────────────────────
+#
+# ONCE PER PROCESS PER BILLING PERIOD, keyed on the reset date, so a busy
+# instance does not print it on every response and a new month warns again.
+USAGE_WARN_FRACTION = 0.70
+_usage_warned_for = None
+
+
+def warn_usage(remaining, now=None):
+    """Log a WARNING the first time this process sees the month past 70% used."""
+    global _usage_warned_for
+    if remaining is None:
+        return
+    used = MONTHLY_ALLOWANCE - int(remaining)
+    if used < USAGE_WARN_FRACTION * MONTHLY_ALLOWANCE:
+        return
+    days = days_until_reset(now)
+    period = ((now or _now()) + timedelta(days=days)).date().isoformat()
+    if _usage_warned_for == period:
+        return
+    _usage_warned_for = period
+    logger.warning(
+        "AERODATABOX USAGE PAST %d%%: %d of %d units used this billing month, %d left, "
+        "%d days to the reset on the %dth. Automatic connection searches stop below %d.",
+        int(USAGE_WARN_FRACTION * 100), used, MONTHLY_ALLOWANCE, int(remaining),
+        days, BILLING_DAY, connections_floor(now))
+
+
 # ── ONE PASS AT A TIME ──────────────────────────────────────────────────────
 #
 # A LOCK IN A PROCESS WOULD NOT BE A LOCK. Cloud Run may be running several

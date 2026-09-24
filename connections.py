@@ -289,8 +289,26 @@ def _country(code, fallback=None):
 
 
 # ── THE REPLY ───────────────────────────────────────────────────────────────
+def auto_allowed():
+    """(allowed, remaining, floor). WHETHER THE APP MAY START A SEARCH ON ITS OWN.
+
+    The poller's reading of the budget, this process first and the shared figure
+    second. AN UNKNOWN BUDGET IS A NO, which is the opposite of the poller's rule
+    and for the opposite reason: polling is the product and must not stop for a
+    missing counter; an automatic connection search is optional and must not
+    spend what nobody can see.
+    """
+    floor = pollstate.connections_floor()
+    remaining = M.quota_status().get("units_remaining")
+    if remaining is None:
+        remaining, _at = pollstate.read_quota(M.active_gateway())
+    if remaining is None:
+        return False, None, floor
+    return remaining > floor, remaining, floor
+
+
 def _result(o, d, day, itineraries=None, complete=True, unchecked=None,
-            hubs=None, units=0, error=None):
+            hubs=None, units=0, error=None, deferred=False):
     """Every reply carries the same keys, as the direct search's does."""
     return {
         "origin": o,
@@ -305,6 +323,10 @@ def _result(o, d, day, itineraries=None, complete=True, unchecked=None,
         "hubs": hubs or {},
         "units_spent": units,
         "error": error,
+        # TRUE WHEN AN AUTOMATIC SEARCH WAS NOT STARTED because the month's units
+        # are below the connections threshold. Not an error: the client offers
+        # its button instead, and a search a person asks for still runs.
+        "deferred": deferred,
     }
 
 
@@ -357,19 +379,28 @@ def _dedupe(found, origin, destination):
 
 
 # ── THE SEARCH ──────────────────────────────────────────────────────────────
-def search(origin, destination, date=None):
+def search(origin, destination, date=None, auto=False):
     """The whole answer, as one dict: the last event of search_events."""
     final = None
-    for event in search_events(origin, destination, date):
+    for event in search_events(origin, destination, date, auto):
         if event["type"] == "done":
             final = {k: v for k, v in event.items() if k != "type"}
     return final
 
 
-def search_events(origin, destination, date=None):
-    """Yields {"type": "hub", ...} as each hub-day's board lands, carrying every
-    itinerary through that hub found so far, then {"type": "done", ...} with the
-    whole answer. A refusal is a single "done" carrying the error."""
+def search_events(origin, destination, date=None, auto=False):
+    """Yields, in order:
+
+      {"type": "plan", ...}      once the hubs are ranked: how many hub-days
+                                 there are to resolve, so a client can count
+      {"type": "hub", ...}       as each hub-day's board lands, carrying every
+                                 itinerary through that hub found so far
+      {"type": "progress", ...}  each time a hub-day resolves, fetched or not
+      {"type": "done", ...}      the whole answer
+
+    A refusal, or an automatic search the budget defers, is a single "done".
+    `auto` says the app is starting this search on its own rather than because
+    a person asked; see auto_allowed."""
     o = str(origin or "").strip().upper()
     d = str(destination or "").strip().upper()
 
@@ -399,8 +430,16 @@ def search_events(origin, destination, date=None):
     ttl = min(RESULT_CACHE_TTL, M.ROUTE_CACHE_TTL) if day is None else RESULT_CACHE_TTL
     hit = _RESULTS.get(key)
     if hit is not None and now - hit[0] < ttl:
+        # A cached answer costs nothing, so even a deferred automatic search gets it.
         yield {"type": "done", **hit[1], "units_spent": 0}
         return
+    if auto:
+        allowed, remaining, floor = auto_allowed()
+        if not allowed:
+            logger.info("connections: automatic search %s-%s deferred, %s units left, threshold %d",
+                        o, d, remaining, floor)
+            yield done(day=day, deferred=True)
+            return
 
     budget = _Budget(UNIT_CEILING)
 
@@ -492,6 +531,13 @@ def search_events(origin, destination, date=None):
         for day_i, hub_day in enumerate(days):
             work.append((day_i, rank_i, h, hub_day))
     work.sort()
+    total = len(work)
+    resolved = [0]
+    yield {"type": "plan", "hub_days": total, "hubs": [h["iata"] for h in ranked if h["iata"] in plans]}
+
+    def progress():
+        resolved[0] += 1
+        return {"type": "progress", "resolved": resolved[0], "total": total}
 
     def bound(h, hub_day):
         """The least journey time any itinerary on this hub-day could have, or
@@ -550,13 +596,16 @@ def search_events(origin, destination, date=None):
                 _di, _ri, h, hub_day = queue.pop(0)
                 b = bound(h, hub_day)
                 if b is None:
+                    yield progress()
                     continue
                 if best is not None and b >= best:
                     bounded.append(f"{h} {hub_day}")
+                    yield progress()
                     continue
                 c = _board_cost(h, hub_day)
                 if not budget.can(c):
                     unchecked.append(f"{h} {hub_day}")
+                    yield progress()
                     continue
                 budget.charge(c)
                 in_flight[pool.submit(M._fetch_board, h, hub_day)] = (h, hub_day)
@@ -571,6 +620,7 @@ def search_events(origin, destination, date=None):
                     rows = None
                 if rows is None:
                     failed.append(f"{h} {hub_day}")
+                    yield progress()
                     continue
                 checked.append(f"{h} {hub_day}")
                 plans[h]["rows"].extend(rows)
@@ -581,6 +631,7 @@ def search_events(origin, destination, date=None):
                 # for the same hub replaces it.
                 yield {"type": "hub", "hub": h, "day": hub_day,
                        "itineraries": [_emit(it, now) for it in _dedupe(plans[h]["found"], o, d)]}
+                yield progress()
 
     everything = {}
     for p in plans.values():

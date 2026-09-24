@@ -266,11 +266,15 @@ BOARDS[("HAA", D0)] = [row("AA200", "HAA", "BBB", at(D0, 12), at(D0, 13))]
 BOARDS[("HCC", D0)] = [row("AA210", "HCC", "BBB", at(D0, 11), at(D0, 12))]
 events = list(C.search_events("AAA", "BBB", D0))
 kinds = [e["type"] for e in events]
-check("hub events, then exactly one done, last", kinds[-1] == "done" and kinds.count("done") == 1
-      and set(kinds[:-1]) == {"hub"} and len(kinds) >= 3, kinds)
-check("each hub event carries that hub's itineraries in the wire shape",
-      all(e["itineraries"] and all(i["hub"] == e["hub"] and i["kind"] == "via" for i in e["itineraries"])
-          for e in events[:-1]), events[:-1])
+hub_events = [e for e in events if e["type"] == "hub"]
+check("a plan first, hub and progress events between, exactly one done, last",
+      kinds[0] == "plan" and kinds[-1] == "done" and kinds.count("done") == 1
+      and set(kinds[1:-1]) <= {"hub", "progress"} and len(hub_events) >= 2, kinds)
+# EMPTY IS ALLOWED: boards land in parallel, so a hub's next-day board can come
+# back before its first-day board has anything to pair with.
+check("each hub event carries only that hub's itineraries, in the wire shape",
+      all(all(i["hub"] == e["hub"] and i["kind"] == "via" for i in e["itineraries"]) for e in hub_events)
+      and any(e["itineraries"] for e in hub_events), hub_events)
 C._RESULTS.clear()
 M._ROUTE_CACHE.clear()
 whole = C.search("AAA", "BBB", D0)
@@ -432,6 +436,95 @@ check("not a code", C.search("AAAA", "BBB", D0)["error"] is not None and CALLS =
 check("an airport with no known position", C.search("AAA", "QQQ", D0)["error"] is not None and CALLS == [])
 check("a past date", C.search("AAA", "BBB", "2020-01-01")["error"] is not None and CALLS == [])
 
+
+# ── THE BUDGET GATE ON AUTOMATIC SEARCHES ──────────────────────────────────
+print()
+print("-- automatic searches run only above the connections threshold; asked-for ones always run --")
+import logging   # noqa: E402
+import pollstate   # noqa: E402
+
+
+def gate_case(remaining, shared=None):
+    reset()
+    LISTS["AAA"] = [("HAA", 10)]
+    LISTS["BBB"] = [("HAA", 10)]
+    BOARDS[("AAA", D0)] = [row("AA100", "AAA", "HAA", at(D0, 8), at(D0, 9))]
+    BOARDS[("HAA", D0)] = [row("AA200", "HAA", "BBB", at(D0, 11), at(D0, 12))]
+    M.quota_status = lambda: {"units_remaining": remaining}
+    pollstate.read_quota = lambda gateway=None: (shared, None)
+
+
+floor = pollstate.connections_floor()
+check("the threshold is 500 units a day until the reset",
+      floor == 500 * pollstate.days_until_reset() and pollstate.CONNECTIONS_RESERVE_PER_DAY == 500, floor)
+check("and it sits well above the poller's own floor", floor > 10 * pollstate.budget_floor())
+gate_case(floor)
+r = C.search("AAA", "BBB", D0, auto=True)
+check("at the threshold an automatic search is deferred, spending nothing",
+      r["deferred"] is True and r["error"] is None and CALLS == [] and r["units_spent"] == 0, r)
+gate_case(floor + 1)
+r = C.search("AAA", "BBB", D0, auto=True)
+check("one unit above it, the automatic search runs", r["deferred"] is False and len(r["itineraries"]) == 1, r)
+gate_case(None, shared=None)
+r = C.search("AAA", "BBB", D0, auto=True)
+check("an unknown budget defers an automatic search", r["deferred"] is True and CALLS == [], r)
+gate_case(None, shared=floor + 500)
+r = C.search("AAA", "BBB", D0, auto=True)
+check("the shared reading stands in when this process has none", r["deferred"] is False, r)
+gate_case(10)
+r = C.search("AAA", "BBB", D0)
+check("a search a person asked for runs even far below", r["deferred"] is False and len(r["itineraries"]) == 1, r)
+C._RESULTS[("AAA", "BBB", D0)] = (datetime.now(timezone.utc), dict(r))
+r2 = C.search("AAA", "BBB", D0, auto=True)
+check("a cached answer costs nothing, so a deferred automatic search still gets it",
+      r2["deferred"] is False and len(r2["itineraries"]) == 1 and r2["units_spent"] == 0, r2)
+M.quota_status = lambda: {"units_remaining": None}
+pollstate.read_quota = lambda gateway=None: (39000, None)
+
+print()
+print("-- plan and progress: the client can count what is left --")
+reset()
+LISTS["AAA"] = [("HAA", 30), ("HBB", 20), ("HCC", 10)]
+LISTS["BBB"] = [("HAA", 30), ("HBB", 20), ("HCC", 10)]
+BOARDS[("AAA", D0)] = [row("AA100", "AAA", "HAA", at(D0, 8), at(D0, 9)),
+                       row("AA110", "AAA", "HBB", at(D0, 8), at(D0, 14)),
+                       row("AA120", "AAA", "HCC", at(D0, 8), at(D0, 9))]
+BOARDS[("HAA", D0)] = [row("AA200", "HAA", "BBB", at(D0, 10), at(D0, 12))]
+BOARDS[("HCC", D0)] = [row("AA210", "HCC", "BBB", at(D0, 10, 5), at(D0, 11, 30))]
+C.PARALLEL_BOARDS = 1
+events = list(C.search_events("AAA", "BBB", D0))
+kinds = [e["type"] for e in events]
+plan = events[0]
+check("the plan comes first and names the hubs with a first leg",
+      kinds[0] == "plan" and plan["hubs"] == ["HAA", "HBB", "HCC"], events[0])
+progress = [e for e in events if e["type"] == "progress"]
+check("one progress event per hub-day, counting up to the plan's total, fetched or not",
+      [p["resolved"] for p in progress] == list(range(1, plan["hub_days"] + 1))
+      and all(p["total"] == plan["hub_days"] for p in progress), (plan, progress))
+check("done is still last", kinds[-1] == "done")
+
+print()
+print("-- a clear warning, once, when the month passes 70% --")
+seen = []
+
+
+class _Catch(logging.Handler):
+    def emit(self, rec):
+        seen.append(rec.getMessage())
+
+
+pollstate.logger.addHandler(_Catch())
+pollstate._usage_warned_for = None
+pollstate.warn_usage(12_001)
+check("27,999 used is under 70%: nothing", seen == [], seen)
+pollstate.warn_usage(12_000)
+check("28,000 used is 70%: a warning naming the numbers",
+      len(seen) == 1 and "PAST 70%" in seen[0] and "28000 of 40000" in seen[0], seen)
+pollstate.warn_usage(9_000)
+check("and only once this billing month", len(seen) == 1, seen)
+pollstate._usage_warned_for = "a past month"
+pollstate.warn_usage(9_000)
+check("a new month warns again", len(seen) == 2, seen)
 
 # ── THE BOARD CACHE IN THE BUCKET ───────────────────────────────────────────
 print()
