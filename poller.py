@@ -19,7 +19,8 @@ had walked to the old one.
 
   DISTANT   > 48h to departure     once every 12 hours
   FAR       6h .. 48h               once every 6 hours
-  DAY       6h .. 90m              every 10 minutes
+  DAY       6h .. 4h               every 10 minutes
+  GATE      4h .. 90m              every 2 minutes
   NEAR      90m before departure   every 2 minutes   (+ FR24, see below)
   AIRBORNE  departed, not landed   every 5 minutes   (+ FR24, see below)
   ARRIVAL   30m before arrival     every 2 minutes   (+ FR24, see below)
@@ -90,6 +91,7 @@ logger = logging.getLogger("poller")
 DISTANT = "distant"
 FAR = "far"
 DAY = "day"
+GATE = "gate"
 NEAR = "near"
 AIRBORNE = "airborne"
 ARRIVAL = "arrival"
@@ -119,6 +121,22 @@ TIER_INTERVAL = {
     # asking AeroDataBox and only AIRBORNE and ARRIVAL spend units, which is
     # what stops these rates finishing a month early.
     DAY: timedelta(minutes=10),
+    # ── AND THE FOUR HOURS A GATE CAN CHANGE IN ─────────────────────────────
+    #
+    # GATE IS NEAR'S TWO MINUTES WITHOUT NEAR'S FR24 QUESTION. notify pushes a
+    # gate change from four hours out (GATE_WINDOW), and at DAY's ten minutes a
+    # change could sit unseen for ten and then wait ten more to be confirmed by
+    # a second sighting. KL877's E2 to E6 on 24 Sep was on the provider by
+    # 08:07:33, first seen at 08:12:05 and pushed at 08:17 -- after the
+    # passenger had read it off the airport board. FR24 is not asked here: "has
+    # it left the ground" is not a question worth a credit four hours out.
+    #
+    # WHAT IT COSTS, per flight: the 150 minutes from four hours to ninety were
+    # 15 DAY polls and are now up to 75, at 2 AeroDataBox units each -- 30 units
+    # becoming 150, so 120 more per flight, and no FR24 credits. The two
+    # minutes is a ceiling for the reason NEAR's is, so the real figure is
+    # lower. A ten-hour flight measured 452 units at the old tiers; about 572.
+    GATE: timedelta(minutes=2),
     NEAR: timedelta(minutes=2),
     AIRBORNE: timedelta(minutes=5),
     ARRIVAL: timedelta(minutes=2),
@@ -150,6 +168,10 @@ FR24_TIERS = {NEAR, AIRBORNE, ARRIVAL}
 ESSENTIAL_TIERS = {ARRIVAL, AIRBORNE}
 
 NEAR_BEFORE_DEPARTURE = timedelta(minutes=90)
+# THE GATE WINDOW ITSELF, read rather than restated, so the four hours a gate
+# change is pushed in and the four hours it is looked for at two minutes
+# cannot drift apart.
+GATE_BEFORE_DEPARTURE = notify.GATE_WINDOW
 DAY_BEFORE_DEPARTURE = timedelta(hours=6)
 DISTANT_BEFORE_DEPARTURE = timedelta(hours=48)
 ARRIVAL_BEFORE_ARRIVAL = timedelta(minutes=30)
@@ -381,6 +403,8 @@ def tier_for(doc, now=None, day=None):
     until = departure_at - now
     if until <= NEAR_BEFORE_DEPARTURE:
         return NEAR
+    if until <= GATE_BEFORE_DEPARTURE:
+        return GATE
     if until <= DAY_BEFORE_DEPARTURE:
         return DAY
     if until <= DISTANT_BEFORE_DEPARTURE:

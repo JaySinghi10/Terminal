@@ -64,10 +64,32 @@ check("ten hours out is FAR",
                                     arr_sched=iso(NOW + timedelta(hours=13)))),
                       NOW) == poller.FAR)
 
-check("three hours out is DAY",
-      poller.tier_for(state(dto=dto(dep_sched=iso(NOW + timedelta(hours=3)),
-                                    arr_sched=iso(NOW + timedelta(hours=6)))),
+check("five hours out is DAY",
+      poller.tier_for(state(dto=dto(dep_sched=iso(NOW + timedelta(hours=5)),
+                                    arr_sched=iso(NOW + timedelta(hours=8)))),
                       NOW) == poller.DAY)
+
+# ── THE GATE BAND: TWO MINUTES FROM FOUR HOURS OUT, AND NO FR24 ──
+# KL877's E2 to E6 sat unseen for up to ten minutes at DAY's rate and then
+# waited for a second sighting; a gate change is pushed from four hours out, so
+# that is where two-minute checks now start.
+def out_by(minutes):
+    return poller.tier_for(state(dto=dto(dep_sched=iso(NOW + timedelta(minutes=minutes)),
+                                         arr_sched=iso(NOW + timedelta(minutes=minutes + 180)))), NOW)
+
+
+check("three hours out is GATE", out_by(180) == poller.GATE, out_by(180))
+check("four hours out exactly is GATE", out_by(240) == poller.GATE, out_by(240))
+check("four hours and a minute out is still DAY", out_by(241) == poller.DAY, out_by(241))
+check("ninety minutes out is NEAR, as before", out_by(90) == poller.NEAR, out_by(90))
+check("91 minutes out is GATE", out_by(91) == poller.GATE, out_by(91))
+check("GATE is checked every two minutes", poller.TIER_INTERVAL[poller.GATE] == timedelta(minutes=2))
+check("GATE does not ask FR24: no credit spent asking whether it has taken off",
+      poller.GATE not in poller.FR24_TIERS)
+check("GATE gives way below the budget floor, as DAY and NEAR do",
+      poller.GATE not in poller.ESSENTIAL_TIERS)
+check("the band starts where notify starts pushing gate changes",
+      poller.GATE_BEFORE_DEPARTURE == poller.notify.GATE_WINDOW)
 
 check("an hour out is NEAR",
       poller.tier_for(state(dto=dto(dep_sched=iso(NOW + timedelta(hours=1)),
@@ -368,8 +390,8 @@ check("an actual departure in the future does not mean departed",
 check("so the flight is not in a tier that asks FR24",
       poller.tier_for(state(dto=future_actual), NOW) not in poller.FR24_TIERS,
       poller.tier_for(state(dto=future_actual), NOW))
-check("it is DAY -- 2h20m to departure",
-      poller.tier_for(state(dto=future_actual), NOW) == poller.DAY)
+check("it is GATE -- 2h20m to departure, which asks AeroDataBox and not FR24",
+      poller.tier_for(state(dto=future_actual), NOW) == poller.GATE)
 
 check("an actual departure in the past does mean departed",
       poller._has_departed(dto(dep_actual=iso(NOW - timedelta(minutes=5))), NOW))
@@ -653,8 +675,9 @@ pollstate.configured = lambda: True
 SHAPES = {
     "AI101": dto(dep_sched=iso(NOW + timedelta(hours=10)),
                  arr_sched=iso(NOW + timedelta(hours=13))),
-    "BA202": dto(dep_sched=iso(NOW + timedelta(hours=3)),
-                 arr_sched=iso(NOW + timedelta(hours=6))),
+    # FIVE HOURS OUT, SO DAY: inside four it would be the two-minute GATE band.
+    "BA202": dto(dep_sched=iso(NOW + timedelta(hours=5)),
+                 arr_sched=iso(NOW + timedelta(hours=8))),
     "EK303": dto(dep_actual=iso(NOW - timedelta(hours=3)),
                  arr_sched=iso(NOW + timedelta(minutes=20))),
     # Landed and at a gate: DONE, and must cost nothing at all.
