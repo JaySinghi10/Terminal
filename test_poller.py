@@ -1123,6 +1123,77 @@ check("no arrival airport, no connection",
       poller._next_leg({"arrival": {}}, [("6E777", "2026-09-08")]) is None)
 pollstate.forget_local()
 
+# ── NEVER A BELT BEFORE THE LANDING ─────────────────────────────────────────
+# KL877's Mumbai belt "4" was published twenty hours before it arrived, and
+# the app stops refreshing a flight once it has a belt. The server now holds a
+# belt until the flight is down: by the provider's status, or sooner by FR24.
+print()
+print("-- the arrival belt waits for the landing --")
+import mcp_server  # noqa: E402
+
+BOM = {"airport": {"iata": "BOM", "timeZone": "Asia/Kolkata"}, "baggageBelt": "4"}
+for raw in ("Expected", "Delayed", "Departed", "EnRoute", "Approaching"):
+    mv = mcp_server._build_movement(BOM, "arrival", raw, True)
+    check("%s: no belt goes out, and it is held" % raw,
+          mv["baggage"] is None and mv[mcp_server.HELD_BELT] == "4", mv)
+mv = mcp_server._build_movement(BOM, "arrival", "Arrived", True)
+check("Arrived: the belt goes out", mv["baggage"] == "4" and mv[mcp_server.HELD_BELT] is None, mv)
+check("a departure never carries a belt at all",
+      "baggage" not in mcp_server._build_movement(BOM, "departure", "Arrived", False))
+
+held = {"flight_number": "KL877", "arrival": {"baggage": None, mcp_server.HELD_BELT: "4"}}
+check("release_belt makes a held belt public",
+      mcp_server.release_belt(held)["arrival"]["baggage"] == "4")
+check("and leaves the record it was given alone", held["arrival"]["baggage"] is None)
+public = {"arrival": {"baggage": "10", mcp_server.HELD_BELT: None}}
+check("with nothing held, it hands back the same record", mcp_server.release_belt(public) is public)
+check("nothing served carries the held copy",
+      mcp_server.HELD_BELT not in mcp_server.without_held_belt(held)["arrival"]
+      and mcp_server.without_held_belt(held)["arrival"]["baggage"] is None)
+check("a record with no arrival passes through", mcp_server.without_held_belt({"x": 1}) == {"x": 1})
+
+# THE POLL: FR24 has seen it land, the provider still says it is in the air.
+pollstate.forget_local()
+fr24.forget_cached()
+LANDING_AT = NOW - timedelta(minutes=4)
+AIR = dto(dep_actual=iso(NOW - timedelta(hours=2)), arr_sched=iso(NOW + timedelta(minutes=5)),
+          status="active")
+AIR["arrival"]["baggage"] = None
+AIR["arrival"][mcp_server.HELD_BELT] = "10"
+st = pollstate.blank_state("6E5071", "2026-09-07")
+st["dto"] = AIR
+# SEEN BEFORE, as a watched flight is: a first sighting says nothing by design.
+st["notify"], _ = poller.notify.decide(None, AIR, None, NOW - timedelta(hours=1))
+pollstate.write_state("6E5071", "2026-09-07", st, None)
+poller.fetch_flight_full = lambda *a, **k: ("text", AIR)
+fr24.landing_for = lambda *a, **k: {"outcome": fr24.LANDED, "diverted_to": None,
+                                    "landed_utc": LANDING_AT.strftime("%Y-%m-%dT%H:%M:%S"),
+                                    "takeoff_utc": None}
+r = poller.poll_one("6E5071", "2026-09-07", now=NOW)
+stored, _ = pollstate.read_state("6E5071", "2026-09-07")
+check("FR24's landing releases the held belt onto the stored record",
+      (stored.get("dto") or {}).get("arrival", {}).get("baggage") == "10", stored.get("dto"))
+check("and the change is recorded as the belt appearing",
+      "baggage_belt" in [c["field"] for c in r["changes"]], r["changes"])
+check("the landing summary names it",
+      any(m["kind"] == "landed" and m["values"].get("belt") == "10"
+          for m in (stored.get("notify") or {}).get("outbox") or []),
+      (stored.get("notify") or {}).get("outbox"))
+
+pollstate.forget_local()
+fr24.forget_cached()
+st = pollstate.blank_state("6E5071", "2026-09-07")
+st["dto"] = AIR
+pollstate.write_state("6E5071", "2026-09-07", st, None)
+fr24.landing_for = lambda *a, **k: {"outcome": fr24.LANDED, "diverted_to": "HYD",
+                                    "landed_utc": LANDING_AT.strftime("%Y-%m-%dT%H:%M:%S"),
+                                    "takeoff_utc": None}
+poller.poll_one("6E5071", "2026-09-07", now=NOW)
+stored, _ = pollstate.read_state("6E5071", "2026-09-07")
+check("a landing somewhere else releases nothing: the belt is at the other airport",
+      (stored.get("dto") or {}).get("arrival", {}).get("baggage") is None, stored.get("dto"))
+pollstate.forget_local()
+
 print()
 print("PASSED: %d   FAILURES: %d" % (PASS, FAIL))
 sys.exit(1 if FAIL else 0)

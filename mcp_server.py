@@ -671,8 +671,53 @@ def _build_movement(movement, movement_name: str, raw_status, include_baggage: b
         "live_feed": _live_feed(m.get("quality")),
     }
     if include_baggage:
-        # baggageBelt only appears once the flight has landed; N/A before that.
-        out["baggage"] = m.get("baggageBelt")
+        # ── NEVER A BELT BEFORE THE LANDING ─────────────────────────────────
+        #
+        # THIS SAID THE BELT ONLY APPEARS ONCE THE FLIGHT HAS LANDED, AND IT
+        # DOES NOT. AeroDataBox published KL877's Mumbai belt "4" at 03:58 UTC on
+        # 24 Sep, twenty hours before the flight arrived. The app stops keeping a
+        # flight current once it has a belt, so that belt stopped her cards
+        # refreshing while she stood at the gate in Amsterdam.
+        #
+        # SO THE BELT GOES OUT ONLY ONCE THE ARRIVAL HAS HAPPENED by the
+        # provider's own status. Until then it is HELD, not thrown away: FR24
+        # often confirms a landing minutes before AeroDataBox's status catches
+        # up, and the poller releases the held belt then -- see release_belt --
+        # so the landing summary still names it. Nothing outside this server
+        # ever sees the held copy: see without_held_belt.
+        belt = m.get("baggageBelt")
+        out["baggage"] = belt if occurred else None
+        out[HELD_BELT] = None if occurred else belt
+    return out
+
+
+# THE KEY A BELT WAITS UNDER UNTIL THE FLIGHT HAS LANDED. Leading underscore:
+# private to this server, and stripped from every DTO that leaves it.
+HELD_BELT = "_baggage_held"
+
+
+def release_belt(dto):
+    """The DTO with a held arrival belt made public, for a flight FR24 has seen
+    land; the same object when there is nothing to release."""
+    arr = (dto or {}).get("arrival") or {}
+    held = arr.get(HELD_BELT)
+    if not held or arr.get("baggage"):
+        return dto
+    out = dict(dto)
+    out["arrival"] = dict(arr, baggage=held)
+    out["arrival"][HELD_BELT] = None
+    return out
+
+
+def without_held_belt(dto):
+    """The DTO as it may leave this server: no held belt on it."""
+    if not isinstance(dto, dict):
+        return dto
+    arr = dto.get("arrival")
+    if not isinstance(arr, dict) or HELD_BELT not in arr:
+        return dto
+    out = dict(dto)
+    out["arrival"] = {k: v for k, v in arr.items() if k != HELD_BELT}
     return out
 
 

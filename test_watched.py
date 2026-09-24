@@ -174,5 +174,24 @@ check("an ordinary lookup may use the cache", calls[0] is None, calls)
 check("fresh=1 asks with max_age zero, which no cached answer can satisfy",
       calls[1] == timedelta(0), calls)
 
+# ── A BELT HELD UNTIL LANDING NEVER LEAVES THE SERVER ──
+# The provider can publish an arrival belt a day early; the server holds it
+# until the flight has landed, and neither endpoint may hand the held copy out.
+print("-- no held belt is ever served --")
+HELD = "_baggage_held"
+api.fetch_flight_full = lambda *a, **k: ("", {"flight_number": "KL877",
+                                              "arrival": {"baggage": None, HELD: "4"}})
+served = api.get_flight("KL877", date="2026-09-24")
+check("/flight serves no held belt, and no belt", HELD not in served["arrival"]
+      and served["arrival"]["baggage"] is None, served)
+STATE[("KL877", "2026-09-24")] = {"dto": {"flight_number": "KL877", "data_age_seconds": 0,
+                                          "arrival": {"baggage": None, HELD: "4"}},
+                                  "last_adb_at": POLLED.isoformat()}
+kl = [x for x in get(["KL877:2026-09-24"])["flights"] if x["flight_number"] == "KL877"]
+check("/watched serves no held belt, and no belt",
+      len(kl) == 1 and HELD not in kl[0]["dto"]["arrival"] and kl[0]["dto"]["arrival"]["baggage"] is None, kl)
+check("and the stored copy keeps it for the poller to release",
+      STATE[("KL877", "2026-09-24")]["dto"]["arrival"][HELD] == "4")
+
 print("\nPASSED: %d   FAILURES: %d" % (PASS, len(FAILURES)))
 sys.exit(1 if FAILURES else 0)

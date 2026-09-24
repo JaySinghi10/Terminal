@@ -761,15 +761,25 @@ const REFRESH_SOON_MS = 6 * 60 * 60 * 1000;
 //
 // SCHEDULED, ESTIMATED OR ACTUAL, whichever the record has -- departureTs's own
 // precedence -- because the window has to open on the best time we hold.
+//
+// ── A BELT ENDS IT ONLY ONCE THE FLIGHT HAS LANDED ──────────────────────────
+//
+// "THE BELT IS PUBLISHED AFTER TOUCHDOWN" WAS NOT TRUE. AeroDataBox published
+// KL877's Mumbai belt twenty hours before it arrived, the first read on 24 Sep
+// stored it, and from then on this said the flight was finished: the open app
+// never asked about KL877 again while its gate changed from E2 to E6. A belt
+// now counts only once the flight is down. The server holds early belts back
+// as well; this is the half that does not depend on it.
 const WATCH_AFTER_LANDED_MS = 45 * 60 * 1000;
 
 export function watchLive(f: SavedFlight, now: number): boolean {
   if (f.archivedAt !== null) return false;
   const dep = departureTs(f);
   if (dep === null || now < dep - REFRESH_SOON_MS) return false;
-  if ((f.to.baggage ?? '') !== '') return false;
   const landed = landedInstant(f, now);
-  if (landed !== null) return now - landed <= WATCH_AFTER_LANDED_MS;
+  if (landed !== null) {
+    return (f.to.baggage ?? '') === '' && now - landed <= WATCH_AFTER_LANDED_MS;
+  }
   return !landingWindowClosed(arrivalTs(f), now);
 }
 

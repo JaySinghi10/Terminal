@@ -83,7 +83,7 @@ import fr24
 import pollstate
 import notify
 import store
-from mcp_server import fetch_flight_full
+from mcp_server import fetch_flight_full, release_belt
 
 logger = logging.getLogger("poller")
 
@@ -814,7 +814,27 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
             logger.warning("poll: fr24 failed for %s/%s: %s", number, day, exc)
             record["fr24_error"] = str(exc)[:200]
 
-    changes = diff((doc or {}).get("dto"), new_dto) if new_dto else []
+    # ── THE BELT, THE MOMENT FR24 SAYS THE FLIGHT IS DOWN ──
+    #
+    # A BELT IS HELD UNTIL THE FLIGHT HAS LANDED -- see mcp_server's
+    # release_belt -- and the provider's own status often says so minutes after
+    # FR24 has seen the touchdown: KL606 reached "Arrived" eight minutes after
+    # it. FR24 is what decides a landing here, so its word releases the belt,
+    # on the fresh record or, when this poll fetched none, on the stored one.
+    # NOT FOR A LANDING ELSEWHERE: the held belt is at the airport the flight
+    # was going to, which is not where it came down.
+    released = None
+    known_landing = (landing if landing is not None else (doc or {}).get("landing")) or {}
+    if known_landing.get("outcome") == fr24.LANDED and not known_landing.get("diverted_to"):
+        if new_dto:
+            new_dto = release_belt(new_dto)
+        else:
+            stored = (doc or {}).get("dto")
+            if stored and release_belt(stored) is not stored:
+                released = release_belt(stored)
+
+    changes = (diff((doc or {}).get("dto"), new_dto) if new_dto
+               else diff((doc or {}).get("dto"), released) if released else [])
 
     # ── WHICH OF THIS IS WORTH A MESSAGE ──
     #
@@ -824,7 +844,7 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
     # CURRENT record against what the person was last told (notify.py), so it
     # runs on the record we have now whether or not this poll fetched a new one:
     # a cancellation's next-flight search continues on polls that fetch nothing.
-    current_dto = new_dto or (doc or {}).get("dto")
+    current_dto = new_dto or released or (doc or {}).get("dto")
     current_landing = landing if landing is not None else (doc or {}).get("landing")
     prior_ns = (doc or {}).get("notify")
     new_ns, messages = prior_ns, []
@@ -903,6 +923,10 @@ def poll_one(number, day, now=None, budget_ok=True, spend=None, candidates=()):
             d["adb_misses"] = 0
         if landing is not None:
             d["landing"] = landing
+        # A BELT RELEASED ON A POLL THAT FETCHED NOTHING NEW, written onto the
+        # stored record without claiming an AeroDataBox poll happened.
+        if released is not None and not new_dto:
+            d["dto"] = released
         if want_fr24:
             d["last_fr24_at"] = pollstate._iso(now)
             d["fr24_polls"] = int(d.get("fr24_polls") or 0) + 1

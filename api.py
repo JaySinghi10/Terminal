@@ -40,6 +40,8 @@ from mcp_server import (
     quota_status,
     _validate_route_date,
     FLIGHT_MAX_FUTURE_DAYS,
+    # A BELT HELD UNTIL LANDING NEVER LEAVES THE SERVER. See release_belt.
+    without_held_belt,
 )
 
 load_dotenv()
@@ -133,7 +135,7 @@ def get_flight(flight_number: str, date: str | None = None, origin: str | None =
     if dto is None:
         suffix = f" on {day}" if day else ""
         return {"error": f"No flight found for {flight_number.strip().upper()}{suffix}"}
-    return dto
+    return without_held_belt(dto)
 
 
 @app.get("/route/{origin}/{destination}")
@@ -879,7 +881,7 @@ def chat(req: ChatRequest, request: Request):
             for call in turn.tool_calls:
                 result_text, flight_data = run_tool(call.name, call.args, gmail_access)
                 if flight_data is not None:
-                    captured_flight = flight_data
+                    captured_flight = without_held_belt(flight_data)
                 results.append((call, result_text))
             # THE MODEL'S OWN TURN GOES BACK VERBATIM. On Gemini 3 the parts
             # carry thought signatures which the next round requires; rebuilding
@@ -1309,7 +1311,7 @@ def intent(req: IntentRequest, request: Request):
             for call in turn.tool_calls:
                 result_text, flight_data = run_tool(call.name, call.args, gmail_access)
                 if flight_data is not None:
-                    captured_flight = flight_data
+                    captured_flight = without_held_belt(flight_data)
                 results.append((call, result_text))
             messages.append(llm.model_turn(turn))
             messages.append(llm.tool_results(results))
@@ -1666,7 +1668,7 @@ def _aged_dto(dto, polled_at, now):
     """The stored DTO with data_age_seconds made true as of now, or None."""
     if not isinstance(dto, dict):
         return None
-    out = dict(dto)
+    out = dict(without_held_belt(dto))
     try:
         polled = datetime.fromisoformat(str(polled_at).replace("Z", "+00:00"))
         if polled.tzinfo is None:
