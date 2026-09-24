@@ -25,6 +25,7 @@ import Constants from 'expo-constants';
 import * as Crypto from 'expo-crypto';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { isDevFixture } from './devFixtures';
 
 // Its own key, not part of the saved-flight store. The device id outlives every
 // flight on it and belongs to the install rather than to any record, and
@@ -409,7 +410,10 @@ export async function backfillWatches(
     }
     // Flights the server would still accept. See isoDay.
     const floor = isoDay(Date.now() - DAY_MS);
-    const due = flights.filter(f => ISO_DAY_RE.test(f.flightDate) && f.flightDate >= floor);
+    // NEVER A FIXTURE. Signing in backfills the whole saved list, and a
+    // screenshot flight carries a real number: registered, it would have the
+    // server watch the real BA177 for this phone. See lib/devFixtures.
+    const due = flights.filter(f => !isDevFixture(f) && ISO_DAY_RE.test(f.flightDate) && f.flightDate >= floor);
     let every = true;
     let firstBad: number | null = null;
     // ONE AT A TIME. Every one of these is a read-modify-write of a single

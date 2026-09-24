@@ -26,6 +26,8 @@
 // existed in production.
 import { makeFlightId, type SavedFlight, type SavedFlightEndpoint } from './storage';
 import { makePendingId, type PendingLeg } from './pendingRules';
+import { offsetMinutesAt, zoneAbbrAt } from './time';
+import type { AlternativeRow, Alternatives } from './alternatives';
 
 // ── HOW A FIXTURE IS RECOGNISED ─────────────────────────────────────────────
 //
@@ -36,8 +38,20 @@ import { makePendingId, type PendingLeg } from './pendingRules';
 // fixture obvious rather than something to be caught out by.
 export const DEV_PREFIX = 'ZZ9';
 
-export function isDevFixture(f: { flightNumber?: string | null } | null | undefined): boolean {
-  return (f?.flightNumber ?? '').toUpperCase().startsWith(DEV_PREFIX);
+// ── AND BY ITS TRIP, FOR THE SCREENSHOT FLIGHTS ─────────────────────────────
+//
+// THE WEBSITE'S SCREENSHOTS NEED REAL-LOOKING FLIGHTS -- BA177, not ZZ907 --
+// and those cannot be told apart by number. Every fixture is installed inside a
+// trip whose id starts "dev-" (see tripId below), where a real trip's id starts
+// "trip:" (newTripId in lib/saved), so the trip is the second mark. The number
+// stays the first: a pending leg need not belong to a trip at all.
+export const DEV_TRIP_PREFIX = 'dev-';
+
+export function isDevFixture(
+  f: { flightNumber?: string | null; tripId?: string | null } | null | undefined,
+): boolean {
+  if ((f?.flightNumber ?? '').toUpperCase().startsWith(DEV_PREFIX)) return true;
+  return typeof f?.tripId === 'string' && f.tripId.startsWith(DEV_TRIP_PREFIX);
 }
 
 // ── TIME, WRITTEN THE WAY THE PROVIDER WRITES IT ────────────────────────────
@@ -143,6 +157,12 @@ type LegArgs = {
   // it; every other fixture leaves it null, which is what an ordinary flight
   // carries and what the card must render as a question mark.
   divertedTo?: string | null;
+  // WHO FLIES IT, ON WHAT, UNDER WHICH REFERENCE: the test values unless a
+  // scenario says otherwise, and the website's screenshot flights say otherwise.
+  airline?: string;
+  aircraft?: string;
+  registration?: string;
+  pnr?: string;
 };
 
 function leg(a: LegArgs): SavedFlight {
@@ -151,13 +171,13 @@ function leg(a: LegArgs): SavedFlight {
   return {
     id: makeFlightId(a.number, date),
     flightNumber: a.number,
-    airline: 'Terminal Test Air',
+    airline: a.airline ?? 'Terminal Test Air',
     flightDate: date,
     status: a.status ?? 'scheduled',
     from: endpoint(a.from),
     to: endpoint(a.to),
-    aircraftModel: 'Airbus A320',
-    aircraftRegistration: 'VT-ZZZ',
+    aircraftModel: a.aircraft ?? 'Airbus A320',
+    aircraftRegistration: a.registration ?? 'VT-ZZZ',
     savedAt: now,
     updatedAt: now,
     landedAt: a.landedMs ?? null,
@@ -173,7 +193,7 @@ function leg(a: LegArgs): SavedFlight {
     archivedAt: null,
     remindersSetAt: null,
     tripId: a.tripId ?? null,
-    pnr: 'ZZFIX1',
+    pnr: a.pnr ?? 'ZZFIX1',
     operatingFlightNumber: null,
     operatedBy: null,
     rawStatus: a.rawStatus ?? 'Expected',
@@ -271,7 +291,7 @@ export type DevScenario = {
 
 // THE TRIP ID IS STABLE WITHIN ONE INSTALL and different between them, so
 // installing a second scenario replaces the first rather than joining it.
-const tripId = () => `dev-${Date.now()}`;
+const tripId = () => `${DEV_TRIP_PREFIX}${Date.now()}`;
 
 function doubtLeg(trip: string | null): PendingLeg {
   const t = Date.now();
@@ -452,5 +472,328 @@ export const DEV_SCENARIOS: DevScenario[] = [
         pending: [],
       };
     },
+  },
+];
+
+// ══ THE WEBSITE'S SCREENSHOT FLIGHTS ════════════════════════════════════════
+//
+// terminalaero.com shows the app on an iPhone, and Apple's rule for its device
+// frames is the app as it runs -- so the site's pictures are screenshots of
+// these, taken on a phone. They are fixtures like every one above: ordinary
+// records in the ordinary store, drawn by the ordinary components.
+//
+// REAL-LOOKING AND NOT REAL. BA177, BA286 and LX325 are real numbers on real
+// routes, flown here on made-up times anchored to now. Nothing about them comes
+// from the flight data provider, and nothing may: provider data cannot sit on a
+// public page. Their trip id keeps them off every network path (isDevFixture),
+// and devAlternatives answers the cancellation sheet in place of the server.
+//
+// NO INDIAN AIRPORTS, by the site's own rule: London, New York, San Francisco
+// and Zurich.
+//
+// EACH SHOT MAY CARRY A NOTICE: the notification that moment brings, in the
+// server's own words -- notify.py subject() and render(), which this mirrors;
+// change one, change both -- shown by profile.tsx a few seconds after install,
+// as a local notification (which iOS draws exactly as it draws a push) or as
+// the app's own undo banner.
+
+type SitePlaceDef = { iata: string; airport: string; city: string; short: string; tz: string };
+
+const SITE_PLACES = {
+  LHR: { iata: 'LHR', airport: 'London Heathrow', city: 'London', short: 'Heathrow', tz: 'Europe/London' },
+  JFK: { iata: 'JFK', airport: 'New York John F Kennedy', city: 'New York', short: 'John F Kennedy', tz: 'America/New_York' },
+  SFO: { iata: 'SFO', airport: 'San Francisco International', city: 'San Francisco', short: 'San Francisco', tz: 'America/Los_Angeles' },
+  ZRH: { iata: 'ZRH', airport: 'Zurich', city: 'Zurich', short: 'Zurich', tz: 'Europe/Zurich' },
+} satisfies Record<string, SitePlaceDef>;
+
+// THE ZONE AT THAT MOMENT, not a constant: the shots may be taken either side
+// of a clock change, and the label and the offset must agree with the clocks.
+// The same two helpers the app's own clocks use, so "BST" here is "BST" there.
+function sitePlace(code: keyof typeof SITE_PLACES, at: number): Place {
+  const d: SitePlaceDef = SITE_PLACES[code];
+  return {
+    iata: d.iata, airport: d.airport, city: d.city, short: d.short, tz: d.tz,
+    tzLabel: zoneAbbrAt(at, d.tz) ?? '',
+    offset: offsetMinutesAt(at, d.tz) ?? 0,
+  };
+}
+
+// "5:05 PM", the server's _clock: a 12-hour clock with no zone.
+function clock12(ms: number, offsetMin: number): string {
+  return clockText(ms, offsetMin, '').trim();
+}
+
+// notify.py _day_label: "today", "tomorrow", a weekday inside the week, or
+// "25 Sep" beyond it, all read in the departure airport's own day.
+function dayWord(ms: number, now: number, offsetMin: number): string {
+  const day = (x: number) => Math.floor((x + offsetMin * MIN) / (24 * HOUR));
+  const d = day(ms) - day(now);
+  if (d <= 0) return 'today';
+  if (d === 1) return 'tomorrow';
+  const at = new Date(ms + offsetMin * MIN);
+  if (d < 7) {
+    return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][at.getUTCDay()];
+  }
+  return `${at.getUTCDate()} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][at.getUTCMonth()]}`;
+}
+
+// notify.py _when: "today at 5:05 PM PDT", "on Sunday at ...".
+function whenWords(day: string, time: string, tz: string): string {
+  const d = day === 'today' || day === 'tomorrow' ? day : `on ${day}`;
+  return `${d} at ${time}${tz ? ` ${tz}` : ''}`;
+}
+
+export type SiteNotice =
+  | { kind: 'push'; title: string; body: string }
+  | { kind: 'undo'; text: string };
+
+export type SiteShot = {
+  key: string;
+  label: string;
+  note: string;
+  build: () => { flights: SavedFlight[]; pending: PendingLeg[]; notice: SiteNotice | null };
+};
+
+const BA177 = { airline: 'British Airways', aircraft: 'Boeing 777-200', registration: 'G-TRML', pnr: 'QX7R2P' };
+const BA286 = { airline: 'British Airways', aircraft: 'Airbus A380-800', registration: 'G-TRMA', pnr: 'QX7R2P' };
+const LX325 = { airline: 'Swiss', aircraft: 'Airbus A220-300', registration: 'HB-TRM', pnr: 'QX7R2P' };
+
+// LONDON TO NEW YORK IS ABOUT EIGHT HOURS; SAN FRANCISCO TO LONDON ABOUT TEN,
+// AND LONDON TO ZURICH NEARLY TWO. The layover is the one the site's copy has:
+// two hours forty-five.
+const BLOCK_177 = 8 * HOUR + 5 * MIN;
+const BLOCK_286 = 10 * HOUR + 15 * MIN;
+const BLOCK_325 = HOUR + 45 * MIN;
+const LAYOVER = 2 * HOUR + 45 * MIN;
+
+// ── BA177, ONE FLIGHT THROUGH ITS DAY ──────────────────────────────────────
+function ba177(stage: 'gate' | 'delay' | 'air' | 'landed' | 'belt') {
+  const t = Date.now();
+  const lhr = sitePlace('LHR', t);
+  const jfk = sitePlace('JFK', t);
+  const title = `To ${jfk.city} · BA177`;
+  const base = { ...BA177, number: 'BA177', tripId: tripId() };
+  if (stage === 'gate' || stage === 'delay') {
+    const dep = t + 80 * MIN;
+    const slip = stage === 'delay' ? 25 * MIN : 0;
+    const flight = leg({
+      ...base,
+      from: { place: lhr, scheduledMs: dep, estimatedMs: slip ? dep + slip : null, terminal: '5', gate: 'B32' },
+      to: { place: jfk, scheduledMs: dep + BLOCK_177, estimatedMs: slip ? dep + BLOCK_177 + slip : null, terminal: '8' },
+      rawStatus: slip ? 'Delayed' : 'Expected',
+    });
+    const body = slip
+      ? `Delayed 25 min, now leaving ${clockText(dep + slip, lhr.offset, lhr.tzLabel)}`
+      : 'Gate changed to B32';
+    return { flight, notice: { kind: 'push' as const, title, body } };
+  }
+  if (stage === 'air') {
+    const dep = t - 70 * MIN;
+    const due = dep + BLOCK_177 + 5 * MIN;
+    const flight = leg({
+      ...base,
+      from: { place: lhr, scheduledMs: dep, actualMs: dep + 10 * MIN, terminal: '5', gate: 'B32' },
+      to: { place: jfk, scheduledMs: dep + BLOCK_177, estimatedMs: due, terminal: '8' },
+      status: 'active',
+      rawStatus: 'EnRoute',
+    });
+    return { flight, notice: { kind: 'push' as const, title, body: `Took off, landing around ${clockText(due, jfk.offset, jfk.tzLabel)}` } };
+  }
+  const down = stage === 'belt' ? t - 14 * MIN : t - 3 * MIN;
+  const sched = down - 9 * MIN;
+  const dep = sched - BLOCK_177;
+  const flight = leg({
+    ...base,
+    from: { place: lhr, scheduledMs: dep, actualMs: dep + 12 * MIN, terminal: '5', gate: 'B32' },
+    to: { place: jfk, scheduledMs: sched, actualMs: down, terminal: '8', baggage: stage === 'belt' ? '9' : null },
+    status: 'landed',
+    rawStatus: 'Arrived',
+    landedMs: down,
+  });
+  const body = stage === 'belt' ? 'Bags on belt 9' : `Landed at ${clockText(down, jfk.offset, jfk.tzLabel)}`;
+  return { flight, notice: { kind: 'push' as const, title, body } };
+}
+
+// ── BA286 AND LX325, SAN FRANCISCO TO ZURICH THROUGH LONDON ────────────────
+function trip286(opts: { lead?: number; late?: number; cancelled?: boolean; landedAgo?: number }): SavedFlight[] {
+  const t = Date.now();
+  const sfo = sitePlace('SFO', t);
+  const lhr = sitePlace('LHR', t);
+  const zrh = sitePlace('ZRH', t);
+  const id = tripId();
+  const landed = opts.landedAgo != null;
+  const arr1 = landed ? t - (opts.landedAgo as number) : t + (opts.lead ?? 3 * HOUR + 40 * MIN) + BLOCK_286;
+  const dep1 = arr1 - BLOCK_286;
+  const dep2 = arr1 + LAYOVER;
+  const late = (opts.late ?? 0) * MIN;
+  return [
+    leg({
+      ...BA286, number: 'BA286', tripId: id,
+      from: {
+        place: sfo, scheduledMs: dep1, terminal: 'I',
+        estimatedMs: late ? dep1 + late : null,
+        actualMs: landed ? dep1 + 5 * MIN : null,
+      },
+      to: {
+        place: lhr, scheduledMs: arr1, terminal: '5',
+        estimatedMs: late ? arr1 + late : null,
+        actualMs: landed ? arr1 : null,
+      },
+      status: opts.cancelled ? 'cancelled' : landed ? 'landed' : 'scheduled',
+      rawStatus: opts.cancelled ? 'Canceled' : landed ? 'Arrived' : late ? 'Delayed' : 'Expected',
+      landedMs: landed ? arr1 : null,
+    }),
+    leg({
+      ...LX325, number: 'LX325', tripId: id,
+      from: { place: lhr, scheduledMs: dep2, terminal: '2' },
+      to: { place: zrh, scheduledMs: dep2 + BLOCK_325, terminal: '1' },
+    }),
+  ];
+}
+
+// ── THE CANCELLATION SHEET'S ANSWER, WITHOUT THE SERVER ─────────────────────
+//
+// WHAT /alternatives WOULD STORE FOR BA286: the other flights from San
+// Francisco to London that day, each marked against LX325 by the same rule the
+// server uses (_band: under two hours will miss, within half an hour of it is
+// at risk). One makes it easily, one only just, one would miss it, and one
+// gives no arrival time. Null for every other fixture, whose sheet then says
+// it is still looking -- which is what the server said for them anyway.
+export function devAlternatives(f: SavedFlight, now: number = Date.now()): Alternatives | null {
+  if (f.flightNumber !== 'BA286' || !isDevFixture(f)) return null;
+  const dep = Date.parse(f.from.scheduledIso ?? '');
+  if (!Number.isFinite(dep)) return null;
+  const sfo = sitePlace('SFO', dep);
+  const lhr = sitePlace('LHR', dep);
+  const nextDep = dep + BLOCK_286 + LAYOVER;
+  const others: { number: string; airline: string; at: number; lands: boolean }[] = [
+    { number: 'BA284', airline: 'British Airways', at: dep - (2 * HOUR + 35 * MIN), lands: true },
+    { number: 'VS20', airline: 'Virgin Atlantic', at: dep + 35 * MIN, lands: true },
+    { number: 'UA901', airline: 'United Airlines', at: dep + 70 * MIN, lands: true },
+    { number: 'UA930', airline: 'United Airlines', at: dep + 90 * MIN, lands: false },
+  ];
+  const rows: AlternativeRow[] = others.map(o => {
+    const arr = o.lands ? o.at + BLOCK_286 : null;
+    const wait = arr === null ? null : Math.round((nextDep - arr) / MIN);
+    const connects = wait === null ? 'unknown' : wait < 120 ? 'will_miss' : wait <= 150 ? 'at_risk' : 'comfortable';
+    return {
+      flightNumber: o.number,
+      airline: o.airline,
+      destinationIata: 'LHR',
+      departureIso: zoned(o.at, sfo.offset),
+      arrivalIso: arr === null ? null : zoned(arr, lhr.offset),
+      arrivalLabel: arr === null ? null : clockText(arr, lhr.offset, lhr.tzLabel),
+      time: clock12(o.at, sfo.offset),
+      tz: sfo.tzLabel,
+      day: dayWord(o.at, now, sfo.offset),
+      date: dayOf(o.at, sfo.offset),
+      connects,
+      layoverMinutes: wait,
+      minimumMinutes: 120,
+    };
+  });
+  return {
+    searchedAt: new Date(now - 30_000).toISOString(),
+    daysSearched: 1,
+    done: true,
+    maxDays: 7,
+    origin: 'SFO',
+    destination: 'LHR',
+    nextLeg: {
+      flightNumber: 'LX325',
+      departureIata: 'LHR',
+      arrivalIata: 'ZRH',
+      departureIso: zoned(nextDep, lhr.offset),
+      departureLabel: clockText(nextDep, lhr.offset, lhr.tzLabel),
+    },
+    rows,
+  };
+}
+
+const TO_LONDON = 'To London · BA286';
+
+export const SITE_SHOTS: SiteShot[] = [
+  {
+    key: 'site-gate',
+    label: 'Site 1 · BA177 gate changed',
+    note: 'My Flights. Notification: Gate changed to B32.',
+    build: () => { const b = ba177('gate'); return { flights: [b.flight], pending: [], notice: b.notice }; },
+  },
+  {
+    key: 'site-delay',
+    label: 'Site 2 · BA177 delayed',
+    note: 'My Flights. Notification: Delayed 25 min.',
+    build: () => { const b = ba177('delay'); return { flights: [b.flight], pending: [], notice: b.notice }; },
+  },
+  {
+    key: 'site-air',
+    label: 'Site 3 · BA177 in the air',
+    note: 'My Flights. Notification: Took off.',
+    build: () => { const b = ba177('air'); return { flights: [b.flight], pending: [], notice: b.notice }; },
+  },
+  {
+    key: 'site-landed',
+    label: 'Site 4 · BA177 landed',
+    note: 'My Flights. Notification: Landed.',
+    build: () => { const b = ba177('landed'); return { flights: [b.flight], pending: [], notice: b.notice }; },
+  },
+  {
+    key: 'site-belt',
+    label: 'Site 5 · BA177 bags on belt 9',
+    note: 'My Flights. Notification: Bags on belt 9.',
+    build: () => { const b = ba177('belt'); return { flights: [b.flight], pending: [], notice: b.notice }; },
+  },
+  {
+    key: 'site-trip',
+    label: 'Site 6 · trip, layover comfortable',
+    note: 'My Flights. No notification.',
+    build: () => ({ flights: trip286({}), pending: [], notice: null }),
+  },
+  {
+    key: 'site-risk',
+    label: 'Site 7 · trip, connection at risk',
+    note: 'My Flights. BA286 40 min late. Notification: at risk.',
+    build: () => ({
+      flights: trip286({ late: 40 }), pending: [],
+      notice: { kind: 'push', title: TO_LONDON, body: 'Your connection in London is at risk' },
+    }),
+  },
+  {
+    key: 'site-miss',
+    label: 'Site 8 · trip, connection won’t hold',
+    note: 'My Flights. BA286 70 min late. Notification: won’t hold.',
+    build: () => ({
+      flights: trip286({ late: 70 }), pending: [],
+      notice: { kind: 'push', title: TO_LONDON, body: 'Your connection in London won’t hold' },
+    }),
+  },
+  {
+    key: 'site-cancelled',
+    label: 'Site 9 · trip, BA286 cancelled',
+    note: 'My Flights, then tap BA286 for the sheet. Notification: Cancelled.',
+    build: () => {
+      const flights = trip286({ lead: 5 * HOUR + 40 * MIN, cancelled: true });
+      const alt = devAlternatives(flights[0]);
+      const next = alt?.rows[0];
+      const body = next
+        ? `Cancelled, next is ${next.flightNumber} ${whenWords(next.day, next.time, next.tz ?? '')}`
+        : 'Cancelled, finding the next flight';
+      return { flights, pending: [], notice: { kind: 'push', title: TO_LONDON, body } };
+    },
+  },
+  {
+    key: 'site-layover',
+    label: 'Site 10 · trip, on the layover in London',
+    note: 'The Deck tab: where to eat at Heathrow. No notification.',
+    build: () => ({ flights: trip286({ landedAgo: 35 * MIN }), pending: [], notice: null }),
+  },
+  {
+    key: 'site-imported',
+    label: 'Site 11 · trip, just imported',
+    note: 'My Flights. The undo banner: added BA286 +1 more.',
+    build: () => ({
+      flights: trip286({ lead: 26 * HOUR }), pending: [],
+      notice: { kind: 'undo', text: 'added BA286 +1 more' },
+    }),
   },
 ];

@@ -48,7 +48,8 @@ import { useSaved, API_BASE } from '../lib/saved';
 // THE FAKE DISRUPTIONS, for the dev-only section at the foot of this sheet.
 // Imported at the top like everything else: the Section that uses it is inside
 // a __DEV__ branch, so the bundler drops both together in a release build.
-import { DEV_SCENARIOS } from '../lib/devFixtures';
+import { DEV_SCENARIOS, SITE_SHOTS, type SiteNotice } from '../lib/devFixtures';
+import { useToast } from '../lib/toast';
 import { useGoogleSignIn } from '../lib/googleAuth';
 // THE PERMISSION REQUEST, FROM reminders RATHER THAN watch. ensurePushToken is
 // guarded by a once-per-install flag and would return without a dialog; this
@@ -208,6 +209,25 @@ export default function Profile() {
   } = useAccount();
   // THE SAVED LIST, FOR THE BACKFILL; the email, for the card and for logout.
   const { email, setEmail, savedFlights, devSetFixtures } = useSaved();
+  const { showUndo } = useToast();
+  // ── A SCREENSHOT SHOT'S NOTICE, TEN SECONDS AFTER THE TAP ──────────────────
+  //
+  // Long enough to close this sheet and take the shot without it, then the
+  // notification arrives over My Flights and there is a second shot with it.
+  // A LOCAL NOTIFICATION, WHICH iOS DRAWS EXACTLY AS IT DRAWS A PUSH, carrying
+  // the words the server now sends; the undo banner is the app's own. Dev
+  // only: see the section at the foot of this sheet.
+  const SHOT_DELAY_S = 10;
+  const devNotice = (n: SiteNotice) => {
+    if (n.kind === 'push') {
+      void Notifications.scheduleNotificationAsync({
+        content: { title: n.title, body: n.body, sound: 'default' },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: SHOT_DELAY_S },
+      });
+      return;
+    }
+    setTimeout(() => showUndo(n.text, async () => { await devSetFixtures([], []); }), SHOT_DELAY_S * 1000);
+  };
   const { signIn } = useGoogleSignIn();
   const effectiveName = displayName ?? username;
   // The first-run ask: signed in, no display name yet. Skipping fills it with
@@ -554,6 +574,36 @@ export default function Profile() {
                   <Spacer />
                 </HStack>
               </Button>
+            </Section>
+          )}
+
+          {/* ── THE WEBSITE'S SCREENSHOTS ── Dev only, like the section above,
+              and dropped from a release build with it. Each button replaces
+              the fixtures with one shot's flights and, ten seconds later,
+              shows the notification that moment brings. See SITE_SHOTS in
+              lib/devFixtures for what each is and why none is real. */}
+          {__DEV__ && (
+            <Section
+              title="Dev only · website screenshots"
+              footer={<Text>{'Loads one shot, replacing the last. Close this sheet; its notification arrives ten seconds after the tap. Clear fixtures when done.'}</Text>}
+            >
+              {SITE_SHOTS.map(s => (
+                <Button
+                  key={s.key}
+                  onPress={() => {
+                    const b = s.build();
+                    void devSetFixtures(b.flights, b.pending).then(() => {
+                      if (b.notice !== null) devNotice(b.notice);
+                    });
+                  }}
+                  modifiers={[buttonStyle('plain')]}
+                >
+                  <HStack>
+                    <Text modifiers={[foregroundColor(WHITE)]}>{s.label}</Text>
+                    <Spacer />
+                  </HStack>
+                </Button>
+              ))}
             </Section>
           )}
 

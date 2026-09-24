@@ -28,6 +28,7 @@
 // may keep.
 import { deviceId, WATCH_SECRET } from './watch';
 import type { SavedFlight } from './storage';
+import { devAlternatives, isDevFixture } from './devFixtures';
 
 // ── WOULD THIS REPLACEMENT STILL MAKE THE NEXT LEG ──────────────────────────
 //
@@ -113,6 +114,10 @@ function verdict(v: unknown): Connects {
 export async function fetchAlternatives(
   apiBase: string, f: SavedFlight,
 ): Promise<Alternatives | null> {
+  // A FIXTURE IS ANSWERED HERE, NEVER BY THE SERVER. The screenshot flights
+  // carry real numbers, and the server would search the provider for them; the
+  // older fixtures' ZZ9 numbers only ever came back empty. See devAlternatives.
+  if (isDevFixture(f)) return devAlternatives(f);
   try {
     const params = [
       `date=${encodeURIComponent(f.flightDate)}`,
