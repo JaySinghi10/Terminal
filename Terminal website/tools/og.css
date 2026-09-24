@@ -1,0 +1,10 @@
+/* Styles for tools/og.html only. Copied to assets/og.css while the image is
+   rendered, and removed after. */
+body.og{width:1200px;height:630px;overflow:hidden;padding:64px 72px;display:flex;flex-direction:column;justify-content:space-between;background:#050505}
+.og-top{display:flex;align-items:center;gap:16px;font-weight:600;font-size:34px;letter-spacing:-.01em}
+.og-top svg{width:52px;height:52px}
+.og h1{font-size:76px;font-weight:600;letter-spacing:-.035em;line-height:1.06;max-width:15ch}
+.og h1 .d{font-family:var(--mono);font-weight:700;letter-spacing:-.02em;color:var(--green)}
+.og h1 .was{color:var(--ink3)}
+.og-foot{display:flex;justify-content:space-between;font-size:26px;color:var(--ink2)}
+.og-foot .mono{color:var(--ink3)}

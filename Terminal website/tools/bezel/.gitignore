@@ -1,0 +1,4 @@
+# Apple's bezel PNG lives here for tools/phones.py and is never committed:
+# the licence allows mock-ups, not redistribution, and the repository is public.
+*
+!.gitignore

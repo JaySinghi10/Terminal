@@ -1,0 +1,318 @@
+/* Terminal's site: an off-white page that ends in black, with an airport's
+   manners rather than a command line's.
+
+   ONE TYPEFACE. Inter for everything; flight data -- numbers, gates, codes --
+   in its capitals with even-width figures, the way a departures board sets
+   them. Headings stay in sentence case.
+
+   THE AIRPORT, SPARINGLY. One split-flap board, in the hero, flipping to a
+   new moment every five seconds.
+   Gates and terminals named in the text sit on small black plates, as they
+   are signed. The dining table marks each place with the AIGA/DOT pictogram
+   airports use. Nothing else borrows from the terminal building.
+
+   COLOUR MEANS WHAT IT MEANS IN THE APP. Green is live, amber is late or at
+   risk, red is cancelled or will not hold; each in a darker ink here, so it
+   reads on the off-white. Everything else is ink on paper.
+
+   TWO CURVES FOR ALL THE MOTION. --spring, iOS's default spring, for
+   anything that moves; --ease at 220ms for anything that only changes
+   colour or opacity.
+
+   THE PHONES ARE APPLE'S iPHONE 17 BEZEL IN WHITE, WHOLE: no crop, shadow,
+   tilt or motion, the words beside them, never on them. A step control
+   changes the screenshot inside; the device never moves. */
+
+@font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(/assets/fonts/inter-latin.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:'Inter';font-style:normal;font-weight:400 700;font-display:swap;src:url(/assets/fonts/inter-symbols.woff2) format('woff2');unicode-range:U+2192,U+25B4,U+25BE}
+
+:root{
+  --paper:#f1f0ea;
+  --black:#050505;
+  --bg:var(--paper);
+  --ink:#141413;
+  --ink2:rgb(20 20 19/.64);
+  --ink3:rgb(20 20 19/.5);
+  --line:rgb(0 0 0/.09);
+  --line2:rgb(0 0 0/.16);
+  --card:#fbfaf6;
+  --plate:#141413;
+  --plate-ink:#f1f0ea;
+  --live:#166534;
+  --late:#8a4b08;
+  --off:#b42318;
+  --board:#121211;
+  --flap:#262624;
+  --flap-ink:#f1f0ea;
+  --flap-off:#f87171;
+  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --pad:16px;
+  --maxw:1200px;
+  --head:64px;
+  --ease:cubic-bezier(.44,0,.56,1);
+  --t:220ms;
+  --fade:300ms;
+  /* iOS's default spring (response 0.5 s, damping 0.82): about 1% past the
+     mark and settled by 650 ms, as a linear() curve where the browser takes
+     one and a close cubic-bezier where it does not. */
+  --spring:cubic-bezier(.32,.72,0,1);
+  --t-spring:650ms;
+  color-scheme:light;
+}
+@supports (transition-timing-function:linear(0,1)){
+  :root{--spring:linear(0 0%, 0.011 1.9%, 0.04 3.8%, 0.098 6.2%, 0.192 9.4%, 0.484 18.1%, 0.614 22.5%, 0.709 26.2%, 0.788 30%, 0.86 34.4%, 0.914 38.8%, 0.956 43.8%, 0.988 50%, 1.007 58.1%, 1.01 71.9%, 1 100%)}
+}
+@media(min-width:640px){:root{--pad:32px}}
+@media(min-width:1024px){:root{--pad:48px}}
+
+/* THE BLACK END: the same names with dark values, so anything inside it --
+   the App Store line, a link, a hairline -- needs no second set of rules. */
+.dark{
+  --bg:var(--black);
+  --ink:#f5f5f7;
+  --ink2:rgb(245 245 247/.64);
+  --ink3:rgb(245 245 247/.46);
+  --line:rgb(255 255 255/.12);
+  --line2:rgb(255 255 255/.22);
+  background:var(--bg);
+  color:var(--ink);
+  color-scheme:dark;
+}
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;scroll-padding-top:calc(var(--head) + 12px)}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow-x:hidden}
+a{color:inherit}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-align:inherit}
+a,button{-webkit-tap-highlight-color:transparent}
+img,svg{display:block}
+[hidden]{display:none!important}
+:focus-visible{outline:2px solid currentColor;outline-offset:3px;border-radius:4px}
+.wrap{max-width:var(--maxw);margin:0 auto;padding-left:var(--pad);padding-right:var(--pad)}
+.sprite{position:absolute;width:0;height:0;overflow:hidden}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.skip{position:absolute;left:var(--pad);top:-60px;background:var(--ink);color:var(--bg);padding:8px 12px;border-radius:6px;font-weight:600;text-decoration:none;z-index:60}
+.skip:focus{top:12px}
+
+/* ── SIGNAGE ── A gate or a terminal named in the text, on a plate; flight
+   numbers and codes in board capitals without one. */
+.plate{display:inline-block;padding:.1em .4em .08em;margin:0 .04em;border-radius:.28em;background:var(--plate);color:var(--plate-ink);font-weight:600;font-size:.84em;letter-spacing:.03em;line-height:1.3;font-feature-settings:'tnum' 1,'case' 1;vertical-align:.08em;white-space:nowrap}
+.fl{font-weight:600;letter-spacing:.02em;font-feature-settings:'tnum' 1,'case' 1;white-space:nowrap}
+/* A plate keeps the word it belongs to: a plate is an inline block, which a
+   no-break space does not hold to its neighbour. */
+.nw{white-space:nowrap}
+
+/* ── HEADER ── The name, and the email and X buttons; its hairline appears
+   once the page moves (site.js). */
+.top{position:sticky;top:0;z-index:50;background:var(--bg);border-bottom:1px solid transparent;transition:border-color var(--t) var(--ease)}
+.top.edge{border-bottom-color:var(--line)}
+.top .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;height:var(--head)}
+.brand{display:inline-flex;align-items:center;min-height:44px;font-weight:600;font-size:1.125rem;letter-spacing:-.015em;text-decoration:none}
+.brand:active{opacity:.6}
+.top nav{display:flex;align-items:center;gap:12px}
+.soon{font-size:.9375rem;font-weight:500;color:var(--ink2);white-space:nowrap}
+
+/* ── THE EMAIL AND X BUTTONS ── Twice on the page, in the header and in the
+   black close. In the header on a phone they shorten to "Email" and the
+   handle, and the address stays in the link's name.
+
+   ON HOVER, INK FLOODS IN FROM WHERE THE POINTER CAME IN. A disc grows from
+   that point until it fills the button, on the spring, and the border turns
+   on the 220ms ease. On leaving it drains back toward where the pointer went
+   out. page.js supplies the point; without it the disc grows from the
+   middle. Keyboard focus fills it too. Touch screens, which have no hover,
+   keep the plain press.
+   THE LABEL INVERTS WHERE THE INK IS, letter by letter as the edge passes:
+   it is white, blended by difference against the button's own background,
+   so it reads as ink on paper and paper on ink with no moment in between.
+   The button is isolated, so the blend never reaches the page behind it. */
+.btn{position:relative;isolation:isolate;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:1px solid var(--line2);border-radius:10px;background:var(--bg);font-size:.9375rem;font-weight:500;color:var(--ink);text-decoration:none;white-space:nowrap;transition:border-color var(--t) var(--ease)}
+.btn-label{position:relative;color:#fff;mix-blend-mode:difference}
+.btn::before{content:'';position:absolute;z-index:-1;left:var(--x,50%);top:var(--y,50%);width:var(--d,480px);height:var(--d,480px);margin-left:calc(var(--d,480px) / -2);margin-top:calc(var(--d,480px) / -2);border-radius:50%;background:var(--ink);transform:scale(0);transition:transform var(--t-spring) var(--spring)}
+.btn:focus-visible{border-color:var(--ink);outline-color:var(--ink)}
+.btn:focus-visible::before{transform:scale(1)}
+@media(hover:hover){
+  .btn:hover{border-color:var(--ink)}
+  .btn:hover::before{transform:scale(1)}
+}
+.btn:active{opacity:.75}
+.btn .short{display:none}
+@media(max-width:559px){
+  .top nav{gap:8px}
+  .top .btn{padding:0 12px}
+  .top .btn .long{display:none}
+  .top .btn .short{display:inline}
+}
+
+/* ── HERO ── The board, then what Terminal does about it, then when it
+   looks; the phone beside the words on a wide screen, under them on a
+   narrow one. */
+.hero{display:grid;gap:44px;padding-top:28px;padding-bottom:64px}
+.hero h1{font-size:clamp(1.875rem,1.25rem + 2.2vw,2.875rem);font-weight:600;letter-spacing:-.03em;line-height:1.08;max-width:15.5em;text-wrap:balance}
+.hero .sub{margin-top:22px;font-size:clamp(1.125rem,1rem + .3vw,1.3125rem);line-height:1.5;color:var(--ink2);max-width:29em;text-wrap:pretty}
+.hero .soon{display:block;margin-top:30px;font-size:1rem;color:var(--ink)}
+.device{justify-self:center;text-align:center}
+.device img{width:min(76vw,300px);height:auto;margin:0 auto}
+.caption{margin-top:14px;font-size:.875rem;line-height:1.5;color:var(--ink2);text-wrap:pretty}
+.device .caption{max-width:21em;margin-left:auto;margin-right:auto}
+@media(min-width:1024px){
+  .hero{grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:72px;min-height:calc(100svh - var(--head));padding-top:24px;padding-bottom:56px}
+  .device img{width:auto;height:clamp(500px,calc(100svh - var(--head) - 170px),640px)}
+}
+
+/* ── THE BOARD ── One row of a departures board. It opens on BA286 to
+   London flipping from ON TIME to CANCELLED, then every five seconds flips
+   to another flight at another airport (board.js), each flap turning
+   through the drum until it reaches its letter. Without script, or with
+   motion turned off, it rests on BA286 CANCELLED. On a narrow screen the
+   destination and gate go, so the letters stay big enough to read. */
+.hero .copy{min-width:0;container-type:inline-size}
+.board{display:inline-block;margin-bottom:36px;padding:10px 12px 12px;border-radius:10px;background:var(--board);--cw:18px}
+@supports (width:1cqi){.board{--cw:clamp(12px,calc((100cqi - 100px) / 27),22px)}}
+.board-head{display:flex;justify-content:space-between;gap:16px;margin:0 1px 9px;font-size:.6875rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:rgb(241 240 234/.56)}
+.board-at{color:rgb(241 240 234/.82)}
+.board-row{display:flex;gap:10px}
+.field{display:flex;gap:2px}
+.cell{position:relative;display:flex;align-items:center;justify-content:center;width:var(--cw);height:calc(var(--cw) * 1.42);border-radius:2px;background:var(--flap);color:var(--flap-ink);font-weight:600;font-size:calc(var(--cw) * .8);line-height:1;font-feature-settings:'tnum' 1,'case' 1;overflow:hidden}
+.cell b{font-weight:inherit}
+.cell::after{content:'';position:absolute;left:0;right:0;top:50%;height:1px;margin-top:-.5px;background:rgb(0 0 0/.6);z-index:2}
+/* A remark takes the app's colour for it once it has settled: red for
+   cancelled, amber for a delay, green for boarding, which is live. */
+.status.off .cell{color:var(--flap-off)}
+.status.late .cell{color:#fbbf24}
+.status.live .cell{color:#4ade80}
+.flaps .status .cell b{visibility:hidden}
+.flaps .status .cell::before{content:attr(data-from);position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.leaf{position:absolute;left:0;right:0;top:0;height:50%;overflow:hidden;background:var(--flap);transform-origin:50% 100%;z-index:1}
+.leaf span{position:absolute;left:0;right:0;top:0;height:200%;display:flex;align-items:center;justify-content:center;font-style:normal}
+.leaf.fall{animation:fall var(--flip,55ms) cubic-bezier(.5,0,.9,.5) forwards}
+@keyframes fall{to{transform:perspective(120px) rotateX(-90deg)}}
+@media(max-width:479px){
+  .board .dest,.board .gate{display:none}
+  @supports (width:1cqi){.board{--cw:clamp(12px,calc((100cqi - 60px) / 15),22px)}}
+}
+
+/* ── SECTIONS ── */
+.sec{padding-top:96px}
+.sec h2{font-size:clamp(1.75rem,1.3rem + 1.6vw,2.5rem);font-weight:600;letter-spacing:-.03em;line-height:1.08;max-width:16em;text-wrap:balance}
+.sec .lead{margin-top:18px;font-size:clamp(1.0625rem,1rem + .25vw,1.25rem);line-height:1.5;color:var(--ink2);max-width:33em;text-wrap:pretty}
+@media(min-width:1024px){.sec{padding-top:160px}}
+
+/* ── A MOMENT ── Words and a step list beside a phone; each step puts that
+   moment's screenshot in the phone, crossfading, the device itself still.
+   The phones alternate sides down the page. */
+.moment{display:grid;gap:40px;align-items:center}
+.moment .shots{justify-self:center}
+@media(min-width:1024px){
+  .moment{grid-template-columns:minmax(0,1fr) auto;gap:96px}
+  .moment.flip{grid-template-columns:auto minmax(0,1fr)}
+  .moment.flip .shots{order:-1}
+}
+/* On a phone the moment's iPhone is smaller than the hero's, so a step
+   and the screenshot it changes fit on one screen together. */
+.shots{position:relative;width:min(62vw,250px);aspect-ratio:1350/2760}
+@media(min-width:1024px){.shots{width:300px}}
+.shot{position:absolute;inset:0;width:100%;height:100%;opacity:0}
+.shot.on{opacity:1}
+.shot.rise{z-index:1;transition:opacity var(--fade) var(--ease)}
+.steps{margin-top:32px;max-width:27em;border-top:1px solid var(--line)}
+.step{display:flex;align-items:baseline;gap:6px;width:100%;min-height:52px;padding:13px 0;border-bottom:1px solid var(--line);font-size:1.0625rem;font-weight:500;color:var(--ink2);transition:color var(--t) var(--ease)}
+.step::before{content:'\2192';flex-shrink:0;width:1.25em;color:transparent;transition:color var(--t) var(--ease)}
+.step:hover{color:var(--ink)}
+.step[aria-selected=true]{color:var(--ink);font-weight:600}
+.step[aria-selected=true]::before{color:var(--ink)}
+.step small{display:block;margin-top:2px;font-size:.875rem;font-weight:400;color:var(--ink2)}
+.band.risk{color:var(--late)}
+.band.miss{color:var(--off)}
+.moment .caption{max-width:27em}
+
+/* ── WHERE TO EAT ── The table, full width: an airport's places either side
+   of its security checkpoint, each marked with the pictogram airports use. */
+.dine{margin-top:40px}
+.codes{display:flex;flex-wrap:wrap;gap:8px}
+.codes button{min-width:60px;height:40px;padding:0 14px;border:1px solid var(--line2);border-radius:8px;font-weight:600;font-size:.875rem;letter-spacing:.08em;color:var(--ink2);transition:color var(--t) var(--ease),background-color var(--t) var(--ease),border-color var(--t) var(--ease)}
+.codes button:hover{color:var(--ink);border-color:var(--ink3)}
+.codes button:active{opacity:.7}
+.codes button[aria-selected=true]{background:var(--plate);border-color:var(--plate);color:var(--plate-ink)}
+.dine-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px 16px;margin-top:28px}
+.dine-name{font-weight:600;font-size:1.25rem;letter-spacing:-.015em}
+.dine-name .code{margin-left:8px;font-size:.8125rem;letter-spacing:.08em;color:var(--ink2)}
+.dine-count{font-size:.9375rem;color:var(--ink2);font-feature-settings:'tnum' 1}
+.dine-count b{font-weight:600;color:var(--ink)}
+.sides{margin-top:16px;border:1px solid var(--line2);border-radius:16px;background:var(--card);overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr)}
+.side{padding:20px 20px 8px;min-width:0}
+.side-title{font-size:.75rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink2)}
+.side.after .side-title{color:var(--ink)}
+.side-note{margin-top:3px;font-size:.875rem;color:var(--ink2)}
+.side ul{list-style:none;margin-top:10px}
+.side li{display:flex;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.side li:first-child{border-top:0}
+.pict{flex-shrink:0;width:26px;height:26px;margin-top:1px;border-radius:6px;background:var(--plate);color:var(--plate-ink);display:grid;place-items:center}
+.pict svg{width:24px;height:24px}
+.side.before .pict{opacity:.5}
+.r-body{flex:1;min-width:0}
+.r-top{display:flex;align-items:baseline;gap:10px}
+.r-name{flex:1;min-width:0;font-weight:600;color:var(--ink)}
+.side.before .r-name{font-weight:500;color:var(--ink2)}
+.r-serve{font-size:.8125rem;font-weight:600;color:var(--ink2);font-feature-settings:'tnum' 1}
+.r-meta{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:3px;font-size:.8125rem;color:var(--ink2);font-feature-settings:'tnum' 1}
+.r-open{font-weight:600;color:var(--live)}
+.r-hours{margin-top:3px;font-size:.8125rem;color:var(--ink3);font-feature-settings:'tnum' 1}
+.checkpoint{display:flex;align-items:center;justify-content:center;padding:12px 0;border-top:1px dashed var(--line2);border-bottom:1px dashed var(--line2)}
+.checkpoint span{font-size:.75rem;font-weight:600;letter-spacing:.22em;text-transform:uppercase;color:var(--ink2)}
+.dine-note{margin-top:18px;font-size:1.0625rem;font-weight:500;max-width:40em;min-height:3.2em;text-wrap:pretty}
+#dinePanel{transition:opacity 120ms var(--ease)}
+#dinePanel.swap{opacity:0}
+@media(min-width:760px){
+  .sides{grid-template-columns:minmax(0,1fr) 64px minmax(0,1fr)}
+  .side{padding:22px 24px 10px}
+  .checkpoint{border:0;border-left:1px dashed var(--line2);border-right:1px dashed var(--line2);padding:0}
+  .checkpoint span{writing-mode:vertical-rl;transform:rotate(180deg)}
+}
+
+/* ── FROM A CONFIRMATION EMAIL ── The email as it arrives, beside the trip it
+   becomes. */
+.pair{display:grid;gap:40px;margin-top:44px;align-items:start}
+.pair .shots{justify-self:center}
+@media(min-width:1024px){.pair{grid-template-columns:minmax(0,1fr) auto;gap:96px}}
+.mail{max-width:34em;padding:22px 22px 18px;border:1px solid var(--line2);border-radius:16px;background:var(--card)}
+.mail-from{display:flex;justify-content:space-between;gap:12px;font-size:.875rem;color:var(--ink2)}
+.mail-subject{margin-top:8px;font-weight:600;font-size:1.25rem;letter-spacing:-.015em}
+.mail p{margin-top:12px;color:var(--ink2)}
+.mail .fl{color:var(--ink);letter-spacing:.06em}
+.mail table{width:100%;border-collapse:collapse;margin-top:14px;font-size:.9375rem}
+.mail td{padding:10px 10px 10px 0;border-top:1px solid var(--line);vertical-align:top;color:var(--ink2)}
+.mail td:first-child{white-space:nowrap;padding-top:12px;font-size:.8125rem;color:var(--ink3);font-feature-settings:'tnum' 1}
+
+/* ── WHAT THE SERVER KEEPS ── The last light section; the black starts under
+   it. */
+.sec.last{padding-bottom:128px}
+@media(min-width:1024px){.sec.last{padding-bottom:176px}}
+
+/* ── CLOSE ── Black from edge to edge, the one line in the first person, and
+   the footer carrying on below it as part of the same block. */
+/* ── CLOSE ── Black from edge to edge, the one line in the first person, and
+   the footer carrying on below it as part of the same block. */
+.close{padding-top:96px;padding-bottom:88px}
+.close .line{font-size:clamp(1.625rem,1.2rem + 1.8vw,2.5rem);font-weight:600;letter-spacing:-.026em;line-height:1.18;max-width:17em;text-wrap:balance}
+.ask{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
+.close .btn{min-height:48px;padding:0 20px;font-size:1rem}
+@media(min-width:1024px){.close{padding-top:152px;padding-bottom:128px}}
+
+/* ── FOOTER ── The small print and where to go, at the foot of the black
+   block, under a hairline the width of the words. Every link is a 44px-tall
+   target. */
+.foot-row{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:4px 24px;padding-top:16px;padding-bottom:36px;border-top:1px solid var(--line)}
+.foot-copy{font-size:.8125rem;color:var(--ink2)}
+.foot-links{display:flex;flex-wrap:wrap;column-gap:28px}
+.foot-links a{display:inline-flex;align-items:center;min-height:44px;font-size:.9375rem;color:var(--ink2);text-decoration:none;transition:color var(--t) var(--ease)}
+.foot-links a:hover{color:var(--ink)}
+.foot-links a:active{opacity:.6}
+
+@media(prefers-reduced-motion:reduce){
+  .top,.btn,.btn::before,.foot-links a,.step,.step::before,.codes button,#dinePanel,.shot.rise{transition:none}
+}
+
+/* the email's phone, sized as the moments' are */
+.pair .device img{width:min(62vw,250px);height:auto}
+@media(min-width:1024px){.pair .device img{width:300px;height:auto}}

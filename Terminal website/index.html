@@ -1,616 +1,185 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
-  <title>Terminal · One app for the whole flight</title>
-  <meta name="description" content="Terminal, an iPhone app. It tracks the flight by asking the aircraft, not the airline. It knows which side of security every restaurant is on. It knows the next flight when yours is cancelled."/>
-  <meta name="theme-color" content="#050505"/>
-  <meta property="og:type" content="website"/>
-  <meta property="og:title" content="Terminal · One app for the whole flight"/>
-  <meta property="og:description" content="Tracks the flight by asking the aircraft. Knows the airport. Knows the next flight when yours is cancelled."/>
-  <meta name="twitter:card" content="summary"/>
-  <meta name="twitter:site" content="@Jayo10o"/>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
-  <style>
-/* ══ TOKENS ═══════════════════════════════════════════════════════════════
-   Green is LIVE or ACTIONABLE. Amber is LATE. Red is CANCELLED. Everything
-   else is a grey off #e2e2e2. Phone first: base rules are for 375px, and the
-   min-width queries add room rather than take it away. */
-:root{
-  --bg:#050505;--fg-rgb:226 226 226;--fg:rgb(var(--fg-rgb));
-  --green:#4ade80;--amber:#fbbf24;--red:#f87171;
-  --t2:rgb(var(--fg-rgb)/.72);--t3:rgb(var(--fg-rgb)/.48);--t4:rgb(var(--fg-rgb)/.3);
-  --line:rgb(255 255 255/.08);--line2:rgb(255 255 255/.16);
-  --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --pad:20px;--maxw:1180px;--top:98px;
-  --card-fill:rgba(255,255,255,.045);--card-pill:rgba(255,255,255,.08);--card-rule:rgba(255,255,255,.06);
-  --card-label:rgba(226,226,226,.4);--card-quiet:rgba(226,226,226,.5);--card-dot:rgba(226,226,226,.25);
-}
-@media(min-width:640px){:root{--pad:32px;--top:76px}}
-@media(min-width:1024px){:root{--pad:64px}}
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;scroll-padding-top:calc(var(--top) + 12px)}
-body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:16px;line-height:1.55;overflow-x:hidden;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-:focus-visible{outline:2px solid var(--green);outline-offset:3px;border-radius:4px}
-button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
-a{color:inherit}
-
-/* ══ BACKGROUND ═══════════════════════════════════════════════════════════ */
-.dot-grid{position:fixed;inset:0;background:var(--bg);z-index:0;overflow:hidden;pointer-events:none}
-.dot-grid::before{content:'';position:absolute;inset:0;background-image:radial-gradient(rgb(255 255 255/.22) 1px,transparent 1px);background-size:20px 20px;
-  -webkit-mask-image:radial-gradient(circle 420px at var(--mx,70%) var(--my,30%),black 0%,transparent 100%);mask-image:radial-gradient(circle 420px at var(--mx,70%) var(--my,30%),black 0%,transparent 100%)}
-.vignette{position:fixed;inset:0;z-index:5;pointer-events:none;background:linear-gradient(to bottom,rgb(5 5 5/.5),transparent 10%),linear-gradient(to top,rgb(5 5 5/.5),transparent 10%)}
-.page{position:relative;z-index:10}
-.wrap{max-width:var(--maxw);margin:0 auto}
-
-/* ══ HEADER ═══════════════════════════════════════════════════════════════
-   Two rows on a phone: brand and the X link, then the three sections. One
-   row from 760px, with the second line of each item shown from 1024px. */
-.top{position:fixed;top:0;left:0;right:0;z-index:100;background:rgb(5 5 5/.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
-.top-in{max-width:var(--maxw);margin:0 auto;padding:0 var(--pad);display:grid;grid-template-columns:1fr auto;grid-template-areas:"brand x" "nav nav";align-items:center;column-gap:16px}
-.brand{grid-area:brand;font-family:var(--mono);font-size:1rem;font-weight:500;letter-spacing:-.02em;color:var(--fg);padding:14px 0 10px;text-decoration:none}
-.brand i{font-style:normal;color:var(--green)}
-.xlink{grid-area:x;display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.7rem;color:var(--t2);text-decoration:none;padding:8px 0;white-space:nowrap}
-.xlink:hover{color:var(--fg)}
-.nav{grid-area:nav;display:flex;gap:4px;padding:0 0 10px;margin:0 -6px}
-.nav a{flex:1;display:flex;flex-direction:column;gap:1px;text-decoration:none;padding:8px 6px;border-radius:8px;min-width:0}
-.nav a:hover{background:rgb(255 255 255/.05)}
-.nav .l{display:flex;align-items:baseline;gap:7px;font-weight:600;font-size:.8rem;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.nav .l b{font-family:var(--mono);font-weight:500;font-size:.66rem;color:var(--green);letter-spacing:.08em}
-.nav .l .full{display:none}
-@media(min-width:640px){.xlink{font-size:.78rem}}
-@media(min-width:760px){
-  .top-in{grid-template-columns:auto 1fr auto;grid-template-areas:"brand nav x";column-gap:28px}
-  .brand{padding:16px 0}.nav{padding:0;margin:0;gap:8px;justify-content:center}
-  .nav a{flex:0 1 auto;padding:8px 12px}.nav .l .short{display:none}.nav .l .full{display:inline}
-}
-@media(min-width:1024px){.nav a{padding:8px 14px}}
-
-/* ══ BUTTONS ══════════════════════════════════════════════════════════════ */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;background:var(--green);color:#04160b;border-radius:10px;padding:16px 24px;font-family:var(--sans);font-weight:600;font-size:.98rem;line-height:1;text-decoration:none;transition:background .2s,transform .15s;white-space:nowrap;width:100%}
-.btn:hover{background:#86efac;transform:translateY(-1px)}
-.btn svg{flex-shrink:0}
-@media(min-width:640px){.btn{width:auto}}
-
-/* ══ HERO ═════════════════════════════════════════════════════════════════ */
-.hero{padding:calc(var(--top) + 28px) var(--pad) 56px;display:grid;grid-template-columns:1fr;gap:36px;align-items:center;max-width:var(--maxw);margin:0 auto}
-.hero h1{font-size:clamp(2.2rem,9.6vw,3rem);font-weight:700;letter-spacing:-.045em;line-height:1;margin-bottom:18px;white-space:nowrap}
-.hero h1 em{font-style:normal;color:var(--green)}
-.hero .sub{color:var(--t2);font-size:1.05rem;line-height:1.5;margin-bottom:26px;max-width:34ch}
-.hero .sub b{color:var(--fg);font-weight:600}
-@media(min-width:960px){
-  .hero{min-height:100svh;grid-template-columns:minmax(0,1fr) 440px;gap:64px;padding-top:calc(var(--top) + 24px);padding-bottom:48px}
-  .hero h1{font-size:clamp(2.8rem,calc((100vw - 620px) * .112),4.6rem);margin-bottom:26px}
-  .hero .sub{font-size:1.3rem;margin-bottom:34px}
-}
-
-/* ══ THE CARD (components/FlightCard.tsx, trip variant) ═══════════════════ */
-.card-stage{display:flex;flex-direction:column;align-items:center;gap:14px;width:100%}
-.card{--cs:1;width:100%;max-width:440px;background:var(--card-fill);border-radius:calc(12px*var(--cs));padding:calc(14px*var(--cs));display:flex;flex-direction:column;gap:calc(12px*var(--cs));box-shadow:0 30px 80px rgb(0 0 0/.55),inset 0 0 0 1px rgb(255 255 255/.035)}
-@media(min-width:960px){.card{--cs:1.14}}
-.c-head{position:relative;display:flex;align-items:center;justify-content:center;min-height:calc(22px*var(--cs))}
-.c-centre{display:flex;align-items:center;gap:calc(8px*var(--cs))}
-.c-spacer{width:6px;display:none}
-.c-pill{background:#aeaeb212;border-radius:6px;padding:calc(3px*var(--cs)) calc(8px*var(--cs))}
-.c-pill.live{background:#4ade8012}.c-pill.bad{background:#f8717120}
-.c-status{font-family:var(--mono);font-size:calc(11px*var(--cs));text-transform:uppercase;text-align:center;color:#aeaeb2;letter-spacing:.02em}
-.c-pulse{width:6px;height:6px;border-radius:3px;background:var(--green);display:none;animation:pulse 2.2s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
-.c-countdown{position:absolute;right:0;font-family:var(--mono);font-weight:700;font-size:calc(15px*var(--cs));color:var(--green)}
-.c-route{display:flex;align-items:baseline;padding:0 calc(12px*var(--cs))}
-.c-code{flex:1;font-family:var(--mono);font-weight:700;font-size:calc(28px*var(--cs));color:#fff;letter-spacing:-.5px;line-height:1.15}
-.c-code.end{text-align:right}
-.c-arrow{font-family:var(--mono);font-size:calc(20px*var(--cs));color:var(--card-label);padding:0 calc(8px*var(--cs))}
-.c-ident{font-size:calc(13px*var(--cs));color:var(--card-label);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.c-ident .m{font-family:var(--mono)}.c-ident .s{font-family:var(--sans)}.c-ident .d{font-family:var(--mono);color:var(--card-dot)}
-.c-cols{display:flex;gap:calc(12px*var(--cs))}
-.c-rule{width:1px;align-self:stretch;background:var(--card-rule)}
-.c-col{flex:1;display:flex;flex-direction:column;gap:calc(6px*var(--cs));min-width:0}
-.c-colhead{font-family:var(--sans);font-weight:600;font-size:calc(11px*var(--cs));letter-spacing:.5px;text-transform:uppercase;color:var(--card-label);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.c-time{font-family:var(--mono);font-weight:700;font-size:calc(20px*var(--cs));color:#fff;line-height:1.2;white-space:nowrap}
-.c-time.ontime{color:var(--green)}.c-time.late{color:var(--amber)}
-.c-delay{font-family:var(--mono);font-weight:400;font-size:calc(12px*var(--cs));color:var(--green)}.c-delay.late{color:var(--amber)}
-.c-when{font-family:var(--mono);font-size:calc(12px*var(--cs));color:var(--card-quiet)}
-.c-pills{display:flex;flex-direction:column;gap:calc(6px*var(--cs))}
-.c-pillrow{display:flex;gap:calc(6px*var(--cs))}
-.c-p{flex:1;background:var(--card-pill);border-radius:6px;padding:calc(5px*var(--cs)) calc(8px*var(--cs));display:flex;flex-direction:column;align-items:center;gap:2px;min-width:0}
-.c-p .l{font-family:var(--sans);font-size:calc(11px*var(--cs));color:var(--card-label);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
-.c-p .v{font-family:var(--mono);font-weight:700;font-size:calc(15px*var(--cs));color:#fff}
-.c-p .v.empty{color:var(--card-label);font-weight:400}
-.c-quiet{font-family:var(--mono);font-size:calc(12px*var(--cs));color:var(--card-quiet)}
-.c-arc{position:relative;height:calc(72px*var(--cs))}
-.c-arc svg{position:absolute;inset:0;overflow:visible}
-.c-plane{position:absolute;left:0;top:0;width:calc(24px*var(--cs));height:calc(24px*var(--cs));display:flex;align-items:center;justify-content:center;color:var(--green);will-change:transform}
-.c-plane svg{width:calc(18px*var(--cs));height:calc(18px*var(--cs))}
-.c-done{display:flex;align-items:flex-start;gap:calc(12px*var(--cs))}
-.c-idcol{display:flex;flex-direction:column;gap:3px;min-width:0;flex:0 0 38%}
-.c-idnum{font-family:var(--mono);font-size:calc(13px*var(--cs));color:var(--card-label)}
-.c-idname{font-family:var(--sans);font-size:calc(13px*var(--cs));color:var(--card-label)}
-.c-answer{flex:1;display:flex;flex-direction:column;gap:calc(6px*var(--cs));min-width:0}
-.c-beltrow{opacity:0;transform:translateY(6px);transition:opacity .4s,transform .4s cubic-bezier(.2,.8,.2,1)}
-.card.belt .c-beltrow{opacity:1;transform:none}
-.card [data-ph]{display:none}
-.card.ph-before [data-ph~="before"],.card.ph-boarding [data-ph~="boarding"],.card.ph-air [data-ph~="air"],.card.ph-landed [data-ph~="landed"]{display:flex}
-.card.ph-before [data-ph~="before"].c-ident,.card.ph-boarding [data-ph~="boarding"].c-ident,.card.ph-air [data-ph~="air"].c-ident,.card.ph-air [data-ph~="air"].c-quiet{display:block}
-.card.ph-air .c-pulse,.card.ph-air .c-spacer{display:block}
-.c-body{display:flex;flex-direction:column;gap:calc(12px*var(--cs));transition:opacity .24s ease}
-.card.switching .c-body{opacity:0}
-.phases{display:flex;gap:4px;justify-content:center;width:100%}
-.phase{flex:1;font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--t4);border:1px solid transparent;border-radius:100px;padding:8px 4px;text-align:center;transition:color .2s,border-color .2s;white-space:nowrap}
-.phase:hover{color:var(--t2)}.phase.on{color:var(--fg);border-color:var(--line2)}.phase.on.live{color:var(--green);border-color:rgb(74 222 128/.35)}
-@media(min-width:640px){.phases{width:auto;gap:6px}.phase{flex:0 0 auto;padding:7px 12px;font-size:.68rem;letter-spacing:.14em}}
-
-/* THE CANCELLED CARD reads as cancelled from across the room: a red ring, a
-   red wash, a red bar along the top, struck times, and the countdown gone. */
-/* Red only where it carries meaning: the status word, and the departure time
-   that is no longer happening. The rest of the card stays the card. */
-.card.cancelled .c-time.struck{color:var(--red);text-decoration:line-through;text-decoration-thickness:2px;font-weight:400}
-.card.cancelled .c-countdown{display:none}
-.card .c-body,.card .c-head{transition:opacity .3s}
-
-/* ══ SECTIONS ═════════════════════════════════════════════════════════════ */
-.section{padding:72px var(--pad);border-top:1px solid var(--line)}
-@media(min-width:760px){.section{padding:clamp(96px,11vw,140px) var(--pad)}}
-.eyebrow{font-family:var(--mono);font-size:.66rem;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:var(--t3);margin-bottom:16px;display:flex;gap:12px;align-items:baseline}
-.eyebrow b{color:var(--green);font-weight:500}
-.h2{font-size:clamp(1.7rem,6.8vw,2.1rem);font-weight:700;letter-spacing:-.035em;line-height:1.06;max-width:20ch}
-@media(min-width:760px){.h2{font-size:clamp(2rem,3.8vw,2.8rem)}}
-.h2 em{font-style:normal;color:var(--green)}
-.lead{color:var(--t2);font-size:1.02rem;max-width:52ch;line-height:1.55;margin-top:14px}
-.meta{font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--t4)}
-
-/* ══ 01 TRACKS THE FLIGHT ═════════════════════════════════════════════════ */
-.claim{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:34px}
-.stat{border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px;background:rgb(255 255 255/.025)}
-.stat .k{font-family:var(--mono);font-size:.64rem;letter-spacing:.16em;text-transform:uppercase;color:var(--t3);margin-bottom:8px}
-.stat .v{font-family:var(--mono);font-weight:700;font-size:clamp(1.5rem,7vw,2.4rem);letter-spacing:-.03em;line-height:1}
-.stat .v.g{color:var(--green)}.stat .v.y{color:var(--amber)}
-.stat .s{font-size:.8rem;color:var(--t3);margin-top:8px;line-height:1.4}
-.stat.ours{border-color:rgb(74 222 128/.3)}
-.phones{display:grid;grid-template-columns:1fr;gap:14px;margin-top:22px}
-@media(min-width:760px){.phones{grid-template-columns:1fr 1fr;gap:24px;margin-top:28px}.claim{gap:24px;margin-top:40px}.stat{padding:22px 22px 20px}}
-.phone{border:1px solid var(--line2);border-radius:22px;padding:14px 14px 18px;background:rgb(255 255 255/.03)}
-.phone.ours{border-color:rgb(74 222 128/.32);box-shadow:0 0 0 1px rgb(74 222 128/.08),0 24px 60px rgb(0 0 0/.45)}
-.ph-bar{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:.68rem;color:var(--t3);padding:2px 4px 12px;gap:10px}
-.ph-bar .who{font-family:var(--sans);font-weight:600;color:var(--fg);font-size:.86rem;white-space:nowrap}
-.ph-card{background:var(--card-fill);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
-.ph-head{display:flex;align-items:center;justify-content:center}
-.ph-pill{border-radius:6px;padding:4px 10px;font-family:var(--mono);font-size:12px;text-transform:uppercase;letter-spacing:.03em}
-.ph-pill.landed{background:#8e8e9312;color:#8e8e93}.ph-pill.appr{background:#fbbf2412;color:var(--amber)}
-.ph-route{display:flex;align-items:baseline;padding:0 8px}
-.ph-route .c{flex:1;font-family:var(--mono);font-weight:700;font-size:26px;color:#fff;letter-spacing:-.5px}.ph-route .c.e{text-align:right}
-.ph-route .a{font-family:var(--mono);font-size:18px;color:var(--card-label);padding:0 8px}
-.ph-ident{font-size:12px;color:var(--card-label)}.ph-ident .m{font-family:var(--mono)}.ph-ident .d{font-family:var(--mono);color:var(--card-dot)}
-.ph-line{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-.ph-line .k{font-family:var(--sans);font-weight:600;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--card-label)}
-.ph-line .v{font-family:var(--mono);font-weight:700;font-size:22px;color:#fff}
-.ph-line .v.g{color:var(--green)}.ph-line .v.y{color:var(--amber)}
-.ph-big{text-align:center;padding:10px 0 4px}
-.ph-big .w{font-family:var(--mono);font-weight:700;font-size:clamp(1.5rem,6.5vw,2.1rem);letter-spacing:-.02em;white-space:nowrap}
-.ph-big .w.g{color:var(--green)}.ph-big .w.y{color:var(--amber)}
-.ph-big .s{font-family:var(--mono);font-size:.7rem;color:var(--t3);margin-top:6px;letter-spacing:.06em}
-.two-cap{margin-top:22px;display:flex;flex-direction:column;gap:10px}
-.two-cap p{color:var(--t2);max-width:58ch;font-size:.98rem}
-
-/* ══ 02 KNOWS THE AIRPORT ═════════════════════════════════════════════════
-   A data table. Two columns even on a phone, with the checkpoint drawn
-   between them, and it cycles through the eight airports on its own. */
-.apts{display:flex;gap:6px;margin-top:28px;overflow:hidden;flex-wrap:wrap}
-.apt{position:relative;font-family:var(--mono);font-size:.74rem;font-weight:500;letter-spacing:.06em;color:var(--t3);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;transition:color .2s,border-color .2s,background .2s;overflow:hidden;flex:1 1 calc(25% - 6px);text-align:center;min-width:0}
-@media(min-width:640px){.apt{flex:0 0 auto;padding:8px 13px;font-size:.78rem}}
-.apt:hover{color:var(--fg)}.apt.on{color:var(--fg);background:rgb(255 255 255/.06);border-color:rgb(255 255 255/.28)}
-.apt .bar{position:absolute;left:0;bottom:0;height:2px;width:0;background:var(--green)}
-.apt.on .bar{animation:fillbar var(--dwell,6s) linear forwards}
-.apts.paused .apt.on .bar{animation:none;width:0}
-@keyframes fillbar{from{width:0}to{width:100%}}
-.apt-name{margin-top:14px;display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
-.apt-name .n{font-weight:600;font-size:1.05rem;letter-spacing:-.01em}
-.apt-name .n span{font-family:var(--mono);color:var(--t3);font-weight:400;font-size:.8rem;margin-left:8px}
-.ratio{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:.66rem;color:var(--t3);letter-spacing:.06em;min-width:0}
-.ratio .track{flex:1;height:4px;border-radius:2px;background:rgb(255 255 255/.1);overflow:hidden;min-width:60px;max-width:200px}
-.ratio .fill{height:100%;background:var(--green);border-radius:2px;transition:width .6s cubic-bezier(.2,.8,.2,1)}
-.ratio .g{color:var(--green)}
-.airport{margin-top:12px;border:1px solid var(--line);border-radius:14px;background:rgb(255 255 255/.02);overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr)}
-@media(min-width:820px){.airport{grid-template-columns:minmax(0,1fr) 84px minmax(0,1fr)}}
-.zone{padding:12px 10px 6px;min-width:0}
-@media(min-width:640px){.zone{padding:16px 18px 8px}}
-.zone-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:4px;min-width:0}
-.zone-tag{font-family:var(--mono);font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;font-weight:500;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.zone-tag.g{color:var(--green)}
-.zone-n{font-family:var(--mono);font-size:.64rem;color:var(--t4);white-space:nowrap}
-.zone ul{list-style:none}
-.zone li{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-top:1px solid rgb(255 255 255/.045);min-width:0;opacity:0;transform:translateY(6px);animation:rowin .45s cubic-bezier(.2,.8,.2,1) forwards;animation-delay:var(--i,0s)}
-@keyframes rowin{to{opacity:1;transform:none}}
-.zone li:first-child{border-top:none}
-.zone .nm{font-family:var(--sans);font-size:.86rem;font-weight:500;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.zone .sub{display:flex;gap:6px;align-items:baseline;font-family:var(--mono);font-size:.62rem;color:var(--t4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
-.zone .sub .ty{color:var(--t3);padding:1px 5px;border:1px solid var(--line);border-radius:4px;letter-spacing:.06em;text-transform:uppercase;font-size:.56rem}
-.zone .sub .hr{color:var(--t4)}
-@media(min-width:640px){.zone li{flex-direction:row;justify-content:space-between;align-items:baseline;gap:12px;padding:9px 0}.zone .nm{font-size:.93rem}.zone .sub{font-size:.68rem;flex-shrink:0}}
-.zone.land .nm{color:var(--t2)}
-.checkpoint{position:relative;display:flex;align-items:center;justify-content:center;border-left:1px dashed rgb(255 255 255/.22);border-right:1px dashed rgb(255 255 255/.22);background:repeating-linear-gradient(135deg,rgb(255 255 255/.03) 0 6px,transparent 6px 12px)}
-.cp-label{font-family:var(--mono);font-size:.54rem;letter-spacing:.2em;text-transform:uppercase;color:var(--t3);white-space:nowrap;writing-mode:vertical-rl;transform:rotate(180deg)}
-@media(min-width:820px){.cp-label{font-size:.62rem}}
-.you{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;color:var(--green);white-space:nowrap}
-.you::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--green);animation:pulse 2.2s ease-in-out infinite;flex-shrink:0}
-/* on a phone the rows stack name / where / type so nothing is clipped, and
-   the airside badge is just its dot so the column title keeps its word */
-@media(max-width:639px){
-  .zone .nm{white-space:normal;line-height:1.25}
-  .zone .sub{flex-wrap:wrap;white-space:normal;row-gap:3px}
-  .zone .sub>*{white-space:nowrap}
-  .you{font-size:0;gap:0}.you::before{width:7px;height:7px}
-  .zone-tag{flex-shrink:0}
-}
-.apt-cap{margin-top:16px;display:flex;flex-direction:column;gap:8px}
-.apt-cap p{color:var(--t2);font-size:.96rem;max-width:58ch}
-
-/* ══ 03 HANDLES THE BREAK ═════════════════════════════════════════════════ */
-.breaks{display:grid;grid-template-columns:1fr;gap:18px;margin-top:34px;align-items:start}
-@media(min-width:900px){.breaks{grid-template-columns:400px minmax(0,1fr);gap:40px;margin-top:48px}}
-.board{border:1px solid var(--line);border-radius:14px;background:rgb(255 255 255/.02);overflow:hidden}
-.board-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line)}
-.board-head .t{font-family:var(--sans);font-weight:600;font-size:.9rem}
-.board-head .t span{color:var(--t3);font-weight:400}
-.board ul{list-style:none}
-.board li{display:grid;grid-template-columns:60px minmax(0,1fr) auto auto;gap:10px;align-items:baseline;padding:10px 14px;border-top:1px solid rgb(255 255 255/.04);opacity:0;transform:translateY(8px);transition:opacity .4s,transform .4s cubic-bezier(.2,.8,.2,1)}
-@media(min-width:640px){.board li{grid-template-columns:78px minmax(0,1fr) auto auto;gap:14px;padding:11px 18px}.board-head{padding:14px 18px}}
-.board li.in{opacity:1;transform:none}
-.board li:first-child{border-top:0}
-.board .fn{font-family:var(--mono);font-weight:700;font-size:.86rem;color:#fff}
-.board .al{font-family:var(--sans);font-size:.86rem;color:var(--t2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.board .tm{font-family:var(--mono);font-size:.86rem;color:#fff;white-space:nowrap}
-.board .st{font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;color:var(--t4);white-space:nowrap}
-.board .st.g{color:var(--green)}
-.board-foot{padding:10px 14px;border-top:1px solid var(--line);font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--t4)}
-.brk-cap{margin-top:18px;color:var(--t2);font-size:.96rem;max-width:56ch}
-
-/* ══ CLOSING ══════════════════════════════════════════════════════════════ */
-.closing{text-align:center;padding:88px var(--pad);border-top:1px solid var(--line)}
-@media(min-width:760px){.closing{padding:clamp(110px,14vw,160px) var(--pad)}}
-.closing h2{font-size:clamp(2.2rem,9vw,3.8rem);font-weight:700;letter-spacing:-.04em;line-height:1.02;margin:0 auto 14px;max-width:14ch}
-.closing p{color:var(--t2);max-width:34ch;margin:0 auto 30px;font-size:1.02rem}
-footer{padding:26px var(--pad) 44px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;font-family:var(--mono);font-size:.74rem;color:var(--t4)}
-footer a{color:var(--t3);text-decoration:none}footer a:hover{color:var(--fg)}
-footer .brand{font-size:.85rem;color:var(--t3);padding:0}
-footer .links{display:flex;gap:18px}
-
-/* ══ MOTION ═══════════════════════════════════════════════════════════════ */
-.sr{opacity:0;transform:translateY(16px);transition:opacity .7s ease-out,transform .7s ease-out}
-.sr.on{opacity:1;transform:none}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}.sr,.board li,.c-beltrow,.zone li{opacity:1;transform:none}}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Terminal</title>
+<meta name="description" content="When a flight is cancelled, Terminal shows which next one still makes your connection. An iPhone app.">
+<meta name="theme-color" content="#f1f0ea">
+<link rel="canonical" href="https://www.terminalaero.com/">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.terminalaero.com/">
+<meta property="og:site_name" content="Terminal">
+<meta property="og:title" content="Terminal">
+<meta property="og:description" content="When a flight is cancelled, Terminal shows which next one still makes your connection.">
+<meta property="og:image" content="https://www.terminalaero.com/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="/assets/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/page.css">
+<script src="/assets/board.js"></script>
+<script src="/assets/site.js" defer></script>
+<script src="/assets/dining.js" defer></script>
+<script src="/assets/page.js" defer></script>
 </head>
 <body>
-<div class="dot-grid" id="dotGrid"></div>
-<div class="vignette"></div>
-<div class="page">
+<!-- The AIGA/DOT pictograms the dining table uses; tools/pictograms.py prints this sprite. -->
+<svg class="sprite" aria-hidden="true" focusable="false"><symbol id="p-food" viewBox="0 0 100 100"><path fill="currentColor" fill-rule="nonzero" transform="translate(32.62 17.00) scale(0.13978)" d="M115.158 154.044c0 15.334-13.97 31.75-32.084 31.75v258.833c0 36.74-50.081 36.74-50.081 0V185.794C15.353 185.794 0 172.211 0 151.857V9.41901c0-12.39899 17.92-12.87799 17.92.479V115.196h15V8.94c0-11.39599 17.25-12.12799 17.25.47901V115.196h15.5V9.065c0-11.89898 16.75-12.37799 16.75.47901V115.196h15.25V9.065c0-11.77398 17.497-12.25299 17.497.47901l-.009 144.49999zm133.588-111.52v401.977c0 35.933-50.177 35.401-50.177 0V285.006H171.85V42.524c0-56.445 76.896-56.445 76.896 0z"/></symbol><symbol id="p-coffee" viewBox="0 0 100 100"><path fill="currentColor" fill-rule="evenodd" transform="translate(17.00 29.65) scale(0.14894)" d="M443.14,226.35H0c0,32.09,24.449,46.97,44.075,46.97h355c23.49,0,44.06-18.47,44.06-46.97H443.14zM359.08,0H94.56v173.6c0,23.51,20.3,42.14,42.26,42.14h171.49c24.79,0,41.67-20.8,41.67-42.14v-14.49c48.89,0,84.41-36.76,84.41-79.56C434.39,35.85,399.58,0,359.08,0z M349.98,126.1V32.59l9.1,0.01l0.01,0.02c33.47,0,44.22,31.69,44.11,46.98C403.2,104.55,384.82,128.36,349.98,126.1z"/></symbol><symbol id="p-bar" viewBox="0 0 100 100"><path fill="currentColor" fill-rule="nonzero" transform="translate(17.00 17.00) scale(0.10000)" d="M0,0H660L330,390ZM430,200a50,50 0 1 0 -100,0a50,50 0 1 0 100,0ZM290,300H370V660H290ZM180,580H480a40,40 0 0 1 0,80H180a40,40 0 0 1 0,-80Z"/></symbol></svg>
+<a class="skip" href="#main">Skip to content</a>
 
-  <header class="top">
-    <div class="top-in">
-      <a class="brand" href="#"><i>&gt;</i> Terminal</a>
-      <nav class="nav" aria-label="Sections">
-        <a href="#track"><span class="l"><b>01</b><span class="short">Flight</span><span class="full">Tracks the flight</span></span></a>
-        <a href="#airport"><span class="l"><b>02</b><span class="short">Airport</span><span class="full">Knows the airport</span></span></a>
-        <a href="#breaks"><span class="l"><b>03</b><span class="short">Break</span><span class="full">Handles the break</span></span></a>
-      </nav>
-      <a class="xlink" href="https://x.com/Jayo10o" target="_blank" rel="noopener noreferrer" aria-label="Jayo10o on X">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 1.15h3.68l-8.04 9.19L24 22.85h-7.41l-5.8-7.58-6.64 7.58H.46l8.6-9.83L0 1.15h7.59l5.24 6.93zm-1.29 19.5h2.04L6.49 3.24H4.3z"/></svg><span class="h">@Jayo10o</span>
-      </a>
-    </div>
-  </header>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="/">Terminal</a>
+    <nav aria-label="Contact"><a class="btn" href="mailto:jay@terminalaero.com" aria-label="Email jay@terminalaero.com"><span class="btn-label"><span class="long">jay@terminalaero.com</span><span class="short">Email</span></span></a><a class="btn" href="https://x.com/Jayo10o" rel="me" aria-label="@Jayo10o on X"><span class="btn-label"><span class="long">@Jayo10o on X</span><span class="short">@Jayo10o</span></span></a></nav>
+  </div>
+</header>
 
-  <!-- ══ HERO ══════════════════════════════════════════════════════════════ -->
-  <section class="hero">
-    <div>
-      <h1>One app for the<br/><em>whole flight.</em></h1>
-      <p class="sub">It hears your aircraft touch down, knows which restaurants are past security, and has the next flight ready.</p>
-      <a class="btn" href="https://x.com/Jayo10o" target="_blank" rel="noopener noreferrer">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 1.15h3.68l-8.04 9.19L24 22.85h-7.41l-5.8-7.58-6.64 7.58H.46l8.6-9.83L0 1.15h7.59l5.24 6.93zm-1.29 19.5h2.04L6.49 3.24H4.3z"/></svg>
-        Follow @Jayo10o for the launch
-      </a>
-    </div>
+<main id="main">
 
-    <div class="card-stage">
-      <div class="card ph-before" id="card">
-        <div class="c-head">
-          <div class="c-centre"><span class="c-spacer"></span><span class="c-pill" id="cPill"><span class="c-status" id="cStatus">Scheduled</span></span><span class="c-pulse"></span></div>
-          <span class="c-countdown" id="cCount">2h 14m</span>
-        </div>
-        <div class="c-body">
-          <div class="c-route" data-ph="before boarding air"><span class="c-code">JFK</span><span class="c-arrow">→</span><span class="c-code end">LHR</span></div>
-          <div class="c-ident" data-ph="before boarding air"><span class="m">BA178</span><span class="d"> · </span><span class="s">British Airways</span><span class="d"> · </span><span class="m">Boeing 777-200</span></div>
-          <div class="c-cols" data-ph="before boarding">
-            <div class="c-col">
-              <div class="c-colhead" id="depHead">Scheduled departure</div>
-              <div class="c-time" id="depTime">07:50<span class="c-delay late" id="depDelay" hidden> ▴14m</span></div>
-              <div class="c-when">7 Sep · GMT-4</div>
-              <div class="c-pills">
-                <div class="c-pillrow"><div class="c-p"><span class="l">Terminal</span><span class="v">8</span></div><div class="c-p"><span class="l">Gate</span><span class="v empty" id="depGate">—</span></div></div>
-                <div class="c-pillrow"><div class="c-p"><span class="l">Desk</span><span class="v empty" id="depDesk">—</span></div></div>
-              </div>
-            </div>
-            <div class="c-rule"></div>
-            <div class="c-col">
-              <div class="c-colhead">Scheduled arrival</div>
-              <div class="c-time">19:45</div>
-              <div class="c-when">7 Sep · GMT+1</div>
-              <div class="c-pills"><div class="c-pillrow"><div class="c-p"><span class="l">Terminal</span><span class="v">5</span></div><div class="c-p"><span class="l">Gate</span><span class="v empty">—</span></div></div></div>
-            </div>
-          </div>
-          <div class="c-arc" data-ph="air" id="cArc">
-            <svg id="arcSvg" width="100%" height="100%" viewBox="0 0 100 72" preserveAspectRatio="none"><path id="arcPath" d="" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>
-            <div class="c-plane" id="plane" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><g transform="rotate(90 12 12)"><path d="M21.5 11.4 14 9.2V4.1c0-.9-.7-1.6-1.6-1.6h-.8c-.9 0-1.6.7-1.6 1.6v5.1l-7.5 2.2c-.6.2-1 .7-1 1.3v1.1l8.5-1.6v4.9l-2.4 1.5v1.3l3.8-.9 3.8.9v-1.3l-2.4-1.5v-4.9l8.5 1.6v-1.1c0-.6-.4-1.1-1-1.3z"/></g></svg></div>
-          </div>
-          <div class="c-col" data-ph="air"><div class="c-colhead">Estimated arrival</div><div class="c-time ontime">19:08<span class="c-delay"> ▾37m</span></div><div class="c-when">GMT+1</div></div>
-          <div class="c-quiet" data-ph="air">departed 08:04</div>
-          <div class="c-done" data-ph="landed">
-            <div class="c-idcol"><span class="c-idnum">BA178</span><span class="c-idname">British Airways</span><span class="c-idnum">JFK → LHR</span></div>
-            <div class="c-answer">
-              <div class="c-colhead">Actual arrival</div>
-              <div class="c-time ontime">19:09<span class="c-delay"> ▾36m</span></div>
-              <div class="c-when">7 Sep · GMT+1</div>
-              <div class="c-pillrow c-beltrow"><div class="c-p"><span class="l">Terminal</span><span class="v">5</span></div><div class="c-p"><span class="l">Belt</span><span class="v">9</span></div></div>
-            </div>
-          </div>
+  <!-- ══ HERO ════════════════════════════════════════════════════════════
+       An airport's board, one moment after another (board.js); the headline
+       says what Terminal does when the moment is a cancellation; the phone
+       shows it done. The one App Store line on the page is here. -->
+  <section class="hero wrap" aria-labelledby="hero-title">
+    <div class="copy">
+      <div class="board" role="img" aria-label="A departures board showing flight updates">
+        <p class="board-head"><span>Departures</span><span class="board-at">San Francisco</span></p>
+        <div class="board-row">
+          <span class="field"><span class="cell"><b>B</b></span><span class="cell"><b>A</b></span><span class="cell"><b>2</b></span><span class="cell"><b>8</b></span><span class="cell"><b>6</b></span><span class="cell"><b>&nbsp;</b></span></span>
+          <span class="field dest"><span class="cell"><b>L</b></span><span class="cell"><b>O</b></span><span class="cell"><b>N</b></span><span class="cell"><b>D</b></span><span class="cell"><b>O</b></span><span class="cell"><b>N</b></span><span class="cell"><b>&nbsp;</b></span><span class="cell"><b>&nbsp;</b></span><span class="cell"><b>&nbsp;</b></span></span>
+          <span class="field gate"><span class="cell"><b>&nbsp;</b></span><span class="cell"><b>&nbsp;</b></span><span class="cell"><b>&nbsp;</b></span></span>
+          <span class="field status off"><span class="cell" data-from="O"><b>C</b></span><span class="cell" data-from="N"><b>A</b></span><span class="cell" data-from=" "><b>N</b></span><span class="cell" data-from="T"><b>C</b></span><span class="cell" data-from="I"><b>E</b></span><span class="cell" data-from="M"><b>L</b></span><span class="cell" data-from="E"><b>L</b></span><span class="cell" data-from=" "><b>E</b></span><span class="cell" data-from=" "><b>D</b></span></span>
         </div>
       </div>
-      <div class="phases" role="tablist" aria-label="Card phases">
-        <button class="phase on" data-go="before" role="tab">Scheduled</button>
-        <button class="phase" data-go="boarding" role="tab">Boarding</button>
-        <button class="phase live" data-go="air" role="tab">In air</button>
-        <button class="phase" data-go="landed" role="tab">Landed</button>
+      <h1 id="hero-title">When a flight is cancelled, Terminal shows which next one still makes your connection.</h1>
+      <p class="sub">It checks each flight every two minutes in the last ninety minutes before it&nbsp;leaves.</p>
+      <p class="soon">Coming to the App Store</p>
+    </div>
+    <div class="device">
+      <img src="/assets/phone/s09-700.webp" srcset="/assets/phone/s09-700.webp 700w, /assets/phone/s09-1050.webp 1050w" sizes="(min-width: 1024px) 313px, min(76vw, 300px)" width="1350" height="2760" fetchpriority="high" alt="Placeholder for Site 9: BA286 cancelled, the list open">
+      <p class="caption">Example trip. Terminal knows flights and times, not seats or&nbsp;fares.</p>
+    </div>
+  </section>
+
+  <!-- ══ A CHANGE ARRIVES ════════════════════════════════════════════════
+       BA177 through its day, one notification per step, in the words the
+       server sends. The phone is on the left, the first of the moments. -->
+  <section class="sec wrap moment flip" aria-labelledby="change-title">
+    <div class="copy">
+      <h2 id="change-title">Each notification says what changed, in one&nbsp;line.</h2>
+      <p class="lead">Terminal follows the flight through its day, from the gate to the belt your bags come out&nbsp;on.</p>
+      <div class="steps" role="tablist" aria-label="BA177's day, one notification at a time" data-steps="changeShots">
+        <button class="step" type="button" role="tab" aria-selected="true" aria-controls="changeShots"><span>Gate changed <span class="nw">to <span class="plate">B32</span></span></span></button>
+        <button class="step" type="button" role="tab" aria-selected="false" aria-controls="changeShots" tabindex="-1"><span>Delayed 25 min</span></button>
+        <button class="step" type="button" role="tab" aria-selected="false" aria-controls="changeShots" tabindex="-1"><span>Took off</span></button>
+        <button class="step" type="button" role="tab" aria-selected="false" aria-controls="changeShots" tabindex="-1"><span>Landed</span></button>
+        <button class="step" type="button" role="tab" aria-selected="false" aria-controls="changeShots" tabindex="-1"><span>Bags on <span class="nw">belt <span class="plate">9</span></span></span></button>
+      </div>
+      <p class="caption">Example flight <span class="fl">BA177</span>, from <span class="nw">Heathrow <span class="plate">T5</span></span> to <span class="nw">JFK <span class="plate">T8</span>.</span></p>
+    </div>
+    <div class="shots" id="changeShots" role="tabpanel" aria-label="The notification on the phone">
+      <img class="shot on" src="/assets/phone/s01-700.webp" srcset="/assets/phone/s01-700.webp 700w, /assets/phone/s01-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 1: Gate changed to B32">
+      <img class="shot" loading="lazy" src="/assets/phone/s02-700.webp" srcset="/assets/phone/s02-700.webp 700w, /assets/phone/s02-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 2: Delayed 25 min">
+      <img class="shot" loading="lazy" src="/assets/phone/s03-700.webp" srcset="/assets/phone/s03-700.webp 700w, /assets/phone/s03-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 3: Took off">
+      <img class="shot" loading="lazy" src="/assets/phone/s04-700.webp" srcset="/assets/phone/s04-700.webp 700w, /assets/phone/s04-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 4: Landed">
+      <img class="shot" loading="lazy" src="/assets/phone/s05-700.webp" srcset="/assets/phone/s05-700.webp 700w, /assets/phone/s05-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 5: Bags on belt 9">
+    </div>
+  </section>
+
+  <!-- ══ A CONNECTION AT RISK ════════════════════════════════════════════
+       The same trip three ways: BA286 on time, 40 minutes late, 70 minutes
+       late, and the layover in London by the app's own rule each time. -->
+  <section class="sec wrap moment" aria-labelledby="conn-title">
+    <div class="copy">
+      <h2 id="conn-title">When the first flight runs late, the layover says&nbsp;so.</h2>
+      <p class="lead">Terminal allows two hours to change planes when a trip crosses a border, and one hour when it doesn't. Within half an hour of that, the layover turns amber, and below it, red. Either way, a notification goes&nbsp;out.</p>
+      <div class="steps" role="tablist" aria-label="The layover in London as BA286 runs later" data-steps="connShots">
+        <button class="step" type="button" role="tab" aria-selected="true" aria-controls="connShots"><span><span class="band">Comfortable</span><small><span class="fl">BA286</span> on time, 2h 45m in London</small></span></button>
+        <button class="step" type="button" role="tab" aria-selected="false" aria-controls="connShots" tabindex="-1"><span><span class="band risk">At risk</span><small><span class="fl">BA286</span> 40 min late, 2h 05m in London</small></span></button>
+        <button class="step" type="button" role="tab" aria-selected="false" aria-controls="connShots" tabindex="-1"><span><span class="band miss">Won’t hold</span><small><span class="fl">BA286</span> 70 min late, 1h 35m in London</small></span></button>
+      </div>
+      <p class="caption">Example trip: <span class="fl">BA286</span> lands at <span class="nw">Heathrow <span class="plate">T5</span>,</span> and <span class="fl">LX325</span> leaves <span class="nw">from <span class="plate">T2</span>.</span></p>
+    </div>
+    <div class="shots" id="connShots" role="tabpanel" aria-label="The trip on the phone">
+      <img class="shot on" src="/assets/phone/s06-700.webp" srcset="/assets/phone/s06-700.webp 700w, /assets/phone/s06-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 6: layover comfortable">
+      <img class="shot" loading="lazy" src="/assets/phone/s07-700.webp" srcset="/assets/phone/s07-700.webp 700w, /assets/phone/s07-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 7: connection at risk">
+      <img class="shot" loading="lazy" src="/assets/phone/s08-700.webp" srcset="/assets/phone/s08-700.webp 700w, /assets/phone/s08-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 8: connection won't hold">
+    </div>
+  </section>
+
+  <!-- ══ WHERE TO EAT ════════════════════════════════════════════════════ -->
+  <section class="sec wrap" aria-labelledby="dine-title">
+    <h2 id="dine-title">Where to eat, on&nbsp;your&nbsp;side of security.</h2>
+    <p class="lead">604 places at seven airports, from each airport's own listing. On a layover, Terminal opens the after-security list first and folds the others&nbsp;away.</p>
+    <div class="dine" id="dine">
+      <div class="codes" id="dineTabs" role="tablist" aria-label="Airport" hidden></div>
+      <div id="dinePanel" role="tabpanel" aria-labelledby="dineName">
+        <!-- dining:start (written by tools/dining_sample.py; do not edit by hand) -->
+        <div class="dine-head"><span class="dine-name" id="dineName">New York JFK <span class="code">JFK</span></span><span class="dine-count" id="dineCount"><b>102 after security</b> · 37 before</span></div>
+        <div class="sides">
+          <div class="side before"><div class="side-title">Before security</div><div class="side-note">you would have to leave and clear security again</div><ul id="dineBefore"><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-food"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Dunkin'<span class="sr">, Restaurant</span></span></div><div class="r-meta"><span>T4 · Level 1</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-food"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Arrivals Eatery<span class="sr">, Restaurant</span></span></div><div class="r-meta"><span>T1 · Level 1</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-coffee"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Euro Cafe<span class="sr">, Café</span></span></div><div class="r-meta"><span>T1 · Level 1</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-food"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Madhuban Modern Indian<span class="sr">, Restaurant</span></span></div><div class="r-meta"><span>T1 · Level 4</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-food"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">PZA<span class="sr">, Restaurant</span></span></div><div class="r-meta"><span>T1 · Level 4</span></div></div></li></ul></div>
+          <div class="checkpoint" aria-hidden="true"><span>Security</span></div>
+          <div class="side after"><div class="side-title">After security</div><div class="side-note">past the checkpoint, where your gate is</div><ul id="dineAfter"><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-food"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Dunkin'<span class="sr">, Restaurant</span></span></div><div class="r-meta"><span>T4 · Level 3 · Gate B34</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-coffee"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Aunt Butchie's Bakery Café - CEGM<span class="sr">, Café</span></span></div><div class="r-meta"><span>T5 · Level 3 · Gate 512</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-food"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Dos Toros Taqueria<span class="sr">, Restaurant</span></span></div><div class="r-meta"><span>T8 · Level 3 · Gate 35</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-bar"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">GameWay<span class="sr">, Bar</span></span></div><div class="r-meta"><span>T5 · Level 3 · Gate 507</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-food"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Melt Shop<span class="sr">, Restaurant</span></span></div><div class="r-meta"><span>T5 · Level 3 · Gate 525</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-coffee"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Peet's Coffee &amp; Tea<span class="sr">, Café</span></span></div><div class="r-meta"><span>T4 · Level 3 · Gate B24</span></div></div></li><li><span class="pict" aria-hidden="true"><svg viewBox="0 0 100 100"><use href="#p-bar"/></svg></span><div class="r-body"><div class="r-top"><span class="r-name">Soy &amp; Sake<span class="sr">, Bar</span></span></div><div class="r-meta"><span>T1 · Level 3 · Gate 6</span></div></div></li></ul></div>
+        </div>
+        <p class="dine-note" id="dineNote">At JFK, Dunkin' is on both sides of security in four terminals. The list says which one you can walk to.</p>
+        <!-- dining:end -->
+      </div>
+    </div>
+    <p class="caption">Rows from the app's data, as each airport publishes&nbsp;it.</p>
+  </section>
+
+  <!-- ══ FROM A CONFIRMATION EMAIL ═══════════════════════════════════════
+       The source is not named here on purpose: it may become a forwarding
+       address. The last light section; the black starts under it. -->
+  <section class="sec wrap last" aria-labelledby="mail-title">
+    <h2 id="mail-title">Confirmation emails become flights.</h2>
+    <p class="lead">Let Terminal read your flight confirmation emails and it adds the flights it finds, with the confirmation code. It reads only the emails that look like flight confirmations, and it can't send or change anything. The emails aren't&nbsp;kept.</p>
+    <div class="pair">
+      <figure>
+        <div class="mail">
+          <div class="mail-from"><span>Reservations</span><span>09:12</span></div>
+          <div class="mail-subject">Your trip is confirmed</div>
+          <p>Your confirmation code is <span class="fl">QX7R2P</span>.</p>
+          <table>
+            <tr><td data-date="1">Thu 25 Sep</td><td><span class="fl">BA286</span> · San Francisco (SFO) to London Heathrow (LHR)</td></tr>
+            <tr><td data-date="2">Fri 26 Sep</td><td><span class="fl">LX325</span> · London Heathrow (LHR) to Zurich (ZRH)</td></tr>
+          </table>
+        </div>
+        <figcaption class="caption">Example email, and the trip it becomes.</figcaption>
+      </figure>
+      <div class="device">
+        <img loading="lazy" src="/assets/phone/s11-700.webp" srcset="/assets/phone/s11-700.webp 700w, /assets/phone/s11-1050.webp 1050w" sizes="(min-width: 1024px) 300px, min(62vw, 250px)" width="1350" height="2760" alt="Placeholder for Site 11: the trip just imported">
       </div>
     </div>
   </section>
 
-  <!-- ══ 01 TRACKS THE FLIGHT ═══════════════════════════════════════════════ -->
-  <section class="section" id="track">
+  <!-- ══ CLOSE ═══════════════════════════════════════════════════════════
+       Black to the edges, with the footer: the page's last word. The one
+       line on the site in the first person, and the second place for the
+       email and X buttons; the first is the header. -->
+  <section class="close dark" aria-labelledby="close-line">
     <div class="wrap">
-      <p class="eyebrow sr"><b>01</b> Tracks the flight</p>
-      <h2 class="h2 sr" style="transition-delay:.06s">Terminal asks the aircraft, <em>not the airline.</em></h2>
-      <p class="lead sr" style="transition-delay:.1s">An airliner broadcasts its position several times a second, all the way to the ground. Terminal reads that. Most apps show the airline's status field instead, and that updates when the airline gets round to it.</p>
-
-      <div class="claim sr" style="transition-delay:.14s">
-        <div class="stat ours"><div class="k">Terminal</div><div class="v g">&lt; 1 min</div><div class="s">from wheels down to your phone</div></div>
-        <div class="stat"><div class="k">Airline status feed</div><div class="v y">3h 30m</div><div class="s">measured on a real arrival: the feed still said approaching three and a half hours after touchdown</div></div>
-      </div>
-
-      <div class="phones sr" id="phones" style="transition-delay:.18s">
-        <div class="phone ours">
-          <div class="ph-bar"><span class="who">Terminal</span><span>from the aircraft</span></div>
-          <div class="ph-card">
-            <div class="ph-head"><span class="ph-pill landed">Landed</span></div>
-            <div class="ph-route"><span class="c">JFK</span><span class="a">→</span><span class="c e">LHR</span></div>
-            <div class="ph-ident"><span class="m">BA178</span><span class="d"> · </span>British Airways<span class="d"> · </span><span class="m">Boeing 777-200</span></div>
-            <div class="ph-line"><span class="k">Actual arrival</span><span class="v g">19:09</span></div>
-            <div class="ph-big"><div class="w g">on the ground</div><div class="s">T5 · belt 9 · told you at 19:09</div></div>
-          </div>
-        </div>
-        <div class="phone">
-          <div class="ph-bar"><span class="who">Any other app</span><span>airline status feed</span></div>
-          <div class="ph-card">
-            <div class="ph-head"><span class="ph-pill appr">Approaching</span></div>
-            <div class="ph-route"><span class="c">JFK</span><span class="a">→</span><span class="c e">LHR</span></div>
-            <div class="ph-ident"><span class="m">BA178</span><span class="d"> · </span>British Airways<span class="d"> · </span><span class="m">Boeing 777-200</span></div>
-            <div class="ph-line"><span class="k">Estimated arrival</span><span class="v y">19:08</span></div>
-            <div class="ph-big"><div class="w y" id="feedClock">+0:00:00</div><div class="s">since it actually landed. still waiting.</div></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="two-cap sr" style="transition-delay:.22s">
-        <p>Same aircraft, same minute. One phone was told. The other is still waiting for a status field to change, and it will show "approaching" until it does.</p>
-        <span class="meta">BA178 with its real schedule for 7 Sep.</span>
+      <p class="line" id="close-line">I make Terminal on my own. Questions come straight to&nbsp;me.</p>
+      <div class="ask">
+        <a class="btn" href="mailto:jay@terminalaero.com"><span class="btn-label">jay@terminalaero.com</span></a>
+        <a class="btn" href="https://x.com/Jayo10o" rel="me"><span class="btn-label">@Jayo10o on X</span></a>
       </div>
     </div>
   </section>
 
-  <!-- ══ 02 KNOWS THE AIRPORT ═══════════════════════════════════════════════ -->
-  <section class="section" id="airport">
-    <div class="wrap">
-      <p class="eyebrow sr"><b>02</b> Knows the airport</p>
-      <h2 class="h2 sr" style="transition-delay:.06s">Two sides of security. <em>You get one.</em></h2>
-      <p class="lead sr" style="transition-delay:.1s">The airports publish which side of security each restaurant is on. I read all of it, 753 places across eight airports, and tagged every one. On a connection you only get the list you can walk to.</p>
+</main>
 
-      <div class="apts sr" id="apts" style="transition-delay:.14s" role="tablist" aria-label="Airport"></div>
-      <div class="apt-name sr" style="transition-delay:.16s">
-        <div class="n" id="aptName"></div>
-        <div class="ratio"><span id="rLand"></span><div class="track"><div class="fill" id="rFill"></div></div><span class="g" id="rAir"></span></div>
-      </div>
-
-      <div class="airport sr" style="transition-delay:.18s">
-        <div class="zone land">
-          <div class="zone-head"><span class="zone-tag">Landside</span><span class="zone-n" id="nLand"></span></div>
-          <ul id="listLand"></ul>
-        </div>
-        <div class="checkpoint"><span class="cp-label">security</span></div>
-        <div class="zone air">
-          <div class="zone-head"><span class="zone-tag g">Airside</span><span class="you">you are here</span></div>
-          <ul id="listAir"></ul>
-        </div>
-      </div>
-
-      <div class="apt-cap sr" style="transition-delay:.22s">
-        <p id="aptNote"></p>
-        <span class="meta">753 places · 8 airports · side, terminal and gate for every one</span>
-      </div>
+<footer class="foot dark">
+  <div class="wrap">
+    <div class="foot-row">
+      <span class="foot-copy">© 2026 Terminal</span>
+      <nav class="foot-links" aria-label="Footer"><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
     </div>
-  </section>
-
-  <!-- ══ 03 HANDLES THE BREAK ═══════════════════════════════════════════════ -->
-  <section class="section" id="breaks">
-    <div class="wrap">
-      <p class="eyebrow sr"><b>03</b> Handles the break</p>
-      <h2 class="h2 sr" style="transition-delay:.06s">Cancelled? <em>Here is the next one.</em></h2>
-      <p class="lead sr" style="transition-delay:.1s">The moment your flight is cancelled, every other departure on the route is on screen: number, time, whether it is still running. You read it walking to the desk, not standing at it.</p>
-
-      <div class="breaks">
-        <div class="card-stage sr" style="transition-delay:.12s">
-          <div class="card ph-before" id="card2" style="--cs:1;max-width:400px">
-            <div class="c-head"><div class="c-centre"><span class="c-pill" id="c2Pill"><span class="c-status" id="c2Status">Scheduled</span></span></div><span class="c-countdown" id="c2Count">2h 18m</span></div>
-            <div class="c-body">
-              <div class="c-route" style="display:flex"><span class="c-code">JFK</span><span class="c-arrow">→</span><span class="c-code end">LHR</span></div>
-              <div class="c-ident" style="display:block"><span class="m">BA112</span><span class="d"> · </span><span class="s">British Airways</span><span class="d"> · </span><span class="m">Boeing 777-300ER</span></div>
-              <div class="c-cols" style="display:flex">
-                <div class="c-col"><div class="c-colhead">Scheduled departure</div><div class="c-time struck">18:30</div><div class="c-when">7 Sep · GMT-4</div>
-                  <div class="c-pills"><div class="c-pillrow"><div class="c-p"><span class="l">Terminal</span><span class="v">8</span></div><div class="c-p"><span class="l">Gate</span><span class="v empty">—</span></div></div></div></div>
-                <div class="c-rule"></div>
-                <div class="c-col"><div class="c-colhead">Scheduled arrival</div><div class="c-time">06:40</div><div class="c-when">8 Sep · GMT+1</div>
-                  <div class="c-pills"><div class="c-pillrow"><div class="c-p"><span class="l">Terminal</span><span class="v">5</span></div><div class="c-p"><span class="l">Gate</span><span class="v empty">—</span></div></div></div></div>
-              </div>
-            </div>
-          </div>
-          <span class="meta" style="margin-top:2px">a real flight tonight. the cancellation is the example, not the flight.</span>
-        </div>
-
-        <div>
-          <div class="board sr" id="board" style="transition-delay:.2s">
-            <div class="board-head"><span class="t">Next departures <span>JFK → LHR</span></span><span class="meta" id="boardMeta">7 found</span></div>
-            <ul id="boardList"></ul>
-            <div class="board-foot">tonight's real departures on the route</div>
-          </div>
-          <p class="brk-cap sr" style="transition-delay:.26s">Seven more departures in the next two hours, on three airlines. That is the list you want before the queue forms.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ══ CLOSING ═══════════════════════════════════════════════════════════ -->
-  <section class="closing">
-    <h2>Follow for the launch.</h2>
-    <p>One account. One post when it is out.</p>
-    <a class="btn" href="https://x.com/Jayo10o" target="_blank" rel="noopener noreferrer" style="width:auto">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 1.15h3.68l-8.04 9.19L24 22.85h-7.41l-5.8-7.58-6.64 7.58H.46l8.6-9.83L0 1.15h7.59l5.24 6.93zm-1.29 19.5h2.04L6.49 3.24H4.3z"/></svg>
-      Follow @Jayo10o for the launch
-    </a>
-  </section>
-  <footer>
-    <div class="brand"><i>&gt;</i> Terminal</div>
-    <div class="links"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="https://x.com/Jayo10o" target="_blank" rel="noopener noreferrer">@Jayo10o</a></div>
-    <div>© 2026</div>
-  </footer>
-</div>
-
-<script>
-(function(){
-  var still=window.matchMedia('(prefers-reduced-motion: reduce)').matches, io='IntersectionObserver' in window;
-  var grid=document.getElementById('dotGrid');
-  if(grid&&window.matchMedia('(pointer: fine)').matches&&!still){window.addEventListener('mousemove',function(e){grid.style.setProperty('--mx',e.clientX+'px');grid.style.setProperty('--my',e.clientY+'px');},{passive:true});}
-  var srs=document.querySelectorAll('.sr');
-  if(still||!io)srs.forEach(function(el){el.classList.add('on');});
-  else{var ob=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('on');ob.unobserve(e.target);}});},{threshold:.1,rootMargin:'0px 0px -30px 0px'});srs.forEach(function(el){ob.observe(el);});}
-  function onSeen(el,fn,th){if(!io||still){fn();return;}var o=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){fn();o.disconnect();}});},{threshold:th||.4});o.observe(el);}
-
-  /* ══ HERO CARD ═══ FlightCard.tsx's arc: quadratic (0,58)->(w,58), control
-     (w/2,58-88); x linear, y parabolic, rotation the tangent; 1400ms ease-out
-     cubic after 300ms. Constants scale with --cs. */
-  var card=document.getElementById('card'),arc=document.getElementById('cArc'),path=document.getElementById('arcPath'),svg=document.getElementById('arcSvg'),plane=document.getElementById('plane');
-  var pill=document.getElementById('cPill'),status=document.getElementById('cStatus'),count=document.getElementById('cCount');
-  var depHead=document.getElementById('depHead'),depTime=document.getElementById('depTime'),depDelay=document.getElementById('depDelay'),depGate=document.getElementById('depGate'),depDesk=document.getElementById('depDesk');
-  function cs(){return parseFloat(getComputedStyle(card).getPropertyValue('--cs'))||1;}
-  function W(){return arc.clientWidth||335;}
-  function layoutArc(){var w=W(),s=cs(),B=58*s,R=44*s;svg.setAttribute('viewBox','0 0 '+w+' '+(72*s));path.setAttribute('d','M 0 '+B+' Q '+(w/2)+' '+(B-2*R)+' '+w+' '+B);}
-  function place(t){var w=W(),s=cs(),B=58*s,R=44*s,M=24*s;var x=t*w-M/2,y=B-4*R*t*(1-t)-M/2,rot=Math.atan2(-4*R*(1-2*t),w)*180/Math.PI;plane.style.transform='translate('+x.toFixed(1)+'px,'+y.toFixed(1)+'px) rotate('+rot.toFixed(1)+'deg)';}
-  var raf=null,at=0;
-  function fly(to,ms,delay){if(raf)cancelAnimationFrame(raf);if(still){at=to;place(to);return;}var from=at,t0=null;(function step(ts){if(t0===null)t0=ts+(delay||0);var k=Math.min(1,Math.max(0,(ts-t0)/ms));var e=1-Math.pow(1-k,3);at=from+(to-from)*e;place(at);if(k<1)raf=requestAnimationFrame(step);})(performance.now());}
-  var PH={before:{status:'Scheduled',cls:'',color:'#aeaeb2',count:'2h 14m',head:'Scheduled departure',time:'07:50',late:false,gate:'—',desk:'—'},
-          boarding:{status:'Boarding',cls:'',color:'#aeaeb2',count:'38m',head:'Estimated departure',time:'08:04',late:true,gate:'—',desk:'—'},
-          air:{status:'In air',cls:'live',color:'#4ade80',count:'2h 41m'},landed:{status:'Landed',cls:'',color:'#8e8e93',count:''}};
-  var ORDER=['before','boarding','air','landed'],DWELL={before:3400,boarding:3400,air:5200,landed:4600},cur='before',timer=null,beltT=null;
-  function show(ph){var p=PH[ph];card.className='card ph-'+ph;status.textContent=p.status;status.style.color=p.color;pill.className='c-pill '+p.cls;count.textContent=p.count;
-    if(p.head){depHead.textContent=p.head;depTime.firstChild.nodeValue=p.time;depDelay.hidden=!p.late;depTime.classList.toggle('late',p.late);depGate.textContent=p.gate;depGate.className='v'+(p.gate==='—'?' empty':'');depDesk.textContent=p.desk;depDesk.className='v'+(p.desk==='—'?' empty':'');}
-    if(ph==='air'){void arc.offsetWidth;layoutArc();at=0;place(0);requestAnimationFrame(function(){layoutArc();place(at);});fly(0.62,1400,300);}
-    if(beltT){clearTimeout(beltT);beltT=null;}
-    if(ph==='landed'){beltT=setTimeout(function(){card.classList.add('belt');},still?0:1400);}
-    document.querySelectorAll('.card-stage .phase').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-go')===ph);});cur=ph;}
-  function go(ph){if(still){show(ph);return;}card.classList.add('switching');setTimeout(function(){show(ph);card.classList.remove('switching');},230);}
-  function schedule(){if(timer)clearTimeout(timer);if(!still)timer=setTimeout(function(){go(ORDER[(ORDER.indexOf(cur)+1)%ORDER.length]);schedule();},DWELL[cur]+240);}
-  document.querySelectorAll('.card-stage .phase').forEach(function(b){b.addEventListener('click',function(){go(b.getAttribute('data-go'));schedule();});});
-  window.addEventListener('resize',function(){if(cur==='air'){layoutArc();place(at);}});
-  var want=(location.hash.match(/^#phase-(before|boarding|air|landed)$/)||[])[1];
-  if(want){show(want);}else{show('before');if(still)show('landed');else onSeen(card,schedule,.4);}
-
-  /* ══ 01 -- the other phone's clock starts at zero and never stops ═══════ */
-  var feed=document.getElementById('feedClock'),t0=null;
-  function hms(s){s=Math.floor(s);var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return '+'+h+':'+(m<10?'0':'')+m+':'+(x<10?'0':'')+x;}
-  function tick(ts){if(t0===null)t0=ts;feed.textContent=hms((ts-t0)/1000);requestAnimationFrame(tick);}
-  if(still)feed.textContent='+0:03:12';else onSeen(document.getElementById('phones'),function(){requestAnimationFrame(tick);},.3);
-
-  /* ══ 02 -- eight airports, real rows from lib/dining.ts ═════════════════
-     [name, where, type, hours]. Type is the dataset's category; hours are the
-     airport's own string where it publishes one, and blank where it does not. */
-  var D={
-    JFK:{n:'New York JFK',land:37,air:102,
-      l:[['Madhuban Modern Indian','T1 · food court','restaurant',''],['Flying Tacos','T1 · food court','restaurant',''],['Shin Ramyun','T1 · food court','restaurant',''],["Dunkin'",'T5 · check-in','cafe',''],['Euro Cafe','T1 · arrivals','restaurant',''],['Bessou','T4 · retail hall','restaurant',''],["Jimmy John's",'T8 · baggage claim','restaurant',''],["McDonald's",'T1 · food court','restaurant',''],["Farmer's Fridge",'T4','vending','']],
-      a:[['Beacon Bar & Kitchen','T4 · gate A11','bar',''],['Alidoro','T8 · gates 39-41','restaurant',''],['Bento Sushi','T4 · gate B25','restaurant',''],['Boulton & Watt','T4 · gates A3-A5','restaurant',''],['Brooklyn Deli','T4 · gate B34','restaurant',''],['BKLYN Blend','T8 · gate 12','cafe',''],['Buffalo Wild Wings','T4 · gate B26','restaurant',''],['Cobblestones Biergarten & Bar','T8 · food hall','restaurant',''],['Black Star Bakery & Cafe','T8 · food hall','cafe',''],['CHOPT','T4 · retail hall','restaurant','']],
-      note:'JFK: 102 places past security, 37 before it. Which list you get is decided by your boarding pass, not by you.'},
-    LHR:{n:'London Heathrow',land:9,air:37,
-      l:[["The Queen's Arms",'T2','bar',''],['The Globe','T5','bar',''],['The Oceanic','T3','bar',''],['Black Sheep Coffee','T3','cafe',''],['Co-Pilots Bar and Kitchen','T4','bar',''],['Pret A Manger','T3','cafe','']],
-      a:[['Gordon Ramsay Plane Food','T5','restaurant',''],['Fortnum & Mason Bar','T5','restaurant',''],['Pilots Bar and Kitchen','T5','restaurant',''],["Bill's",'T2','restaurant',''],['Jones the Grocer','T2','cafe',''],["London's Pride By Fullers",'T2','bar',''],['Le Café Louis Vuitton','T2','restaurant',''],['Giraffe','T3','restaurant',''],['itsu','T5','restaurant',''],['Leon','T2','fast food','']],
-      note:'Heathrow publishes the side for every one of its restaurants. Most airports do. Almost nothing reads it.'},
-    BOM:{n:'Mumbai',land:22,air:94,
-      l:[['Idli.com','T1 · check-in','fast food',''],['Amcha Katta','T1 · check-in','fast food',''],['Mumbai Se','T1 · check-in','fast food',''],['Balaji Andhra Bhojanalaya','T1 · landside','fast food',''],['Burger King','T2 · L4','fast food',''],['Baker Street','T2 · L4','bar',''],['Costa Coffee','T2 · L4','cafe',''],['Mad Over Donuts','T1 · check-in','fast food',''],['Cafe 2.0','T2 · L4','fast food','']],
-      a:[['AJ 1881','T2 · L4','fast food',''],['Asia 7','T2 · food court','fast food',''],['Amreli','T2 · food court','fast food',''],['Boarding Bite','T2 · gate 52','fast food',''],['BAR FLY','T2 · gate 40','fast food',''],['Burger King','T2 · L3','fast food',''],['Baker Street','T2 · L3','bar',''],['Black Dog Bar','T1 · gates 9-20','bar',''],['Balaji','T2 · gate 68','bar',''],['Cafe 2.0','T1 · gates 21-28','fast food','']],
-      note:'Mumbai has Burger King, Baker Street and Cafe 2.0 twice each, once on each side of the checkpoint. Only one of each is any use to you.'},
-    EWR:{n:'Newark',land:20,air:98,
-      l:[['Budweiser Brew House','TB · pre-security','restaurant',''],['Garden State Market','TA · check-in','restaurant',''],['Jersey Reserve Coffee','TB · arrivals','cafe',''],['Liberty Eatery','TB · departures','restaurant',''],['Panda Express','TB · pre-security','restaurant',''],["Poppy's Bagels / Uptop Pizzeria",'TC · baggage claim','restaurant',''],['Salsaritas','TB · pre-security','restaurant',''],["Dunkin'",'TC · baggage claim','cafe','']],
-      a:[['Abruzzo Italian Steakhouse','TC · gate C71','restaurant',''],['Bang Cookies','TA · gate A27','restaurant',''],["Beecher's Handmade Cheese",'TA · gate A27','restaurant',''],['Bluestone Lane Coffee','TA · gate A5','cafe',''],['BurgerFi','TA · gate A27','restaurant',''],['Caps Beer Garden','TC · gate C120','bar',''],['Carlitos BBQ Taqueria','TA · gate A16','restaurant',''],["Casciano's",'TC · food court C74','restaurant',''],['Bar Left','TC · gate C80','bar','']],
-      note:'Newark tags most of its airside places to a gate: C71, A27, C120. I keep the gate, so the list can be sorted by how far you have to walk.'},
-    LGA:{n:'New York LaGuardia',land:6,air:66,
-      l:[["Dunkin'",'TB · level 1','restaurant',''],['Mezze','TB · level 1','restaurant',''],['Orpheus + Apollo','TB · atrium','bar',''],['Pour Authority','TB · atrium','bar',''],['Starbucks','TC · baggage claim','cafe','']],
-      a:[['5 Boroughs Food Emporium','TB · gate 59','restaurant',''],['Artichoke Pizza','TC · near gate 61','restaurant',''],["Auntie Anne's",'TC · near gate 61','restaurant',''],['Bar 212','TB · gate 49','bar',''],['Bar Veloce','TB · gate 24','bar',''],['Brooklyn Diner','TB · gates 40-59','restaurant',''],["Bubby's",'TC · gate 70','restaurant',''],['Calista Taverna','TC · gate 80','restaurant',''],['Capital One Landing','TB · gates 11-31','restaurant','']],
-      note:'LaGuardia is nearly all airside: 66 places past security, 6 before. Land there hungry and go through.'},
-    FRA:{n:'Frankfurt',land:25,air:58,
-      l:[['Coffee Fellows','T1 · hall C','cafe','06:00-22:00'],['Hucks Lieblingsplatz','T1 · hall A','cafe','06:00-20:00'],['Bistrot Frankfurt Airport','T1 · hall B','restaurant','10:00-18:00'],["Trib's",'T1 · hall B','cafe','24h'],['Best Worscht in Town','T1 · hall A','fast food','10:00-22:00'],['Heberer Traditional Bakery','T1 · hall B','bakery','05:00-22:00'],['Thong Thai','T1 · hall A','fast food','11:00-21:00'],['Ciao Italia','T1 · hall B','restaurant','10:00-21:00'],['KFC Kentucky Fried Chicken','T1 · hall A','fast food','11:00-19:00']],
-      a:[['Haferkater','T3 · pier J','cafe','06:00-22:00'],['Daily Deli','T3 · pier J','cafe','06:00-22:00'],['NENI Deli','T3 · pier J','restaurant','06:00-22:00'],['DELI BROS','T1 · pier B','restaurant','06:00-22:00'],['Puro Gusto','T1 · pier B','cafe','05:30-22:00'],['Superfood','T1 · pier A','restaurant','06:30-21:00'],['Goodman & Filippo','T1 · pier A','restaurant','05:30-21:30'],['perfect day','T1 · pier A','cafe','05:00-22:00'],['The Bar','T1 · pier Z','cafe','06:00-21:30'],['Anton & Anni','T1 · pier Z','restaurant','06:00-22:00']],
-      note:'Frankfurt publishes opening hours for every place, so at 05:15 in pier A the list is two names long and both are right.'},
-    ARN:{n:'Stockholm Arlanda',land:12,air:53,
-      l:[['Espresso House','T2 · departure hall','cafe','06.00-20.00'],['MAX','T5 · arrival hall','fast food','09.00-23.00'],['Way Cup','T5 · arrival hall','cafe','07.00-23.00'],['7 Eleven','T4 · entrance','fast food','']],
-      a:[['Baba Grill','T5 · marketplace','restaurant','05.00-22.00'],["Brew'd",'T2 · gate 63','bar',''],['Bun Meat Bun','T5 · marketplace','fast food',''],['C/C Cornelius Coffee','T5 · gate C39','cafe','05.00-22.00'],["Craft n' Draft",'T5 · gate F29','bar','05.00-22.00'],['Eatery','T5 · gate D16','fast food','05.00-20.00'],['Eatery Garden','T5 · marketplace','restaurant',''],['Espresso House','T5 · marketplace','cafe','04.30-22.00'],['Gateau','T5 · marketplace','cafe','05.00-22.00']],
-      note:'Arlanda is the only one of the eight that publishes how long each place takes to serve you. I keep it. Where can I eat is always asked with a clock running.'},
-    HKG:{n:'Hong Kong',land:35,air:41,
-      l:[['Ho Hung Kee','T1 · L5','restaurant','07:00-23:30'],['Konjiki Hototogisu','T1 · L5','restaurant','07:00-23:00'],['Lin Heung Lau','T1 · L8','restaurant','24h'],["Hung's Delicacies",'T1 · L5','restaurant','24h'],['Jollibee','T2 · L7','fast food','24h'],['Cupping Room Coffee Roasters','T2 · L7','cafe','06:00-23:00'],['Pret A Manger','T1 · L5','cafe','06:30-23:00'],['Starbucks','T1 · L7','cafe','05:30-23:00'],['Lime Garden (Sky)+','T1 · L8','restaurant','06:30-00:30']],
-      a:[['Jardin de Jade','T1 · L7','restaurant','07:00-23:30'],['PUTIEN','T1 · L7','restaurant','24h'],['Men Wah Bing Teng','T1 · gate 11','restaurant','24h'],['Popeyes Louisiana Kitchen','T1 · gates 40-80','fast food','07:00-21:00'],['%Arabica','T1 · gate 10','cafe','24h'],['Master Hung','T1 · gates 40-80','fast food','07:00-22:00'],['Pret A Manger','T1 · gate 6','cafe','06:00-23:30'],['Starbucks','T1 · gate 6','cafe','06:00-23:00'],['Urban Coffee Roaster','T1 · gate 40','cafe','06:00-23:00'],['Gelato Combo','T1 · gate 28','dessert','07:00-23:00']],
-      note:'Pret and Starbucks are on both lists at Hong Kong. Same name, opposite sides of the checkpoint, and the airport says so.'}
-  };
-  var ORDER_A=['JFK','LHR','BOM','EWR','LGA','FRA','ARN','HKG'],DWELL_A=6000;
-  var apts=document.getElementById('apts'),ll=document.getElementById('listLand'),la=document.getElementById('listAir'),nL=document.getElementById('nLand'),note=document.getElementById('aptNote');
-  var aName=document.getElementById('aptName'),rL=document.getElementById('rLand'),rA=document.getElementById('rAir'),rF=document.getElementById('rFill');
-  function li(r,i){var el=document.createElement('li');el.style.setProperty('--i',(i*40)+'ms');
-    var nm=document.createElement('span');nm.className='nm';nm.textContent=r[0];
-    var sub=document.createElement('span');sub.className='sub';
-    var loc=document.createElement('span');loc.textContent=r[1];sub.appendChild(loc);
-    if(r[2]){var ty=document.createElement('span');ty.className='ty';ty.textContent=r[2];sub.appendChild(ty);}
-    if(r[3]){var hr=document.createElement('span');hr.className='hr';hr.textContent=r[3];sub.appendChild(hr);}
-    el.appendChild(nm);el.appendChild(sub);return el;}
-  var curA=null;
-  function showApt(c){var d=D[c];curA=c;ll.innerHTML='';la.innerHTML='';d.l.forEach(function(r,i){ll.appendChild(li(r,i));});d.a.forEach(function(r,i){la.appendChild(li(r,i));});
-    nL.textContent=d.land+' places';aName.innerHTML='';aName.textContent=d.n;var sp=document.createElement('span');sp.textContent=c;aName.appendChild(sp);
-    rL.textContent=d.land+' before';rA.textContent=d.air+' after';rF.style.width=Math.round(100*d.air/(d.land+d.air))+'%';
-    note.textContent=d.note;apts.querySelectorAll('.apt').forEach(function(b){var on=b.getAttribute('data-apt')===c;b.classList.toggle('on',on);if(on){var bar=b.querySelector('.bar');bar.style.animation='none';void bar.offsetWidth;bar.style.animation='';}});}
-  ORDER_A.forEach(function(c){var b=document.createElement('button');b.className='apt';b.setAttribute('data-apt',c);b.setAttribute('role','tab');b.textContent=c;b.title=D[c].n;var bar=document.createElement('span');bar.className='bar';b.appendChild(bar);b.addEventListener('click',function(){showApt(c);stopCycle();});apts.appendChild(b);});
-  apts.style.setProperty('--dwell',DWELL_A+'ms');
-  var cyc=null;function stopCycle(){if(cyc){clearInterval(cyc);cyc=null;}apts.classList.add('paused');}
-  showApt('JFK');
-  if(!still)onSeen(apts,function(){showApt(curA);cyc=setInterval(function(){showApt(ORDER_A[(ORDER_A.indexOf(curA)+1)%ORDER_A.length]);},DWELL_A);},.3);
-  else apts.classList.add('paused');
-
-  /* ══ 03 -- the cancellation, then the board fills with tonight's real
-     JFK->LHR departures from the route search ════════════════════════════ */
-  var BOARD=[['VS10','Virgin Atlantic','18:30','scheduled'],['BA174','British Airways','18:40','scheduled'],['VS46','Virgin Atlantic','19:00','scheduled'],['BA180','British Airways','19:10','scheduled'],['AA106','American','19:15','scheduled'],['BA176','British Airways','19:35','scheduled'],['BA116','British Airways','20:20','scheduled']];
-  var c2=document.getElementById('card2'),c2Pill=document.getElementById('c2Pill'),c2Status=document.getElementById('c2Status'),c2Count=document.getElementById('c2Count');
-  var list=document.getElementById('boardList'),bmeta=document.getElementById('boardMeta');
-  BOARD.forEach(function(r){var el=document.createElement('li');['fn','al','tm','st'].forEach(function(k,i){var s=document.createElement('span');s.className=k;s.textContent=r[i];if(k==='st'&&r[3]==='boarding')s.classList.add('g');el.appendChild(s);});list.appendChild(el);});
-  function cancel(){c2.classList.add('cancelled');c2Status.textContent='Cancelled';c2Status.style.color='#f87171';c2Pill.className='c-pill bad';}
-  function fill(){var rows=list.children,i=0;bmeta.textContent=rows.length+' found';(function n(){if(i>=rows.length)return;rows[i].classList.add('in');i++;setTimeout(n,still?0:140);})();}
-  var fired=false;function breakNow(){if(fired)return;fired=true;if(still){cancel();fill();return;}setTimeout(cancel,600);setTimeout(fill,1300);}
-  onSeen(document.getElementById('board'),breakNow,.08);onSeen(c2,breakNow,.5);setTimeout(breakNow,9000);
-})();
-</script>
+  </div>
+</footer>
 </body>
 </html>
