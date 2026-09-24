@@ -393,11 +393,13 @@ export function AlternativesDrawer({ leg, onClose }: {
             leave. Somebody who reads this list as "these seats are available"
             finds out at a desk, and by then we told them it was fine.
             AND IT IS THE LAST THING, not a disclaimer at the top. It qualifies
-            the list, so it sits under it. */}
+            the list, so it sits under it.
+            AND IT SENDS NOBODY ANYWHERE. It says what the list is and what
+            Terminal cannot see, and stops there: telling someone to go and
+            check with the airline is the one thing this app never does. */}
         <Text style={s.disclaimer}>
-          {'These are the flights that exist on this route. Terminal has no seat '
-            + 'availability, no fares and no way to book — check with whoever '
-            + 'holds your booking before you count on one.'}
+          {'These are the flights scheduled on this route. Terminal sees their '
+            + 'times, not their seats or fares, and it books nothing.'}
         </Text>
       </SheetScrollView>
       </View>
