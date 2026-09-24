@@ -62,6 +62,7 @@ import {
   Pressable,
   Dimensions,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
@@ -228,6 +229,7 @@ export function ResultsSheet() {
   const { width: routeWinWidth } = useWindowDimensions();
   const {
     routeResult, routeNotes,
+    routeConn, routeConnShown, startConnections,
     routeDate, setRouteDate,
     routeSort, setRouteSort,
     routeDepBands, setRouteDepBands,
@@ -772,8 +774,39 @@ export function ResultsSheet() {
   // ONE LINE, NOT A BAND. The drawer gave an empty result fifty-six points of
   // air above and below; a sheet that can be a hundred and thirty points tall
   // has none to give. The words are the drawer's own.
+  // ── THE CONNECTION SEARCH, SAID ───────────────────────────────────────────
+  //
+  // A FIVE-SECOND SEARCH MUST NEVER LOOK FROZEN. While hubs load the line spins
+  // and counts ("3 of 11 checked") from the server's own plan and progress, and
+  // connections appear in the list beneath as each hub lands. When it ends the
+  // line says what it came to, including the case the fastest marker depends
+  // on: an answer the unit guard cut short is shown, but nothing in it is
+  // called fastest, and the line says why.
+  const connCount = routeConnShown.length;
+  const connLine = routeResult === null ? null
+    : routeConn.status === 'loading'
+      ? (routeConn.total === null
+        ? 'Finding connections'
+        : `Finding connections · ${routeConn.resolved} of ${routeConn.total} checked`)
+      : routeConn.status === 'done'
+        ? (connCount === 0
+          ? 'No one-stop connections on this day'
+          : `${connCount} ${connCount === 1 ? 'connection' : 'connections'}`
+            + (routeConn.complete ? '' : ' · not every hub was checked, so none is marked fastest'))
+        : routeConn.status === 'error'
+          ? (routeConn.error ?? 'Could not load connections.')
+          : null;
+  // THE BUTTON: when nothing has been asked for yet, when the month's units put
+  // the automatic search off, and after a failure. A search a person asks for
+  // is never put off by the budget.
+  const connButton = routeResult !== null
+    && (routeConn.status === 'idle' || routeConn.status === 'deferred' || routeConn.status === 'error');
+
   const emptyLine = routeResult === null
     ? null
+    // NOTHING DIRECT AND A SEARCH RUNNING: the status line speaks, not "quiet".
+    : routeShown === 0 && routeConn.status === 'loading'
+      ? null
     : routeShown === 0
       ? (routeResult.date === null
         ? `This route is quiet for the next ${routeResult.window_hours} `
@@ -1138,6 +1171,30 @@ export function ResultsSheet() {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
+        {(connLine !== null || connButton) && (
+          <View style={sh.conn}>
+            {connLine !== null && (
+              <View style={sh.connRow}>
+                {routeConn.status === 'loading' && (
+                  <ActivityIndicator size="small" color="rgba(226,226,226,0.6)" />
+                )}
+                <Text style={sh.connLine} numberOfLines={2}>{connLine}</Text>
+              </View>
+            )}
+            {connButton && routeResult !== null && (
+              <TouchableOpacity
+                style={sh.connButton}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                onPress={() => startConnections(routeResult.origin, routeResult.destination, routeResult.date, false)}
+              >
+                <Text style={sh.connButtonTxt}>
+                  {routeConn.status === 'error' ? 'Try connections again' : 'Show connections'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
         {emptyLine !== null ? (
           <Text style={sh.empty}>{emptyLine}</Text>
         ) : (
@@ -1255,6 +1312,17 @@ const sh = StyleSheet.create({
   // At the top of the list there is nothing to clear, so the heading sits
   // where the first row would.
   groupHeadFirst: { marginTop: 0 },
+  // THE CONNECTION LINE AND ITS BUTTON, above the rows, in the empty line's ink.
+  conn: { marginBottom: 12, gap: 10 },
+  connRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  connLine: { flex: 1, fontSize: 13, color: 'rgba(226,226,226,0.6)', fontFamily: SANS, lineHeight: 18 },
+  // THE ONE GREEN, AS AN OUTLINE: a control, and a quieter one than the filled
+  // pill that orders the list.
+  connButton: {
+    alignSelf: 'flex-start', borderWidth: 1, borderColor: GREEN, borderRadius: 999,
+    paddingVertical: 8, paddingHorizontal: 16,
+  },
+  connButtonTxt: { fontFamily: MONO_BOLD, fontSize: 12, color: GREEN, letterSpacing: 0.5 },
 });
 
 // THE PICKERS' STYLES, AS THEY WERE IN THE SEARCH SCREEN'S SHEET.

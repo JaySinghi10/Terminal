@@ -32,7 +32,7 @@ import { AppState, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { savedFlightFromApi, makeFlightId, ISO_DAY_RE } from './storage';
 import { airlineFromFlightNumber } from './airlines';
-import { useSaved, API_BASE, flightUrl, NO_TIME, SAVE_MSG } from './saved';
+import { useSaved, API_BASE, flightUrl, NO_TIME, SAVE_MSG, OWN_MSG } from './saved';
 import { useToast } from './toast';
 import { airportByCode, resolveAirportName } from './airports';
 import type { Airport } from './airports';
@@ -41,6 +41,13 @@ import { sheetDetents } from './sheet';
 // FOR THE LINE UNDER THE PILL: a row's clock as the row prints it, and the day
 // as the date pill prints it, so an answer reads in the list's own words.
 import { routeDateLabel, boardClock, clockInWords } from './flightstatus';
+// THE CONNECTION SEARCH. connections.ts is the stream folded into state, pure;
+// connectionStream.ts is the fetch that reads it as it arrives.
+import {
+  connIdle, connLoading, connKey, connReduce, connItineraries, connFastestAllowed,
+  type ConnState, type ConnEvent, type WireItinerary,
+} from './connections';
+import { streamConnections } from './connectionStream';
 
 // Decoration the provider puts on board names that the airport dataset does
 // not carry: "Bengaluru Intl Airport", "Dubai Intl (Terminal 3)", "Khorog
@@ -389,8 +396,22 @@ export type RouteItinerary = {
   overnight: boolean;
   // Either leg crosses a border, which is what raises the minimum layover.
   international: boolean;
+  // §8 of docs/connection-search.md. EVERY itinerary is assembled from two
+  // independent boards, so every one carries a label: different carriers are a
+  // self-transfer, and the same carrier is still not shown to be a through-fare.
+  transfer: 'self' | 'same_carrier';
 };
 export type RouteOption = RouteDirect | RouteItinerary;
+
+// §8's two sentences, fitted to the row. The row gives them two lines.
+export const TRANSFER_LABEL: Record<RouteItinerary['transfer'], string> = {
+  self: 'Self-transfer',
+  same_carrier: 'Not a through-fare',
+};
+export const TRANSFER_NOTE: Record<RouteItinerary['transfer'], string> = {
+  self: 'Separate bookings. Bags are not checked through and a delay is not protected.',
+  same_carrier: 'Terminal built this connection; the airline may not sell it as one.',
+};
 
 // A LEG'S OWN KEY: number and departure instant, which is what routeRowKey has
 // always been. An option's key is its legs' keys joined with '+', so a
@@ -587,7 +608,7 @@ export type RouteHost = {
 };
 
 function useRouteResultsState() {
-  const { savedFlights, saveRecord } = useSaved();
+  const { savedFlights, saveRecord, saveLegs, disownFlight } = useSaved();
   const { showToast } = useToast();
 
   // THE SCREEN'S CHANNELS, READ AT THE MOMENT OF A FETCH. A ref rather than
@@ -619,6 +640,53 @@ function useRouteResultsState() {
   // null. A single slot, not a set: it doubles as the guard that stops a user
   // firing several 2-unit lookups by tapping down the list.
   const [routeSavingKey, setRouteSavingKey] = useState<string | null>(null);
+
+  // ── THE CONNECTION SEARCH, AS IT ARRIVES ──────────────────────────────────
+  //
+  // ONE STREAM AT A TIME. A new route, a new day, or a new search aborts the one
+  // in flight, and its `key` makes sure an event already on its way cannot land
+  // on the route that replaced it.
+  const [routeConn, setRouteConn] = useState<ConnState<RouteFlight>>(connIdle<RouteFlight>());
+  const connAbort = useRef<AbortController | null>(null);
+
+  const cancelConnections = () => {
+    connAbort.current?.abort();
+    connAbort.current = null;
+    setRouteConn(connIdle<RouteFlight>());
+  };
+
+  // `auto` is true when the app starts this itself because the direct search
+  // found nothing. The server may then decline, when the month's units are
+  // below its connections threshold, and the sheet offers its button instead;
+  // a search the person asks for is never declined for that reason.
+  const startConnections = (origin: string, destination: string, day: string | null, auto: boolean) => {
+    connAbort.current?.abort();
+    const controller = new AbortController();
+    const key = connKey(origin, destination, day);
+    connAbort.current = controller;
+    setRouteConn(connLoading<RouteFlight>(key));
+    const onEvent = (ev: ConnEvent<RouteFlight>) => {
+      // THE CONTROLLER, NOT ONLY THE KEY: restarting the same route mints the
+      // same key, and the old stream's late events must not land on the new one.
+      if (connAbort.current !== controller) return;
+      setRouteConn(prev => (prev.key === key ? connReduce(prev, ev) : prev));
+    };
+    streamConnections<RouteFlight>(API_BASE, origin, destination, day, auto, onEvent, controller.signal)
+      .catch(() => {
+        if (controller.signal.aborted || connAbort.current !== controller) return;
+        setRouteConn(prev => (prev.key === key && prev.status === 'loading'
+          ? { ...prev, status: 'error', error: 'Could not load connections.' }
+          : prev));
+      })
+      .finally(() => {
+        // A stream that ended without "done" -- the connection dropped mid-way --
+        // must not spin for ever.
+        if (connAbort.current !== controller) return;
+        setRouteConn(prev => (prev.key === key && prev.status === 'loading'
+          ? { ...prev, status: 'error', error: 'The connection search stopped before it finished.' }
+          : prev));
+      });
+  };
   const [routeDepBands, setRouteDepBands] = useState<Record<RouteBand, boolean>>(ALL_BANDS_ON);
   const [routeArrBands, setRouteArrBands] = useState<Record<RouteBand, boolean>>(ALL_BANDS_ON);
   // Exclusions rather than inclusions: the airline list is derived per result
@@ -660,6 +728,9 @@ function useRouteResultsState() {
   ) => {
     const h = host.current;
     setRouteAsk(ask);
+    // Connections belong to the board they were searched from; a new board
+    // starts without them.
+    cancelConnections();
     h?.setError("");
     h?.setSaveError("");
     // The three result kinds are mutually exclusive; a route answer replaces
@@ -691,6 +762,13 @@ function useRouteResultsState() {
       setRouteAirlinesOff([]);
       setRouteResult(data as RouteResult);
       h?.showResult();
+      // NO DIRECT FLIGHT: LOOK FOR CONNECTIONS WITHOUT BEING ASKED. The
+      // unresolved rows count as possible directs until the device has checked
+      // them, so a board with only those does not start a search.
+      const r = data as RouteResult;
+      if (r.flights.length === 0 && (r.unresolved ?? []).length === 0) {
+        startConnections(origin, destination, day, true);
+      }
     } catch {
       h?.setError("Could not reach the server. Please check your connection and try again.");
       h?.setErrorCounter(c => c + 1);
@@ -746,6 +824,58 @@ function useRouteResultsState() {
       h?.setErrorCounter(c => c + 1);
     } finally {
       setRouteSavingKey(null);
+    }
+  };
+
+  // ── SAVING A CONNECTION: BOTH LEGS ────────────────────────────────────────
+  //
+  // EACH LEG LOOKED UP ON ITS OWN DAY FROM ITS OWN AIRPORT, exactly as a direct
+  // row's save does, so a tag flight's other leg is never the one stored: 2
+  // units a leg. Both lookups must succeed before anything is written; then
+  // saveLegs writes both, or neither.
+  //
+  // `owned` false IS THE BOOKMARK: both legs watched, as a direct row's bookmark
+  // watches one flight. true IS "ADD TO MY FLIGHTS" from the long press: both
+  // legs as one owned trip. See saveLegs.
+  const saveItinerary = async (o: RouteItinerary, owned: boolean) => {
+    if (routeSavingKey !== null || routeResult === null) return;
+    const h = host.current;
+    const key = optKey(o);
+    setRouteSavingKey(key);
+    h?.setError("");
+    try {
+      const records = [];
+      for (const { leg, origin } of optLegsWithOrigin(o, routeResult.origin)) {
+        const response = await fetch(flightUrl(leg.flight_number, routeDayOf(leg), origin));
+        const data = await response.json();
+        if (data.error || !response.ok) {
+          h?.setError(data.error || `Could not look up ${leg.flight_number}. Nothing was saved.`);
+          h?.setErrorCounter(c => c + 1);
+          return;
+        }
+        records.push(savedFlightFromApi(data));
+      }
+      const outcome = await saveLegs(records, owned);
+      if (outcome.kind === 'limit') {
+        h?.setError('watchlist limit reached. Nothing was saved -- unsave one first');
+        h?.setErrorCounter(c => c + 1);
+        return;
+      }
+      if (outcome.kind === 'saved') showToast((owned ? OWN_MSG : SAVE_MSG)[outcome.remind]);
+    } catch {
+      h?.setError("Could not reach the server. Nothing was saved.");
+      h?.setErrorCounter(c => c + 1);
+    } finally {
+      setRouteSavingKey(null);
+    }
+  };
+
+  // "REMOVE FROM MY FLIGHTS" FOR A CONNECTION: both legs back to watched, as the
+  // card's own menu item does for one flight. Nothing is unsaved.
+  const disownItinerary = async (o: RouteItinerary) => {
+    for (const leg of o.legs) {
+      const f = savedFlights.find(s => s.id === makeFlightId(leg.flight_number, routeDayOf(leg)));
+      if (f !== undefined && f.tripId !== null) await disownFlight(f);
     }
   };
 
@@ -822,9 +952,28 @@ function useRouteResultsState() {
   // DIRECTS ONLY, TODAY. The connection search will append its itineraries
   // here, each leg mapped through fillLeg, and nothing below this line will
   // have to change for them.
+  // AND THE CONNECTIONS, WHEN THEY BELONG TO THIS BOARD. Each leg through
+  // fillLeg like any other row, so everything below -- the sorts, the bands, the
+  // catch deadlines, the airline filter -- treats a connection exactly as it
+  // treats a direct flight. The key check stops a stream for a route the user
+  // has left from adding rows to the one on screen.
+  const routeConnShown: RouteItinerary[] = routeResult === null
+    || routeConn.key !== connKey(routeResult.origin, routeResult.destination, routeResult.date)
+    ? []
+    : connItineraries<RouteFlight>(routeConn).map((w: WireItinerary<RouteFlight>) => ({
+      kind: 'via' as const,
+      legs: [fillLeg(w.legs[0]), fillLeg(w.legs[1])] as [RouteLeg, RouteLeg],
+      hub: w.hub,
+      overnight: w.overnight,
+      international: w.international,
+      transfer: w.transfer,
+    }));
   const routeRows: RouteOption[] = routeResult === null
     ? []
-    : [...routeResult.flights, ...routeRecovered].map(r => ({ kind: 'direct' as const, leg: fillLeg(r) }));
+    : [
+      ...[...routeResult.flights, ...routeRecovered].map(r => ({ kind: 'direct' as const, leg: fillLeg(r) })),
+      ...routeConnShown,
+    ];
 
   // ── THE CLOCK THE BANDS ARE READ AGAINST ──────────────────────────────────
   //
@@ -1072,8 +1221,13 @@ function useRouteResultsState() {
   // one of them keeps its in-row tag and the first in the CURRENT sort order
   // takes the pin. `timed` is built from routeSorted, so "first" means first as
   // rendered, and the pin cannot jump between renders.
+  // A CONNECTION MAY BE THE FASTEST ONLY WHEN ITS SEARCH FINISHED COMPLETE. While
+  // hubs are still loading, or when the guard stopped the search, an unfetched
+  // hub-day could hold something faster, so only direct flights compete.
+  const connMayWin = connFastestAllowed(routeConn);
   const routeFastest = (() => {
     const timed = routeSorted
+      .filter(o => o.kind === 'direct' || connMayWin)
       .map(o => ({ key: routeRowKey(o), ms: optDurationMs(o) }))
       .filter((v): v is { key: string; ms: number } => v.ms !== null);
     if (timed.length < 2) return null;
@@ -1338,6 +1492,7 @@ function useRouteResultsState() {
     routeAirlinesOff, setRouteAirlinesOff,
     routePick, setRoutePick,
     routeSavingKey,
+    routeConn, routeConnShown, startConnections, cancelConnections, saveItinerary, disownItinerary,
     routeSelectedKey, setRouteSelectedKey,
     runRouteLookup,
     saveFromRoute,

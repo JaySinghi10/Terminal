@@ -20,7 +20,7 @@
 // `pinned` only suppresses the in-row "fastest" tag, because the heading
 // directly above the pinned row already says the word. Same component, same
 // layout, one boolean — there is no second row renderer.
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, ActionSheetIOS } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { airlineFromFlightNumber } from '../lib/airlines';
 import { makeFlightId } from '../lib/storage';
@@ -32,7 +32,8 @@ import {
   // reads its duration and its leg's origin through the accessors, never off a
   // field. See the union in lib/routeResults.
   optDurationMs, legOrigin,
-  type RouteOption,
+  optFirst, optLast, optLayoverMs, optKey, TRANSFER_LABEL, TRANSFER_NOTE,
+  type RouteOption, type RouteItinerary,
 } from '../lib/routeResults';
 
 const MONO = 'JetBrainsMono_400Regular';
@@ -59,11 +60,9 @@ export function RouteRow({ r, pinned = false, onPress }: Props) {
     savedFlights, routeResult, routeRowKey, routeLastKey,
     routeFastestKeys, routeSavingKey, saveFromRoute, routeCatchOf,
   } = useRouteResults();
-  // A CONNECTION HAS NO ROW YET. Nothing produces one today; when the
-  // connection search does, this is where its two-leg row goes. Rendering
-  // nothing rather than the first leg alone, because a journey drawn as one of
-  // its flights is a wrong row that looks like a right one.
-  if (r.kind === 'via') return null;
+  // A CONNECTION IS ITS OWN ROW, below. A component of its own rather than a
+  // branch here, so neither row's hooks depend on which kind of option it is.
+  if (r.kind === 'via') return <ViaRow r={r} pinned={pinned} onPress={onPress} />;
   // THE ROW THIS OPTION WRAPS. Everything below reads the leg, exactly as it
   // read the row before the union existed; the key and the fastest marker are
   // the option's, which on a direct option is the same value.
@@ -334,6 +333,16 @@ const s = StyleSheet.create({
     fontSize: 11, color: "rgba(226,226,226,0.52)", fontFamily: MONO, minWidth: 60,
   },
   routeFlatCodeEnd: { textAlign: "right" },
+  // A CONNECTION'S OWN PARTS. The hub and wait take the connector's place in
+  // the codes row, centred between the two codes; the transfer label is the
+  // codes' grey with its first words in the one warning amber this row uses.
+  viaMid: {
+    flex: 1, marginHorizontal: 12, textAlign: "center",
+    fontSize: 11, color: "rgba(226,226,226,0.75)", fontFamily: MONO_BOLD,
+  },
+  viaOvernight: { fontSize: 11, fontFamily: MONO_BOLD, color: "rgba(226,226,226,0.6)", letterSpacing: 0.5 },
+  viaTransfer: { marginTop: 10, fontSize: 11, lineHeight: 15, color: "rgba(226,226,226,0.52)", fontFamily: SANS },
+  viaTransferHead: { color: CD_LATE, fontFamily: MONO_BOLD },
   // The zone beside a code, and the phone's time on the line under: the codes'
   // own grey, the second a size down.
   routeFlatZone: { fontSize: 10 },
@@ -354,3 +363,180 @@ const s = StyleSheet.create({
   // Its reason, one line under the codes, at the codes' size.
   routeClosingNote: { fontSize: 11, color: CD_LATE, fontFamily: SANS, marginTop: 8, lineHeight: 15 },
 });
+
+// ── A CONNECTION: TWO FLIGHTS, ONE ROW ──────────────────────────────────────
+//
+// THE SAME ROW AS A DIRECT ONE WHERE IT CAN BE. The two big clocks are the
+// journey's ends -- the first leg's departure and the last leg's arrival --
+// and the line between them carries the WHOLE journey time, so a connection and
+// a direct flight compare at a glance. What differs is said where the eye
+// already goes: the two flight numbers in the header, "via BLR · 1h 00m" under
+// the line, and the transfer label under that.
+//
+// THE LABEL IS NEVER HIDDEN (§8 of docs/connection-search.md). Whether a bag is
+// checked through decides whether the itinerary is usable at all, and somebody
+// who learns it at the transfer desk was told by this row that it was fine.
+function ViaRow({ r, pinned, onPress }: { r: RouteItinerary; pinned: boolean; onPress: (r: RouteOption) => void }) {
+  const {
+    savedFlights, routeResult, routeRowKey, routeLastKey,
+    routeFastestKeys, routeSavingKey, saveItinerary, disownItinerary, routeCatchOf,
+  } = useRouteResults();
+  const first = optFirst(r);
+  const last = optLast(r);
+  const origin = legOrigin(first, routeResult?.origin ?? '');
+  const destination = last.destination_iata ?? routeResult?.destination ?? '';
+  const depZ = boardClock(first.departure_scheduled_iso, first.departure_scheduled, origin || null);
+  const arrZ = boardClock(
+    last.arrival_scheduled_iso,
+    last.arrival_scheduled === null ? ROUTE_NO_TIME : stripZoneLabel(last.arrival_scheduled),
+    destination || null,
+  );
+  const total = optDurationMs(r);
+  const wait = optLayoverMs(r);
+  // THE AIRLINE WHEN BOTH LEGS SHARE ONE, which is the case that reads as a
+  // single journey; two carriers print as their two numbers and nothing more.
+  const sameCarrier = r.transfer === 'same_carrier';
+  const airline = sameCarrier ? airlineFromFlightNumber(first.flight_number) : null;
+  // SAVED MEANS BOTH LEGS ARE, on their own days, watched or owned. OWNED MEANS
+  // BOTH ARE IN MY FLIGHTS AS ONE TRIP -- the same trip id on each.
+  const legRecords = r.legs.map(l => savedFlights.find(f => f.id === makeFlightId(l.flight_number, routeDayOf(l))));
+  const saved = legRecords.every(f => f !== undefined);
+  const owned = saved && legRecords[0]?.tripId != null && legRecords.every(f => f?.tripId === legRecords[0]?.tripId);
+  const key = optKey(r);
+  const pending = routeSavingKey === key;
+  const busy = routeSavingKey !== null;
+  const risky = routeCatchOf(r) === 'risky';
+  // ── THE LONG PRESS: MY FLIGHTS ────────────────────────────────────────────
+  //
+  // THE BOOKMARK WATCHES; THIS IS FOR TAKING THE CONNECTION. The same split the
+  // flight card makes -- its bookmark saves, its long-press menu offers "Add to
+  // My Flights" -- here with the native sheet the app's other menus use. Adding
+  // saves both legs as one owned trip; removing sends both back to the
+  // watchlist and unsaves nothing.
+  const openMenu = () => {
+    if (busy) return;
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        title: `${first.flight_number} + ${last.flight_number} via ${r.hub}`,
+        message: owned
+          ? 'Both flights are in My Flights as one trip.'
+          : 'Saves both flights to My Flights as one trip.',
+        options: [owned ? 'Remove from My Flights' : 'Add to My Flights', 'Cancel'],
+        destructiveButtonIndex: owned ? 0 : undefined,
+        cancelButtonIndex: 1,
+      },
+      index => {
+        if (index !== 0) return;
+        if (owned) void disownItinerary(r);
+        else void saveItinerary(r, true);
+      },
+    );
+  };
+  return (
+    <TouchableOpacity
+      style={[s.routeFlatRow, routeRowKey(r) === routeLastKey && s.routeFlatRowLast]}
+      activeOpacity={0.7}
+      onPress={() => onPress(r)}
+      onLongPress={openMenu}
+    >
+      <View style={s.routeFlatRowEdge} pointerEvents="none" />
+      <View style={s.routeFlatBody}>
+        <View style={s.routeFlatHead}>
+          <View style={s.routeFlatIdent}>
+            {airline !== null && (
+              <Text style={s.routeFlatAirline} numberOfLines={1}>{airline}</Text>
+            )}
+            <Text style={s.routeFlatNumber} numberOfLines={1}>
+              {`${first.flight_number} + ${last.flight_number}`}
+            </Text>
+          </View>
+          <View style={s.routeFlatTags}>
+            {!pinned && routeFastestKeys.has(routeRowKey(r)) && (
+              <Text style={s.routeFastest}>{'fastest'}</Text>
+            )}
+            {risky && (
+              <Text style={s.routeClosing} numberOfLines={1}>{'closing'}</Text>
+            )}
+            {r.overnight && (
+              <Text style={s.viaOvernight} numberOfLines={1}>{'overnight'}</Text>
+            )}
+          </View>
+        </View>
+
+        <View style={s.routeFlatTop}>
+          <Text style={s.routeFlatTime} numberOfLines={1}>{depZ.clock}</Text>
+          <View style={s.routeConn}>
+            {total !== null && (
+              <Text style={s.routeConnDur} numberOfLines={1}>{formatCountdown(total)}</Text>
+            )}
+            <View style={s.routeConnLineRow}>
+              <View style={s.routeConnLine} />
+              <View style={s.routeConnHead} />
+            </View>
+          </View>
+          <Text style={[s.routeFlatTime, s.routeFlatTimeEnd]} numberOfLines={1}>{arrZ.clock}</Text>
+        </View>
+
+        <View style={s.routeFlatCodes}>
+          <Text style={s.routeFlatCode} numberOfLines={1}>
+            {origin}
+            {depZ.zone !== null && <Text style={s.routeFlatZone}>{` ${depZ.zone}`}</Text>}
+          </Text>
+          {/* THE HUB AND THE WAIT, under the line the journey time sits on. */}
+          <Text style={s.viaMid} numberOfLines={1}>
+            {`via ${r.hub}${wait !== null && wait >= 0 ? ` · ${formatCountdown(wait)}` : ''}`}
+          </Text>
+          <Text style={[s.routeFlatCode, s.routeFlatCodeEnd]} numberOfLines={1}>
+            {destination}
+            {arrZ.zone !== null && <Text style={s.routeFlatZone}>{` ${arrZ.zone}`}</Text>}
+          </Text>
+        </View>
+
+        {(depZ.yours !== null || arrZ.yours !== null) && (
+          <View style={s.routeFlatCodes}>
+            <Text style={s.routeFlatYours} numberOfLines={1}>{depZ.yours ?? ''}</Text>
+            <View style={s.routeConnSpacer} />
+            <Text style={[s.routeFlatYours, s.routeFlatCodeEnd]} numberOfLines={1}>{arrZ.yours ?? ''}</Text>
+          </View>
+        )}
+
+        <Text style={s.viaTransfer} numberOfLines={2}>
+          <Text style={s.viaTransferHead}>{TRANSFER_LABEL[r.transfer]}</Text>
+          {`  ${TRANSFER_NOTE[r.transfer]}`}
+        </Text>
+
+        {risky && (
+          <Text style={s.routeClosingNote}>{CATCH_RISKY_NOTE}</Text>
+        )}
+      </View>
+
+      {/* BOTH LEGS, WATCHED, as a direct row's bookmark watches one flight. See
+          saveItinerary: both are looked up first, and nothing is written unless
+          both can be. Owning the pair is the long press. */}
+      <TouchableOpacity
+        style={s.routeFlatMark}
+        activeOpacity={0.7}
+        disabled={saved || busy}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        onPress={() => saveItinerary(r, false)}
+      >
+        <View style={s.routeFlatMarkBox}>
+          {pending ? (
+            <ActivityIndicator size="small" color="rgba(226,226,226,0.5)" />
+          ) : (
+            <Svg width={18} height={18} viewBox="0 0 24 24">
+              <Path
+                d="M6 3h12a1 1 0 0 1 1 1v17l-7-5-7 5V4a1 1 0 0 1 1-1z"
+                fill={saved ? '#4ade80' : 'none'}
+                stroke={saved
+                  ? '#4ade80'
+                  : busy ? 'rgba(226,226,226,0.25)' : 'rgba(226,226,226,0.5)'}
+                strokeWidth={1.75}
+              />
+            </Svg>
+          )}
+        </View>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+}

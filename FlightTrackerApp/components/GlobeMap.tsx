@@ -725,6 +725,9 @@ const ARC_HIT_W = 44;
 // written twice either side of a bridge is a bug waiting for somebody to change
 // one of them. Exported for the screen, interpolated into the page below.
 export const SEARCH_ARC_ID = 'route:searched';
+// A CONNECTION IS TWO ARCS: SEARCH_ARC_ID from the origin to the hub, and this
+// from the hub on. The bubble anchors where they meet -- see postAnchor.
+export const SEARCH_ARC_LEG2_ID = 'route:searched:2';
 
 // ── HOW AN ARC THINS TOWARD ITS ENDS ─────────────────────────────────────────
 //
@@ -2061,18 +2064,32 @@ function start() {
   // nothing and keeps exactly the frame it had; only a caller that knows
   // something this function cannot -- what is covering the map right now --
   // needs to say so.
-  function frameRoute(ax, ay, bx, by, pad) {
+  function frameRoute(ax, ay, bx, by, pad, cx, cy) {
     cancelCamera();
     var lo = ax, hi = bx;
     if (hi - lo > 180) hi -= 360;
     if (lo - hi > 180) hi += 360;
+    // A CONNECTION'S HUB IS FRAMED TOO, unwrapped onto the same side of the
+    // antimeridian as the origin so the box does not span the globe.
+    var mid = null;
+    if (typeof cx === 'number' && typeof cy === 'number') {
+      mid = cx;
+      if (mid - lo > 180) mid -= 360;
+      if (lo - mid > 180) mid += 360;
+    }
     var c = map.getCenter();
     var km = kmBetween(c.lng, c.lat, (ax + bx) / 2, (ay + by) / 2);
     var dur = ${AIRPORT_NEAR_MS} + km * 0.1;
     if (dur > ${AIRPORT_FAR_MS}) dur = ${AIRPORT_FAR_MS};
     post({ type: 'frameRoute', km: Math.round(km), ms: Math.round(dur) });
+    var west = Math.min(lo, hi), east = Math.max(lo, hi);
+    var south = Math.min(ay, by), north = Math.max(ay, by);
+    if (mid !== null) {
+      west = Math.min(west, mid); east = Math.max(east, mid);
+      south = Math.min(south, cy); north = Math.max(north, cy);
+    }
     map.fitBounds(
-      [[Math.min(lo, hi), Math.min(ay, by)], [Math.max(lo, hi), Math.max(ay, by)]],
+      [[west, south], [east, north]],
       {
         padding: pad || ${JSON.stringify(ROUTE_FRAME_PAD)},
         maxZoom: ${ROUTE_FRAME_MAX_ZOOM},
@@ -2671,15 +2688,19 @@ function start() {
   var ANCHOR_RAF = 0;
   function postAnchor() {
     ANCHOR_RAF = 0;
-    var f = null;
+    var f = null, f2 = null;
     for (var i = 0; i < FLIGHTS.length; i++) {
-      if (FLIGHTS[i].id === ${JSON.stringify(SEARCH_ARC_ID)}) { f = FLIGHTS[i]; break; }
+      if (FLIGHTS[i].id === ${JSON.stringify(SEARCH_ARC_ID)}) f = FLIGHTS[i];
+      if (FLIGHTS[i].id === ${JSON.stringify(SEARCH_ARC_LEG2_ID)}) f2 = FLIGHTS[i];
     }
     if (f === null || !f.pts || f.pts.length === 0) {
       post({ type: 'arcAnchor', x: null, y: null });
       return;
     }
-    var mid = f.pts[Math.floor(f.pts.length / 2)];
+    // A CONNECTION ANCHORS AT THE HUB, the end of its first arc, which is the
+    // one point that belongs to the whole journey. A direct route keeps its
+    // midpoint.
+    var mid = f2 !== null ? f.pts[f.pts.length - 1] : f.pts[Math.floor(f.pts.length / 2)];
     var p = map.project(mid);
     post({ type: 'arcAnchor', x: Math.round(p.x), y: Math.round(p.y) });
   }
@@ -2900,6 +2921,8 @@ export type GlobeMapHandle = {
     from: string,
     to: string,
     pad?: { top: number; right: number; bottom: number; left: number },
+    // A CONNECTION'S HUB, framed with the two ends.
+    via?: string,
   ) => void;
   // Set once, when the screen has resolved where home is. Jumps rather than
   // flies: this is the opening view, not a journey to it.
@@ -3011,14 +3034,18 @@ const GlobeMap = forwardRef<GlobeMapHandle, GlobeMapProps>(
         if (a === null || b === null) return;
         call(`window.__cam&&window.__cam.route(${a.lon},${a.lat},${b.lon},${b.lat})`);
       },
-      fitRoute(from, to, pad) {
+      fitRoute(from, to, pad, via) {
         const a = airportByCode(from);
         const b = airportByCode(to);
         if (a === null || b === null) return;
         // THE ARGUMENT IS OMITTED RATHER THAN PASSED AS undefined, because the
         // page tests `pad ||` and a literal `undefined` in the call string would
         // be an identifier the page has to evaluate. One less thing to be wrong.
-        const p = pad === undefined ? '' : `,${JSON.stringify(pad)}`;
+        // A hub needs the padding slot filled, so it passes null there.
+        const c = via === undefined ? null : airportByCode(via);
+        const p = c !== null
+          ? `,${pad === undefined ? 'null' : JSON.stringify(pad)},${c.lon},${c.lat}`
+          : pad === undefined ? '' : `,${JSON.stringify(pad)}`;
         call(`window.__cam&&window.__cam.fit(${a.lon},${a.lat},${b.lon},${b.lat}${p})`);
       },
       setHome(h: HomeView) {

@@ -113,6 +113,7 @@ import GlobeMap, {
   // because the page has to recognise the same arc to anchor the bubble to it --
   // see postAnchor. One literal, one place.
   SEARCH_ARC_ID,
+  SEARCH_ARC_LEG2_ID,
 } from '../../../components/GlobeMap';
 // THE APP'S ONE HAPTIC. components/swipe fires it when a full swipe arms and
 // when a long press opens the map menu -- both moments where a gesture becomes
@@ -174,7 +175,7 @@ import {
   // THE BUBBLE READS THE SELECTED OPTION THROUGH THESE, never off a field: the
   // first leg's departure, the last leg's arrival, and the leg's own origin for
   // the lookup. On a direct option all three are the row's own.
-  optFirst, optLast, legOrigin,
+  optFirst, optLast, legOrigin, optLayoverMs, TRANSFER_LABEL,
   type RouteSort, type RouteBand, type RouteQuestion,
 } from '../../../lib/routeResults';
 // THE SHEET ITSELF, mounted at the end of this screen's tree while the
@@ -1856,6 +1857,9 @@ export default function Search() {
 
   const flownFrom = routeResult === null ? null : routeResult.origin;
   const flownTo = routeResult === null ? null : routeResult.destination;
+  // THE SELECTED CONNECTION'S HUB, or null for a direct flight: the map draws
+  // the journey through it and frames it with the two ends.
+  const flownVia = routeSelected !== null && routeSelected.kind === 'via' ? routeSelected.hub : null;
   useEffect(() => {
     if (flownFrom === null || flownTo === null) return;
     // 1 of 5. A route frames two endpoints; whatever single airport the panel
@@ -1866,8 +1870,8 @@ export default function Search() {
     // right motion for going somewhere and the wrong one for looking at a route.
     // The two would also fight: each cancels the other's camera on entry, so
     // calling both is a coin toss over which one finishes.
-    mapRef.current?.fitRoute(flownFrom, flownTo, routeFitPad.current);
-  }, [flownFrom, flownTo, leaveAirport]);
+    mapRef.current?.fitRoute(flownFrom, flownTo, routeFitPad.current, flownVia ?? undefined);
+  }, [flownFrom, flownTo, flownVia, leaveAirport]);
 
   // ── THE HOME VIEW, PER ACCOUNT ────────────────────────────────────────────
   //
@@ -2208,6 +2212,24 @@ export default function Search() {
       const from = airportByCode(routeResult.origin);
       const to = airportByCode(routeResult.destination);
       if (from === null || to === null) return saved;
+      // A CONNECTION IS TWO ARCS THROUGH ITS HUB, in the same ink, under two ids
+      // the page knows: the bubble anchors where they meet.
+      const hub = flownVia === null ? null : airportByCode(flownVia);
+      if (hub !== null) {
+        return [...saved, {
+          id: SEARCH_ARC_ID,
+          a: [from.lon, from.lat] as [number, number],
+          b: [hub.lon, hub.lat] as [number, number],
+          dep: null,
+          arr: null,
+        }, {
+          id: SEARCH_ARC_LEG2_ID,
+          a: [hub.lon, hub.lat] as [number, number],
+          b: [to.lon, to.lat] as [number, number],
+          dep: null,
+          arr: null,
+        }];
+      }
       return [...saved, {
         id: SEARCH_ARC_ID,
         a: [from.lon, from.lat] as [number, number],
@@ -2216,7 +2238,7 @@ export default function Search() {
         arr: null,
       }];
     },
-    [routes, routeResult],
+    [routes, routeResult, flownVia],
   );
 
   // KEYED ON A STRING, not on the array, whose identity changes whenever the
@@ -2966,7 +2988,7 @@ export default function Search() {
     // tap on the route brings them back. Guarded inside presentSheet, so a tap
     // while the sheet is already up does nothing -- and it returns before the
     // haptic and the selection below, which are for arcs that open something.
-    if (id === SEARCH_ARC_ID) { presentSheetRef.current(); return; }
+    if (id === SEARCH_ARC_ID || id === SEARCH_ARC_LEG2_ID) { presentSheetRef.current(); return; }
     // AN ARC IS THE HARDEST THING ON THIS MAP TO HIT, so it is the one that most
     // needs to confirm it was hit. The haptic fires here rather than in the page
     // because only this side knows the tap resolved to something worth opening.
@@ -3653,6 +3675,18 @@ export default function Search() {
           {/* WHY THIS ONE, AND HOW LONG IT TAKES. The reason is the list's own
               word where it has one and the chosen ordering otherwise; see
               routeReason. Either half is dropped rather than printed empty. */}
+          {/* A CONNECTION SAYS WHERE IT CHANGES, HOW LONG THE WAIT IS, AND WHAT
+              KIND OF TRANSFER IT IS -- the row's own facts, so the bubble and
+              the row describe one journey the same way. */}
+          {routeSelected !== null && routeSelected.kind === 'via' && (
+            <Text style={dr.bubbleVia} numberOfLines={1}>
+              {[
+                `via ${routeSelected.hub}`,
+                routeDurLabel(optLayoverMs(routeSelected)),
+                TRANSFER_LABEL[routeSelected.transfer],
+              ].filter(Boolean).join('  \u00b7  ')}
+            </Text>
+          )}
           <Text style={dr.bubbleWhy} numberOfLines={1}>
             {[routeReason, routeDurLabel(routeSelectedDur)].filter(Boolean).join('  \u00b7  ')}
           </Text>
@@ -4319,6 +4353,7 @@ const dr = StyleSheet.create({
   bubbleTime: { fontFamily: MONO_BOLD, fontSize: 22, color: '#ffffff' },
   bubbleCode: { fontFamily: MONO, fontSize: 13, color: 'rgba(226,226,226,0.52)', marginTop: 2 },
   bubbleZone: { fontSize: 11 },
+  bubbleVia: { fontFamily: MONO_BOLD, fontSize: 11, color: '#fbbf24', marginBottom: 2 },
   bubbleYours: { fontFamily: MONO, fontSize: 10, color: 'rgba(226,226,226,0.52)', marginTop: 2 },
   bubbleArrow: { fontFamily: MONO, fontSize: 15, color: 'rgba(226,226,226,0.52)' },
   bubbleWhy: { fontFamily: SANS_SEMI, fontSize: 12, color: 'rgba(226,226,226,0.6)' },

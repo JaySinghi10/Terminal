@@ -99,7 +99,18 @@ import {
 // fixture on the server. See lib/devFixtures.
 import { isDevFixture } from './devFixtures';
 
-export const API_BASE = 'https://flight-tracker-970706733452.asia-south1.run.app';
+// THE LIVE SERVICE, AND A DEVELOPMENT-ONLY WAY TO POINT ELSEWHERE.
+//
+// EXPO_PUBLIC_API_BASE, set in FlightTrackerApp/.env.local (which .gitignore
+// covers), sends a dev client to a tagged revision -- the no-traffic
+// `connections` tag, say -- to test a server change before it takes traffic.
+// __DEV__ GATES IT, so a release build ignores the variable entirely: a
+// forgotten .env.local can never point real users at a test revision. Every
+// call moves with it, not only the one under test; the tagged revision shares
+// the live service's bucket and store, so saves and watches behave the same.
+const LIVE_API_BASE = 'https://flight-tracker-970706733452.asia-south1.run.app';
+export const API_BASE: string =
+  (__DEV__ && process.env.EXPO_PUBLIC_API_BASE) || LIVE_API_BASE;
 
 // The flight endpoint's URL, in one place, because four fetch sites build it and
 // they must agree. Both parameters are optional and both are omitted when null,
@@ -850,7 +861,7 @@ export const STALE_AFTER_ARRIVAL_MS = 60 * 60 * 1000;
 // THE CLOCK AND FOUR RANDOM CHARACTERS. The timestamp separates two ids minted
 // in different milliseconds on its own; the suffix covers two minted inside one,
 // which a loop owning three legs at once can do.
-function newTripId(): string {
+export function newTripId(): string {
   return `trip:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`;
 }
 
@@ -1368,6 +1379,8 @@ type SavedContextValue = {
   setEmail: (email: string | null) => void;
   refreshing: boolean;
   saveRecord: (record: SavedFlight) => Promise<SaveOutcome>;
+  // SEVERAL LEGS AT ONCE, ALL OR NONE: watched, or owned as one trip. See saveLegs.
+  saveLegs: (records: SavedFlight[], owned: boolean) => Promise<SaveOutcome>;
   handleUnsave: (f: SavedFlight) => Promise<string>;
   undoUnsave: (onTaken?: () => void) => Promise<'none' | 'restored' | 'limit'>;
   refreshOne: (record: SavedFlight, targetId?: string) => Promise<void>;
@@ -2080,6 +2093,54 @@ export function SavedProvider({ children }: { children: ReactNode }) {
 
   // Sets or clears archivedAt, for the two swipe handlers that used to reach
   // into `email` and the store from inside a .map on a screen.
+  // ── A CONNECTION'S LEGS, SAVED TOGETHER ───────────────────────────────────
+  //
+  // BOTH LEGS OR NEITHER, either way. Half a connection on a list is a journey
+  // the app cannot follow to its end, so if the watchlist limit stops any leg,
+  // what this call wrote is undone: a leg it ADDED is removed, and a leg that
+  // was already saved gets its old trip id back rather than being deleted.
+  //
+  // WATCHED (owned false) IS WHAT THE BOOKMARK DOES, exactly as a direct row's
+  // bookmark saves one flight watched. A leg that is already saved is left
+  // exactly as it is -- it may be owned as part of another trip, and a bookmark
+  // must never take that away.
+  //
+  // OWNED IS "ADD TO MY FLIGHTS", from the row's long press: every leg under one
+  // freshly minted trip id, legs already saved included, because a trip is
+  // flights the user is flying (see OWNERSHIP above) and this is the person
+  // saying they are taking the connection.
+  const saveLegs = useCallback(async (records: SavedFlight[], owned: boolean): Promise<SaveOutcome> => {
+    const tripId = owned ? newTripId() : null;
+    const before = new Map(savedFlights.map(f => [f.id, f.tripId] as const));
+    const written: string[] = [];
+    for (const r of records) {
+      if (!owned && before.has(r.id)) continue;
+      const result = await saveFlight(email, { ...r, tripId }, f => !isArchived(f, Date.now()));
+      if (!result.ok) {
+        let list = result.flights;
+        for (const id of written) {
+          list = before.has(id)
+            ? await setFlightTrip(email, id, before.get(id) ?? null)
+            : await unsaveFlight(email, id);
+        }
+        setSavedFlights(list);
+        return { kind: 'limit' };
+      }
+      written.push(r.id);
+      setSavedFlights(result.flights);
+    }
+    let remind: RemindOutcome | null = null;
+    for (const r of records) {
+      if (!written.includes(r.id)) continue;
+      registerWatch(API_BASE, r.flightNumber, r.flightDate, owned);
+      const outcome = await enableReminders({ ...r, tripId });
+      remind = remind ?? outcome;
+    }
+    // Nothing new written only when every leg was already saved, which the row's
+    // bookmark does not offer; say "on" rather than invent a failure.
+    return { kind: 'saved', remind: remind ?? 'on' };
+  }, [email, savedFlights, enableReminders]);
+
   const setArchived = useCallback(async (f: SavedFlight, on: boolean): Promise<void> => {
     setSavedFlights(await setFlightArchived(email, f.id, on ? Date.now() : null));
   }, [email]);
@@ -2706,6 +2767,7 @@ export function SavedProvider({ children }: { children: ReactNode }) {
     setEmail,
     refreshing,
     saveRecord,
+    saveLegs,
     handleUnsave,
     undoUnsave,
     refreshOne,
@@ -2722,7 +2784,7 @@ export function SavedProvider({ children }: { children: ReactNode }) {
     devSetFixtures,
   }), [
     savedFlights, hydrated, email, setEmail, refreshing,
-    saveRecord, handleUnsave, undoUnsave, refreshOne, refreshAll,
+    saveRecord, saveLegs, handleUnsave, undoUnsave, refreshOne, refreshAll,
     handleRemind, setArchived, ownFlight, disownFlight,
     pending, addPendingLeg, removePendingLeg, retryPending, markCancelledBookings,
     devSetFixtures,
