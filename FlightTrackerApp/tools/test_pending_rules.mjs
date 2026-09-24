@@ -64,20 +64,29 @@ r = R.addToPending(full, leg({ flight_number: 'AI999' }), '2026-09-08');
 check('the cap holds at MAX_PENDING', !r.ok && r.reason === 'limit' && full.length === R.MAX_PENDING);
 
 console.log('-- the retry batch --');
+// THE MOMENT THE BATCH IS TAKEN, which retryBatch reads each leg's own retry
+// interval from. Noon on the day every todayKey in this file names. The legs
+// below that have been tried were tried moments after the epoch, long before
+// it, so every leg kept is due and the order is what the checks test.
+const NOW = new Date('2026-09-08T12:00:00').getTime();
 const mixed = [
   { ...leg({ flight_number: 'AA1' }), date: '2026-09-01' },                  // past: dropped
   { ...leg({ flight_number: 'AA2' }), lastTriedAt: 5000, tries: 3 },          // tried recently
   { ...leg({ flight_number: 'AA3' }), lastTriedAt: null, tries: 0 },          // never tried: first
   { ...leg({ flight_number: 'AA4' }), lastTriedAt: 100, tries: 1 },           // tried long ago: second
 ];
-const b = R.retryBatch(mixed, '2026-09-08', new Set());
+const b = R.retryBatch(mixed, '2026-09-08', new Set(), NOW);
 check('past legs are dropped, not retried', b.dropped.length === 1 && b.dropped[0].flightNumber === 'AA1');
 check('the rest are kept', b.kept.length === 3);
 check('oldest-tried first, never-tried before that', b.batch.map(x => x.flightNumber).join() === 'AA3,AA4,AA2', b.batch.map(x => x.flightNumber));
-const skipped = R.retryBatch(mixed, '2026-09-08', new Set(['AA3|2027-01-15']));
-check('skipIds leaves a leg the pull just tried alone', !skipped.batch.some(x => x.flightNumber === 'AA3'));
-const capped = R.retryBatch(full, '2026-09-08', new Set(), 3);
-check('the batch is capped', capped.batch.length === 3);
+const skipped = R.retryBatch(mixed, '2026-09-08', new Set(['AA3|2027-01-15']), NOW);
+// AND THE OTHER TWO STILL GO, so an empty batch cannot pass this: it did, for
+// as long as this file called retryBatch without a clock.
+check('skipIds leaves a leg the pull just tried alone, and only that leg',
+  !skipped.batch.some(x => x.flightNumber === 'AA3') && skipped.batch.length === 2,
+  skipped.batch.map(x => x.flightNumber));
+const capped = R.retryBatch(full, '2026-09-08', new Set(), NOW, 3);
+check('the batch is capped', capped.batch.length === 3, capped.batch.length);
 
 console.log('-- the trigger --');
 let events = [];
