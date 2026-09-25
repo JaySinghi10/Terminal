@@ -51,7 +51,7 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 DATA = os.path.join(HERE, "data")
 RAW = os.path.join(DATA, "raw")
 MANIFEST = os.path.join(HERE, "manifest.json")
-TS_OUT = os.path.join(REPO, "FlightTrackerApp", "lib", "dining.ts")
+TS_OUT = os.path.join(REPO, "android", "lib", "dining.ts")
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -242,7 +242,7 @@ def diff(previous, records):
 
 
 def emit_ts(all_records, per_airport_meta):
-    """FlightTrackerApp/lib/dining.ts, in the shape lib/airports.ts already uses.
+    """android/lib/dining.ts, in the shape lib/airports.ts already uses.
 
     ROWS RATHER THAN OBJECTS, for the same reason airports.ts uses them: the key
     names repeat once per record and cost more than the values. At a few hundred

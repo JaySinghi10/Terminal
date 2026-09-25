@@ -19,7 +19,7 @@ fetch_flight_full filters on the departure IATA and deliberately refuses to fall
 back to an unfiltered list. Picking the wrong leg here means reporting the wrong
 landing time, which is worse than reporting none.
 
-SERVER-SIDE ONLY. The app never sees this; FlightTrackerApp/lib/airports.ts is
+SERVER-SIDE ONLY. The app never sees this; android/lib/airports.ts is
 IATA-keyed and carries no ICAO, and it stays that way. The comparison happens in
 fr24.py, where both codes are already in hand.
 

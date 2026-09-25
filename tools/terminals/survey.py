@@ -50,7 +50,7 @@ import run as R                                            # noqa: E402
 # because run.py emits it into the TypeScript and does not hold it as a name.
 ORDER_IS_ROUGH = 0.85
 
-DINING_TS = os.path.join(REPO, "FlightTrackerApp", "lib", "dining.ts")
+DINING_TS = os.path.join(REPO, "android", "lib", "dining.ts")
 CACHE = os.path.join(HERE, "data", "raw")
 
 # code, lat, lon, radius. Centres are the airport reference points; the radius

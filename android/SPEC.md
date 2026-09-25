@@ -756,7 +756,7 @@ Add `expo-build-properties` and set the target:
 
 **This is a new dependency and requires a native rebuild.** It also permanently prevents installation on any iPhone below iOS 26, which today is most of them. That is accepted here as the price of a single, testable material.
 
-**Record it outside this file too.** `CONTEXT.md` states what the project requires; `FlightTrackerApp/README.md` states what the app runs on. Both must say iOS 26.
+**Record it outside this file too.** `docs/archive/CONTEXT.md` states what the project requires; `android/README.md` states what the app runs on. Both must say iOS 26.
 
 ### 13.2 The presets
 

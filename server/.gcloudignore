@@ -1,0 +1,26 @@
+# What `gcloud run deploy --source server` leaves out of the upload.
+#
+# THE ROOT .gitignore USED TO DO THIS. Deployed from the repo root, gcloud read
+# it; deployed from this folder there is no .gitignore beside it, so these are
+# the rules from the root one that can apply here.
+.gcloudignore
+.git
+.gitignore
+
+# Secrets. See the root .gitignore: COPY . . would bake a key file into the image.
+.env
+.env.*
+!.env.example
+key.txt
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# The OurAirports snapshot tools/icao/run.py fetches (12.7 MB). Not committed,
+# and nothing at runtime reads it.
+tools/icao/airports.csv

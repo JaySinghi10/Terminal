@@ -5,7 +5,8 @@ AeroDataBox for flight data, Google Cloud Storage for the alerts watchlist, and
 Claude for `/chat` and `/parse`.
 
 Every command below uses these. Set them once in the shell you are working in
-and the rest of this file is copy-pasteable as written.
+and the rest of this file is copy-pasteable as written. Run the commands from
+the `server/` folder, which is what `--source .` uploads.
 
 ```sh
 PROJECT_ID=flight-tracker-496006

@@ -1,3 +1,5 @@
+> **Out of date.** This document describes the project as of 9 September 2026 and is kept only as history. `docs/HANDOVER.md` replaces it.
+
 # Terminal — project context
 
 For an assistant that cannot read the repository. It describes what exists, why it was built that way, and what has already been ruled out. Written 9 September 2026 and revised the same evening, after a day spent almost entirely on the path from a booking email to a card on the screen. Where a number was measured it says so; where it was estimated it says that too.

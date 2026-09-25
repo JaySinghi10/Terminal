@@ -51,7 +51,7 @@ REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 DATA = os.path.join(HERE, "data")
 RAW = os.path.join(DATA, "raw")
 MANIFEST = os.path.join(HERE, "manifest.json")
-TS_OUT = os.path.join(REPO, "FlightTrackerApp", "lib", "terminals.ts")
+TS_OUT = os.path.join(REPO, "android", "lib", "terminals.ts")
 
 ENDPOINT = "https://overpass-api.de/api/interpreter"
 UA = "flight-tracker-terminal-map/1.0 (personal project; one build-time request per airport)"

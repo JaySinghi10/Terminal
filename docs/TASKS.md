@@ -2,9 +2,11 @@
 
 Verified against the repo (commit 1fb4d75), the Cloud Run service and the bucket on 25 September 2026. Priority order, top first. Background for every task is in `docs/HANDOVER.md`; section numbers below point there.
 
+Folders: the server is in `server/`, the React Native app in `android/`, the website in `website/`; the dining and terminal data pipelines stay in the root `tools/`. A bare server file such as `poller.py:1159` means `server/poller.py`; app paths (`lib/`, `app/`, `components/`) are under `android/`.
+
 Rules that apply to every task:
 - Read the relevant files first, show the diff, wait for Jay's approval before applying.
-- Run all eleven server test suites before any server commit; for the app, `tsc` clean, no new eslint problems, and the node tools in `FlightTrackerApp/tools/` that apply.
+- Run all eleven server test suites before any server commit; for the app, `tsc` clean, no new eslint problems, and the node tools in `android/tools/` that apply.
 - Deploy only to a no-traffic tag, from a clean git worktree of the commit. Never move traffic without Jay. Settings change with `--update-env-vars` and `--remove-env-vars`, never `--set-env-vars`.
 - Never print a secret value or a push token. Cloud Run settings: names only.
 - Test pushes go only to Jay's own device (T2 confirms which install that is).
@@ -58,9 +60,9 @@ Rules that apply to every task:
 - **Constraints:** never print the token; settings changes follow the T3 pattern (new revision, check, move by name).
 
 ## T7. Housekeeping and deploy ignore files
-- **Why:** `send_gmail_tests.py` is in no ignore file and there is no `.gcloudignore`, so a deploy from the main working tree uploads it and the Dockerfile copies it into the image (revision 00107's upload included it and `.claude/settings.local.json`).
-- **Steps:** add `send_gmail_tests.py` and `.claude/` to `.dockerignore`; add a `.gcloudignore` that covers the same files plus the app and website folders the server doesn't need (check the upload list with `gcloud meta list-files-for-upload` before and after). On Windows: delete `FlightTrackerApp/.env.local`, the secret files, the leftover temporary worktree folder, and empty the OneDrive recycle bin (paths in the Project copy).
-- **Done when:** the upload list from the main working tree no longer contains those files, and the Windows leftovers are gone.
+- **Why:** before the restructure the server deployed from the repo root, so untracked files there went into the upload and the image (revision 00107's upload included `send_gmail_tests.py` and `.claude/settings.local.json`). The server now deploys from `server/`, both files sit at the root outside it, and `server/.gcloudignore` covers keys, `.env`, caches and the airport snapshot.
+- **Steps:** keep `send_gmail_tests.py` and anything like it outside `server/`; check the upload list with `gcloud meta list-files-for-upload server` before each deploy. On Windows: delete `android/.env.local`, the secret files, the leftover temporary worktree folder, the stale root `__pycache__/` and `.expo/`, and empty the OneDrive recycle bin (paths in the Project copy).
+- **Done when:** the upload list for `server/` holds only server files, and the Windows leftovers are gone.
 
 ## T8. Delete old source bundles and images that carried private files
 - **Why:** revision 00107's source bundle and image include `send_gmail_tests.py` and `.claude/settings.local.json`.
@@ -69,7 +71,7 @@ Rules that apply to every task:
 - **Constraints:** approval before any deletion; deleting a revision's image means that revision can never be rolled back to.
 
 ## T9. Build 13: supply the watch secret to EAS
-- **Why:** `EXPO_PUBLIC_WATCH_SECRET` exists only in the git-ignored `FlightTrackerApp/.env`, and `eas.json` has no env block, so a cloud build doesn't get it; earlier TestFlight builds shipped an empty secret (`lib/watch.ts:266-270`). Without it `/watch`, `/watched` and `/alternatives` answer 404.
+- **Why:** `EXPO_PUBLIC_WATCH_SECRET` exists only in the git-ignored `android/.env`, and `eas.json` has no env block, so a cloud build doesn't get it; earlier TestFlight builds shipped an empty secret (`lib/watch.ts:266-270`). Without it `/watch`, `/watched` and `/alternatives` answer 404.
 - **Steps:** set the secret as an EAS environment variable for the production profile (never commit it). After building, check that the built app carries it: install the build and confirm `/watched` requests from its user agent return 200 in the Cloud Run logs, and that saving a flight creates a watch row.
 - **Done when:** build 13's requests to the secret-gated endpoints succeed.
 - **Constraints:** never print the secret; never put it in the repo or `eas.json`.
