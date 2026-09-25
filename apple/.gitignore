@@ -1,0 +1,12 @@
+# Xcode personal state -- per-user window layout, breakpoints, scheme order
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Xcode build output
+DerivedData/
+build/
+
+# OS cruft
+.DS_Store
