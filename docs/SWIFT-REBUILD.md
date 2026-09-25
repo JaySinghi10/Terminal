@@ -44,16 +44,16 @@ For every screen, in this order:
 - Every product rule in docs/HANDOVER.md §2.2 applies: no false or estimated-as-fact data, Flightradar24 is the only authority for "landed", never send the user to the airline, and so on.
 - The data rules for times, belts, gates and status come from the data accuracy investigation (docs/TASKS.md). The Swift app follows the corrected rules, not the React Native app's mistakes.
 - Secrets never go into git. The watch secret is supplied through a git-ignored config file, and the built app must be checked to actually carry it (earlier TestFlight builds shipped it empty).
-- Same bundle id (com.terminal.flighttrackerapp) and the same App Store Connect record, so TestFlight and the App Store listing carry over.
+- Bundle id com.terminalaero and a new App Store Connect record, "Terminal Aero". The home screen name is "Terminal". Nothing carries over from the React Native app's TestFlight builds or App Store record.
 - No third-party packages without Jay's approval, with their cost and licence stated first.
 - Builds come from Xcode (no EAS needed for the Swift app).
 
 ## Decisions to make before the screen that needs them
 - **Sign-in screen:** Apple may require Sign in with Apple when an app offers Google sign-in. Check the current App Store guideline first. Also decide whether sign-in stays Google-based once email import moves to a forwarding address.
-- **Background colour:** the design rule says #050505; the React Native app uses #0a0a0a. Pick one for the Swift app.
+- **Background colour:** decided 25 September: #050505, the design rule. (The React Native app used #0a0a0a.)
 - **Refresh:** the rule says no pull-to-refresh, but the React Native app has it on Home and My Flights. Decide for the Swift app.
 - **Notification permission:** when to ask (the React Native app asks when saving, sometimes twice).
 - **Map:** Apple Maps, the native version of MapLibre, or Mapbox (indoor maps later).
-- **Testers' saved flights:** they live on the phone, so the Swift app starts empty unless we copy them across. With a handful of testers, re-adding them may be fine.
+- **Testers' saved flights:** settled by the new bundle id: the Swift app is a separate app and cannot read the React Native app's storage, so it starts empty and testers re-add their flights.
 - **How Jay reviews:** approve every code diff (today's rule), or try each finished screen on the phone and give feedback. Faster reviews make the one-week target realistic.
 - **The other code-versus-rule conflicts** listed in docs/HANDOVER.md (D4 to D6).
