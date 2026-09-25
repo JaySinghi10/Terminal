@@ -42,3 +42,4 @@ samples/
 .DS_Store
 Thumbs.db
 *.swp
+send_gmail_tests.py
