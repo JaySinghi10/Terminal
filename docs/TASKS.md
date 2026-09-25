@@ -14,6 +14,22 @@ Rules that apply to every task:
 
 ---
 
+## T0a. Data accuracy investigation (deadline 29 September, before the diagnostic records lose detail)
+- **Why:** the beta trip showed the app and the pushes telling the traveller things that were wrong or late. The diagnostic records still hold the provider values that explain each one, and those values are stripped six days after each event.
+- **The six problems:**
+  1. A landing time and an "early" figure were shown from an estimate instead of the real touchdown.
+  2. The arrival belt was shown wrong, then blank, and the real belt was never shown.
+  3. No gate was shown, although the airport's own departure board had it.
+  4. Status stayed on "scheduled" for over an hour after takeoff, twice.
+  5. Changes reached the app 1 to 2 minutes after they were in public data.
+  6. Reminder notifications kept arriving for flights that had been deleted.
+- **Steps:** run the investigation prompt, read-only. The full prompt names the flights and devices, so it is in the private copy. For each problem: what happened, a timeline, the root cause with file and line, and fix options with effort, cost and whether each needs a server deploy or a new app build; for app-side causes, the correct rule the Swift app must follow.
+- **Done when:** one report covers all six problems and ends with a ranked list of fixes, and the corrected rules are ready for the Swift rebuild.
+- **Constraints:** read-only; provider values may be quoted in the report but not copied into any file; no flight numbers, dates or install ids in the repo.
+
+## T0b. Swift rebuild: see docs/SWIFT-REBUILD.md
+- The iPhone app is being rebuilt natively in Swift, one screen at a time. The plan, the order and the rules are in `docs/SWIFT-REBUILD.md`.
+
 ## T1. Ask the beta tester whether the test push arrived
 - **Why:** a test push was sent to the beta tester's phone with Jay's approval, and its Expo receipt has expired (Expo's getReceipts returned nothing on 25 September), so the server can no longer say whether it was delivered.
 - **Steps:** ask her. Separately, read the last leg's diagnostic record for the delivery stages of the landing summary (its receipt was still pending when checked).
@@ -26,20 +42,20 @@ Rules that apply to every task:
 - **Done when:** the three installs are named in the Project copy, and Jay's install id is confirmed current.
 - **Constraints:** ids go in the Project copy only, never in the repo. Read-only on the server except the watch rows the phones write themselves.
 
-## T3. Move live traffic to the landing revision, clearing the diagnostics in the same step
-- **Why:** the live revision (00114, commit 76bc85c) lacks everything built after that commit. The landing revision (00122) is proven identical to commit 1fb4d75. The diagnostics must stop after the beta trip, and clearing `DIAG_FLIGHTS` on its own no longer works: the service template is now 00122's image, so a settings change creates a new revision from 00122's code with 0% traffic while 00114 keeps recording (§4.1, §4.4).
+## T3. Move live traffic to a revision built from the restructure revision's image, clearing the diagnostics in the same step
+- **Why:** the live revision (00114, commit 76bc85c) lacks everything built after that commit. Revision `flight-tracker-00123-piq` (tag `restructure`) was deployed from `server/` at commit c022f81; its 50 uploaded files are byte-identical to `server/` at that commit, and its code is the same as 00122's (tag `landing`, commit 1fb4d75), relocated to `server/`. 00123 is now the service template, so the traffic move builds from it. The diagnostics must stop after the beta trip, and clearing `DIAG_FLIGHTS` on its own no longer works: a settings change creates a new revision from 00123's image with 0% traffic while 00114 keeps recording (§4.1, §4.4).
 - **Licence check (done during verification):** the 6-day value strip and 30-day deletion of diagnostic records run on every poll pass whether or not `DIAG_FLIGHTS` is set (`poller.py:1159-1163`, `diag.py:290-323`). They are skipped only if the bucket or the watch store can't be read. So clearing the setting does not stop the licence clean-up, provided the poll scheduler keeps running for at least 30 days after the last record was created.
 - **Steps:**
   1. Only after the beta trip is over (time in the Project copy) and Jay approves the timing.
-  2. List revisions with tags and traffic. Confirm the `landing` tag is still on `flight-tracker-00122-nay` and that `native-ios-tabs` has no server commits after 1fb4d75. If HEAD has moved, deploy HEAD to a fresh tag from a clean worktree, run all suites, and use that instead.
+  2. List revisions with tags and traffic. Confirm the `restructure` tag is still on `flight-tracker-00123-piq`, that the service template's image digest is 00123's, and that nothing under `server/` has changed since c022f81 (`git diff --stat c022f81 HEAD -- server/` is empty). If `server/` has changed, deploy HEAD's `server/` to a fresh tag from a clean worktree, run all suites, and build the candidate from that revision instead.
   3. Create the candidate: `gcloud run services update flight-tracker --region asia-south1 --project flight-tracker-496006 --remove-env-vars DIAG_FLIGHTS,DIAG_DEVICE --no-traffic --tag live` (or another tag name Jay picks). This makes a new revision from the service template.
-  4. Confirm the new revision runs the same image as 00122 (compare the image digests) and that its setting names are 00122's minus the two diagnostic names (names only).
+  4. Confirm the new revision runs the same image as 00123 (compare the image digests) and that its setting names are 00123's minus the two diagnostic names (names only).
   5. Smoke-test the tag URL: `/quota` (gateway "direct"), one `/flight`, one `/connections`.
   6. Jay approves the move. Move 100% to the new revision by name: `--to-revisions=<new revision name>=100`. Never `--to-latest`.
   7. Verify for 10 minutes: `/poll` and `/dispatch` return 200 in the logs, `/quota` reports the direct gateway, one test push reaches Jay's device only (T2 first).
   8. Rollback if needed: 100% back to `flight-tracker-00114-jev` (this brings the diagnostics back until the next attempt).
   9. Then remove the stale tags (`intent-eval`, `connections`, `wording`), keeping only meaningful ones.
-- **Done when:** 100% of traffic is on a revision built from the verified commit with no `DIAG_FLIGHTS` or `DIAG_DEVICE`, pushes and polls are healthy, and stale tags are gone.
+- **Done when:** 100% of traffic is on a revision running 00123's image (or the verified replacement from step 2) with no `DIAG_FLIGHTS` or `DIAG_DEVICE`, pushes and polls are healthy, and stale tags are gone.
 - **Constraints:** never print setting values; never use `--set-env-vars`; the poll scheduler must keep running (the diagnostic sweep depends on it).
 
 ## T4. Pay for Google Workspace before the trial ends

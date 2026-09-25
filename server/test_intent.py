@@ -20,6 +20,7 @@ The model is a queue of canned turns; each test says what the next turn is.
 """
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -102,12 +103,15 @@ check("an omitted origin stays omitted -- the device decides what to assume", r[
 
 print()
 print("-- nothing the model says is trusted --")
+# TOMORROW BY THE SERVER'S UTC CLOCK, which is what the date is bounded against;
+# a fixed date here would expire the day it fell a day into the past.
+first_day = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
 r = ask("x", "2026-09-22", False,
-        turn("", call("search_route", destination="Goa", date="2026-09-26", date_kind="range",
+        turn("", call("search_route", destination="Goa", date=first_day, date_kind="range",
                       range_label="this weekend", band="morning", sort="fastest", confidence=0.9)))
 i = r["intent"]
 check("a range keeps its FIRST day, its kind and the user's words",
-      (i["date"], i["date_kind"], i["range_label"]) == ("2026-09-26", "range", "this weekend"), i)
+      (i["date"], i["date_kind"], i["range_label"]) == (first_day, "range", "this weekend"), i)
 check("band and sort pass when in vocabulary", (i["band"], i["sort"]) == ("morning", "fastest"))
 
 r = ask("x", "2026-09-22", False,
@@ -156,8 +160,11 @@ r = ask("x", "2026-09-22", False, turn("", call("lookup_flight", flight_number="
 check("a digits-only 'number' is refused with a sentence", r["intent"] is None and r["response"] == api.INTENT_BAD_NUMBER, r)
 r = ask("x", "2026-09-22", False, turn("", call("lookup_flight", flight_number="indigo")))
 check("a bare airline name is refused too", r["intent"] is None and r["response"] == api.INTENT_BAD_NUMBER, r)
-r = ask("x", "2026-09-22", False, turn("", call("lookup_flight", flight_number="AI2630", date="2026-09-23")))
-check("a dated lookup keeps its date", r["intent"]["date"] == "2026-09-23", r["intent"])
+# TOMORROW BY THE SERVER'S UTC CLOCK, which is what the date is bounded against;
+# a fixed date here expired the day it fell a day into the past.
+tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+r = ask("x", "2026-09-22", False, turn("", call("lookup_flight", flight_number="AI2630", date=tomorrow)))
+check("a dated lookup keeps its date", r["intent"]["date"] == tomorrow, r["intent"])
 r = ask("x", "2026-09-22", False, turn("", call("lookup_flight", flight_number="AI2630", date="2019-01-01")))
 check("a past date on a flight is an error, not a silent today", r["intent"]["date"] is None and r["intent"]["date_error"], r["intent"])
 

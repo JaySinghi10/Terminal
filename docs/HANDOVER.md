@@ -12,6 +12,15 @@ How to read it:
 - Where this doc and the code disagree, the code wins and the doc gets corrected. The exceptions are the open decisions in §2.4, where the code breaks one of Jay's rules and Jay decides which one changes.
 - The old Project doc CONTEXT.md (8 September; archived in the repo as `docs/archive/CONTEXT.md`) is out of date in many places. This doc replaces it.
 - The task list with steps and done-when checks is `docs/TASKS.md`.
+- The Project copy also carries the Swift plan (a copy of `docs/SWIFT-REBUILD.md`) and the data investigation prompt as §19 and §20; the repo copy leaves them out.
+
+---
+
+## Direction from 25 September 2026
+- The iPhone app is being rebuilt natively in Swift (SwiftUI, iOS 26 minimum), in a new `apple/` folder.
+- The React Native app in `android/` is frozen, as the base for a future Android app. Sections below that describe it as the current iPhone app carry a note saying it is being replaced.
+- The server in `server/` stays as it is; the Swift app uses the same endpoints.
+- The full plan is in `docs/SWIFT-REBUILD.md`.
 
 ---
 
@@ -21,7 +30,7 @@ How to read it:
 - **Built but not live:** revision `flight-tracker-00122-nay`, tag `landing`, 0% traffic. Its uploaded source is byte-identical to commit `1fb4d75` (all 245 files), so it carries every server commit: the final notification wording (route titles, one-line bodies), connection search with the budget gate, push expiry and collapse IDs, the landing summary push, 2-minute checks from 4 hours before departure (the new GATE tier) and "never send a belt before landing".
 - **Traffic rule:** no traffic move until the beta trip is over; the live poller serves the beta tester's notifications. Jay approves the move; nobody moves traffic on their own. The move and the diagnostics clean-up happen in one step (task T3).
 (Private details are kept in the Project copy, not in this repo.)
-- **App:** TestFlight build 12 is the newest shipped build. Build 13 has not been made; Jay will make it on the Mac. Everything app-side since build 12 (departure delay count, landed early or late, timezone labels, the new search, connection search UI, alternatives drawer, disrupted-card redesign, the belt refresh fix and more) exists only in the repo and the dev client.
+- **App:** TestFlight build 12 is the newest shipped build. Build 13 has not been made; Jay will make it on the Mac. Everything app-side since build 12 (departure delay count, landed early or late, timezone labels, the new search, connection search UI, alternatives drawer, disrupted-card redesign, the belt refresh fix and more) exists only in the repo and the dev client. Note: this describes the React Native app, which is being replaced by the Swift app (`docs/SWIFT-REBUILD.md`).
 - **Repo:** branch `native-ios-tabs` at `1fb4d75`, in sync with GitHub. Working tree clean except the untracked `send_gmail_tests.py`. The default branch is `master` (there is no `main`).
 - **Website:** new design committed (`f706569`), not deployed. The live site still serves the old design (live hero "One app for the whole flight.").
 - **Mac:** arrives 25 September. Plan through Sunday 28 September: set up, app icon, UI overhaul, screenshots.
@@ -146,7 +155,7 @@ Recorded as open, not settled and not fixed. Each needs Jay to say which side ch
 ## 3. Architecture
 
 ### 3.1 Stack
-- **App:** React Native 0.86.3, Expo SDK 57 (expo 57.0.19), React 19.2.3, Reanimated 4.5.1, expo-router 57.0.18 with NativeTabs (iOS 26 tab bar), react-native-screens 4.26.2, @expo/ui 57.0.15 (SwiftUI; used for the Profile formSheet), MapLibre GL JS 5.24.0 inside a WebView (GlobeMap, `components/GlobeMap.tsx:422`). No custom native code yet; native projects are generated in the cloud by EAS. iOS only; iOS 26 minimum deployment target (`app.json`, expo-build-properties `deploymentTarget "26.0"`), which blocks older iPhones permanently.
+- **App:** React Native 0.86.3, Expo SDK 57 (expo 57.0.19), React 19.2.3, Reanimated 4.5.1, expo-router 57.0.18 with NativeTabs (iOS 26 tab bar), react-native-screens 4.26.2, @expo/ui 57.0.15 (SwiftUI; used for the Profile formSheet), MapLibre GL JS 5.24.0 inside a WebView (GlobeMap, `components/GlobeMap.tsx:422`). No custom native code yet; native projects are generated in the cloud by EAS. iOS only; iOS 26 minimum deployment target (`app.json`, expo-build-properties `deploymentTarget "26.0"`), which blocks older iPhones permanently. Note: this describes the React Native app, which is being replaced by the Swift app (`docs/SWIFT-REBUILD.md`).
 - **Server:** Python 3.12 (Dockerfile `FROM python:3.12-slim`) with FastAPI on Google Cloud Run, service `flight-tracker`, project `flight-tracker-496006`, region `asia-south1`, scaling 0 to 20 instances (maxScale 20), no min instances (cold starts happen). Deployed from source (Cloud Build), from the `server/` folder. Deploy notes in `server/DEPLOY.md` (partly stale, see T16).
 - **State:** no database. Everything is JSON in Cloud Storage bucket `gs://flight-tracker-496006-alerts`, writes guarded by generation preconditions (several instances can poll at once).
 - **Schedulers (Cloud Scheduler, asia-south1):** `flight-tracker-poll` (`*/2 * * * *`, UTC, POST `/poll`) and `flight-tracker-dispatch` (`* * * * *`, UTC, POST `/dispatch`), both ENABLED, each with its own secret header. They call the live service URL, never a tag, so tagged revisions never poll.
@@ -219,6 +228,7 @@ Website (`website/`): index.html, privacy.html, terms.html, support.html, 404.ht
 
 | Revision | Tag | Traffic | Built from |
 |---|---|---|---|
+| 00123-piq | restructure | 0 | `server/` at `c022f81` (50 files, byte-identical): the same server code as 00122, relocated to `server/`; the service template |
 | 00122-nay | landing | 0 | exactly `1fb4d75` (245 files): everything |
 | 00121-zid | none | 0 | exactly `4160c21` (superseded) |
 | 00120-rih | none | 0 | `ca1932d` (superseded) |
@@ -228,7 +238,7 @@ Website (`website/`): index.html, privacy.html, terms.html, support.html, 404.ht
 | 00111-juf, 00111-42n | none | 0 | earlier search work (two revisions share the number) |
 | 00107-krx | none | 0 | near `9b3de83` plus uncommitted files; its upload included `send_gmail_tests.py` and `.claude/settings.local.json` (see T8) |
 
-**The service template is now 00122's image.** Any settings change on the service creates a new revision running 00122's code. Traffic is pinned to 00114 by name, so such a revision gets 0% and 00114 keeps running unchanged.
+**The service template is now 00123's image.** Revision 00123 was deployed from `server/` after the repo restructure; its code is the same as 00122's, relocated. Any settings change on the service creates a new revision running 00123's code, so the traffic move (T3) builds from it. Traffic is pinned to 00114 by name, so such a revision gets 0% and 00114 keeps running unchanged.
 
 ### 4.2 Settings (names only; never print values)
 The same 18 names on 00114 and 00122.
@@ -265,7 +275,7 @@ Sources: `poller.py:20-26, 91-143, 162-177, 221`. The GATE window is read from `
 ### 4.4 Diagnostics (on the live revision)
 For the flights in DIAG_FLIGHTS and the device in DIAG_DEVICE only: every poll (time, tier, providers asked, errors, changed field names and values), every notification decided and every one decided against with its reason, every delivery stage (sent, delivered, not_delivered, send_failed, dropped, expired). Stored at `diag/<NUMBER>/<DATE>.json`. Polls that are not due aren't recorded (they return before the diagnostic write, `poller.py:770-772, 974`).
 
-**Stopping them is part of the traffic move (T3).** Clearing DIAG_FLIGHTS on its own now creates a new zero-traffic revision from 00122's code while 00114 keeps recording (§4.1). The licence clean-up does not depend on the setting: the strip and delete sweep runs on every poll pass regardless (§3.6).
+**Stopping them is part of the traffic move (T3).** Clearing DIAG_FLIGHTS on its own now creates a new zero-traffic revision from 00123's code (the service template) while 00114 keeps recording (§4.1). The licence clean-up does not depend on the setting: the strip and delete sweep runs on every poll pass regardless (§3.6).
 (Private details are kept in the Project copy, not in this repo.)
 
 ### 4.5 Connection budget gate
@@ -274,6 +284,7 @@ Automatic connection searches (started because a route has no direct flight) run
 ---
 
 ## 5. Builds, TestFlight and the dev workflow
+> Note: this describes the React Native app, which is being replaced by the Swift app (`docs/SWIFT-REBUILD.md`).
 
 ### 5.1 Workflow
 - Dev client: `npx expo start --dev-client` from `android/` (add `--clear` if Metro misbehaves; OneDrive reparse tags broke Metro on Windows). Phone and computer must be on the same Wi-Fi. Force-quitting the dev client breaks the connection; reopen from the dev launcher. Port conflict: `npx kill-port 8081`.
@@ -298,6 +309,7 @@ App-side belt fix; departure delay count; landed early or late; timezone labels 
 ---
 
 ## 6. Features as built (the detail that isn't obvious from the code)
+> Note: this describes the React Native app, which is being replaced by the Swift app (`docs/SWIFT-REBUILD.md`). The server-side behaviour described here stays.
 
 ### 6.1 Notifications (final wording is on 00122, not live yet)
 **Title:** route plus flight number, the same for the traveller and someone meeting the flight. City names if the whole title is 26 characters or fewer (`TITLE_MAX`, `notify.py:1063`; "Amsterdam → Mumbai · KL871" is exactly 26), otherwise airport codes at both ends ("SFO → LHR · BA286"), never one of each. A missing city means codes. No route known means the flight number alone.
@@ -633,6 +645,7 @@ Grouped from `git log`; no commits on 10 or 11 September.
 Mapbox map and indoor maps; Live Activities and Dynamic Island (likely the first real Swift); widgets; App Intents; Apple Watch; brightness-aware palette; contrast second pass; map pole streaks; booking and cheapest via Duffel (v1.1; roadmap said November); Android (December/January); product analytics (PostHog) and web analytics.
 
 ### Notes for the UI overhaul (from Claude Code's earlier research) [UNCONFIRMED: not re-checked]
+> Note: written for the React Native app's @expo/ui path, which the Swift rebuild replaces (`docs/SWIFT-REBUILD.md`).
 - @expo/ui SwiftUI can do: native countdowns that tick without JavaScript (Text with a timer interval, monospaced digits, numeric transitions), JetBrains Mono by its PostScript name (check on device), Sections, LabeledContent, ContentUnavailableView for empty states, swipe actions (only inside a List, which brings its own insets and replaces the card look), and formSheet routes like Profile.
 - @expo/ui can't do: arbitrary paths or canvas, so FlightCard's progress arc and similar drawings need real Swift (a native module) or stay in React Native. The swipe rows' custom physics (friction, expand threshold, haptic, throw-off) become Apple's standard swipe if ported.
 - Safest boundary: whole screens or whole sections in SwiftUI; anything SwiftUI can't draw is navigated to, not embedded. If a React Native view must sit inside SwiftUI, mount its host unconditionally.
@@ -647,7 +660,7 @@ First a CLAUDE.md, a single check command that runs every suite, and a setup scr
 
 ## 17. Tasks in priority order
 The full task list, with why, steps, done-when and constraints for each, is `docs/TASKS.md`. In short:
-T1 beta tester push check; T2 identify which install is on which phone; T3 move live traffic and clear the diagnostics in the same step; T4 pay Google Workspace; T5 review the diagnostic records; T6 Mac setup and FR24 token rotation; T7 housekeeping and deploy ignore files; T8 delete old source bundles and images (approval first); T9 build 13 watch secret; T10 dev fixtures out of release; T11 storage fault; T12 header clock and greeting follow the trip's city; T13 "time to leave" for the first leg only, plus connecting-leg reminders; T14 reminder wording; T15 open decisions D1 to D6; T16 stale docs and copy; T17 the Indore to New York connection UI problems; T18 UI overhaul week; T19 screenshots, then website; T20 build 13 to TestFlight, then retire /parse and /chat; T21 a tester's TestFlight install; T22 launch blockers; T23 FR24 Stage 2; T24 alternatives Stages 5 and 6, disruption notifications, "get what you're owed"; T25 credits follow-up; T26 repo hygiene; T27 small fixes found in verification.
+T0a data accuracy investigation (deadline 29 September); T0b Swift rebuild (`docs/SWIFT-REBUILD.md`); T1 beta tester push check; T2 identify which install is on which phone; T3 move live traffic and clear the diagnostics in the same step; T4 pay Google Workspace; T5 review the diagnostic records; T6 Mac setup and FR24 token rotation; T7 housekeeping and deploy ignore files; T8 delete old source bundles and images (approval first); T9 build 13 watch secret; T10 dev fixtures out of release; T11 storage fault; T12 header clock and greeting follow the trip's city; T13 "time to leave" for the first leg only, plus connecting-leg reminders; T14 reminder wording; T15 open decisions D1 to D6; T16 stale docs and copy; T17 the Indore to New York connection UI problems; T18 UI overhaul week; T19 screenshots, then website; T20 build 13 to TestFlight, then retire /parse and /chat; T21 a tester's TestFlight install; T22 launch blockers; T23 FR24 Stage 2; T24 alternatives Stages 5 and 6, disruption notifications, "get what you're owed"; T25 credits follow-up; T26 repo hygiene; T27 small fixes found in verification.
 (Private details are kept in the Project copy, not in this repo.)
 
 ---
